@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Casla Group — Demo giao diện</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --navy:#16234A; --navy-700:#1D2E5C; --navy-900:#0E1730;
+    --gold:#C9A24B; --gold-100:#F6EAD2; --gold-700:#A8823A;
+    --surface:#FFFFFF; --bg:#F5F6F8; --line:#E7E9EE;
+    --muted:#8A8F9B; --muted-100:#EEF0F3;
+    --success:#2E7D32; --success-bg:#E5F2E6;
+    --danger:#C62828; --danger-bg:#FBEAEA;
+    --pending:#B98A2A; --pending-bg:#FBF1DD;
+    --r-sm:8px; --r-md:14px; --r-lg:22px;
+    --font-display:'Manrope',sans-serif; --font-body:'Inter',sans-serif; --font-mono:'IBM Plex Mono',monospace;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    font-family:var(--font-body); background:
+      radial-gradient(1100px 600px at 85% -10%, #1c2c58 0%, transparent 55%),
+      linear-gradient(180deg,#0E1730 0%, #131E3E 100%);
+    min-height:100vh; color:#1b2340; display:flex;
+  }
+
+  /* ---------- Sidebar ---------- */
+  .sidebar{
+    width:300px; flex-shrink:0; background:rgba(255,255,255,.03);
+    border-right:1px solid rgba(255,255,255,.08); padding:28px 20px;
+    height:100vh; position:sticky; top:0; overflow-y:auto;
+  }
+  .brand{display:flex; align-items:center; gap:12px; margin-bottom:6px;}
+  .brand-mark{
+    width:38px; height:38px; border-radius:10px; background:linear-gradient(135deg,var(--gold),var(--gold-700));
+    display:flex; align-items:center; justify-content:center; font-family:var(--font-display); font-weight:800;
+    color:var(--navy-900); font-size:15px; flex-shrink:0;
+  }
+  .brand-name{font-family:var(--font-display); font-weight:800; color:#fff; font-size:16px; letter-spacing:.3px;}
+  .brand-sub{font-size:11.5px; color:#8892b8; font-family:var(--font-mono); letter-spacing:.5px; margin-top:1px;}
+  .sidebar-desc{color:#93a0cc; font-size:12.5px; line-height:1.55; margin:18px 0 26px; padding-bottom:20px; border-bottom:1px solid rgba(255,255,255,.08);}
+
+  .nav-group{margin-bottom:22px;}
+  .nav-group-title{
+    font-family:var(--font-mono); font-size:10.5px; letter-spacing:1.4px; color:#6b76a3;
+    text-transform:uppercase; margin-bottom:10px; padding-left:4px;
+  }
+  .nav-item{
+    width:100%; text-align:left; background:none; border:none; cursor:pointer;
+    color:#c7cfe8; padding:10px 12px; border-radius:10px; font-size:13.5px;
+    display:flex; align-items:center; gap:10px; font-family:var(--font-body); font-weight:500;
+    transition:background .15s, color .15s;
+  }
+  .nav-item:hover{background:rgba(255,255,255,.06); color:#fff;}
+  .nav-item.active{background:var(--gold); color:var(--navy-900); font-weight:700;}
+  .nav-item .id-tag{
+    font-family:var(--font-mono); font-size:10px; opacity:.75; flex-shrink:0;
+    width:26px;
+  }
+  .nav-item.active .id-tag{opacity:.65;}
+
+  /* ---------- Stage ---------- */
+  .stage{flex:1; display:flex; flex-direction:column; align-items:center; padding:56px 40px 60px; min-height:100vh;}
+  .stage-caption{text-align:center; margin-bottom:30px; max-width:520px;}
+  .stage-eyebrow{font-family:var(--font-mono); font-size:11px; letter-spacing:2px; color:var(--gold); text-transform:uppercase; margin-bottom:8px;}
+  .stage-title{font-family:var(--font-display); font-weight:800; font-size:26px; color:#fff; margin-bottom:8px;}
+  .stage-goal{font-size:13.5px; color:#a3adcf; line-height:1.6;}
+
+  /* ---------- Device frame ---------- */
+  .device{
+    width:390px; height:844px; background:linear-gradient(160deg,#1a2547,#0c1226);
+    border-radius:46px; padding:12px; box-shadow:0 40px 80px -30px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.05) inset;
+    position:relative; flex-shrink:0;
+  }
+  .device::before{
+    content:''; position:absolute; left:50%; top:26px; transform:translateX(-50%);
+    width:64px; height:6px; border-radius:4px; background:rgba(255,255,255,.15); z-index:5;
+  }
+  .device-inner{
+    background:var(--bg); width:100%; height:100%; border-radius:34px; overflow:hidden;
+    display:flex; flex-direction:column; position:relative;
+  }
+  .status-bar{
+    height:46px; flex-shrink:0; display:flex; align-items:center; justify-content:space-between;
+    padding:0 26px; font-family:var(--font-mono); font-size:12px; font-weight:600; color:var(--navy);
+  }
+  .status-bar .icons{display:flex; gap:5px; align-items:center;}
+  .device-content{flex:1; overflow-y:auto; display:flex; flex-direction:column;}
+  .screen{display:none; flex-direction:column; flex:1; min-height:0;}
+  .screen.active{display:flex;}
+  .screen-body{flex:1; overflow-y:auto; padding:18px 18px 26px;}
+
+  /* ---------- Shared components ---------- */
+  .appbar{background:var(--navy); color:#fff; padding:16px 18px 18px; flex-shrink:0;}
+  .appbar-row{display:flex; align-items:center; justify-content:space-between;}
+  .identity{display:flex; align-items:center; gap:11px;}
+  .avatar{
+    width:42px; height:42px; border-radius:12px; background:linear-gradient(135deg,var(--gold),var(--gold-700));
+    display:flex; align-items:center; justify-content:center; font-family:var(--font-display); font-weight:800;
+    color:var(--navy-900); font-size:15px; flex-shrink:0;
+  }
+  .identity-name{font-family:var(--font-display); font-weight:700; font-size:14.5px;}
+  .identity-meta{font-family:var(--font-mono); font-size:10.5px; color:#b9c2e4; margin-top:2px;}
+  .icon-btn{
+    width:36px; height:36px; border-radius:10px; background:rgba(255,255,255,.1); border:none;
+    display:flex; align-items:center; justify-content:center; color:#fff; cursor:pointer; flex-shrink:0;
+  }
+  .context-chip{
+    margin-top:12px; display:inline-flex; align-items:center; gap:6px; background:rgba(255,255,255,.08);
+    padding:6px 10px; border-radius:20px; font-size:11.5px; font-family:var(--font-mono); color:#dfe4f5;
+  }
+
+  .subheader{display:flex; align-items:center; gap:12px; padding:16px 18px; background:var(--navy); color:#fff; flex-shrink:0;}
+  .subheader .icon-btn{background:rgba(255,255,255,.1);}
+  .subheader-title{font-family:var(--font-display); font-weight:700; font-size:16.5px;}
+  .subheader-sub{font-family:var(--font-mono); font-size:10.5px; color:#b9c2e4; margin-top:2px;}
+
+  .section-title{font-family:var(--font-display); font-weight:800; font-size:14px; color:var(--navy); margin:20px 0 10px; letter-spacing:.2px;}
+  .section-title:first-child{margin-top:0;}
+
+  .kpi-grid{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
+  .kpi-card{background:var(--surface); border:1px solid var(--line); border-radius:var(--r-md); padding:14px;}
+  .kpi-label{font-size:11px; color:var(--muted); font-weight:600; letter-spacing:.2px;}
+  .kpi-value{font-family:var(--font-display); font-weight:800; font-size:26px; color:var(--navy); margin-top:4px; line-height:1;}
+  .kpi-uom{font-size:11px; color:var(--muted); font-weight:600; margin-left:3px;}
+  .kpi-card.accent{background:linear-gradient(135deg,var(--navy),var(--navy-700)); border:none;}
+  .kpi-card.accent .kpi-label{color:#aab4dd;}
+  .kpi-card.accent .kpi-value{color:#fff;}
+
+  .ring-card{
+    background:var(--surface); border:1px solid var(--line); border-radius:var(--r-md);
+    padding:16px; display:flex; align-items:center; gap:16px; margin-top:10px;
+  }
+  .ring{
+    width:78px; height:78px; border-radius:50%; flex-shrink:0;
+    background:conic-gradient(var(--gold) calc(var(--pct)*1%), var(--muted-100) 0);
+    display:flex; align-items:center; justify-content:center; position:relative;
+  }
+  .ring::before{content:''; position:absolute; inset:8px; background:var(--surface); border-radius:50%;}
+  .ring-pct{position:relative; font-family:var(--font-display); font-weight:800; font-size:15px; color:var(--navy);}
+  .ring-info .kpi-label{margin-bottom:3px;}
+  .ring-info .ring-detail{font-size:12px; color:var(--muted); margin-top:4px; line-height:1.5;}
+
+  .banner{
+    display:flex; align-items:center; gap:10px; background:var(--gold-100); border:1px solid #ecd9ab;
+    border-radius:var(--r-md); padding:11px 14px; margin-top:14px; font-size:12.5px; color:#6b5320; font-weight:600;
+    cursor:pointer;
+  }
+  .banner .chev{margin-left:auto; color:#a8823a;}
+
+  .card{background:var(--surface); border:1px solid var(--line); border-radius:var(--r-md); padding:14px; margin-top:10px;}
+  .card-top{display:flex; align-items:flex-start; justify-content:space-between; gap:10px;}
+  .order-code{font-family:var(--font-mono); font-size:11.5px; color:var(--muted); font-weight:600; letter-spacing:.3px;}
+  .order-name{font-family:var(--font-display); font-weight:700; font-size:14.5px; color:var(--navy); margin-top:2px;}
+
+  .chip{display:inline-flex; align-items:center; gap:5px; padding:4px 9px; border-radius:20px; font-size:10.5px; font-weight:700; letter-spacing:.3px; font-family:var(--font-mono);}
+  .chip::before{content:''; width:6px; height:6px; border-radius:50%; background:currentColor;}
+  .chip-open{background:var(--success-bg); color:var(--success);}
+  .chip-pending{background:var(--pending-bg); color:var(--pending);}
+  .chip-synced{background:var(--success-bg); color:var(--success);}
+  .chip-failed{background:var(--danger-bg); color:var(--danger);}
+  .chip-syncing{background:var(--gold-100); color:var(--gold-700);}
+  .chip-danger{background:var(--danger-bg); color:var(--danger);}
+
+  .progress-track{height:7px; background:var(--muted-100); border-radius:8px; margin-top:12px; overflow:hidden;}
+  .progress-fill{height:100%; background:linear-gradient(90deg,var(--gold-700),var(--gold)); border-radius:8px;}
+  .stat-row{display:flex; justify-content:space-between; margin-top:10px; font-size:11.5px;}
+  .stat-row div{text-align:left;}
+  .stat-row b{display:block; font-family:var(--font-display); font-weight:800; font-size:15px; color:var(--navy); margin-top:1px;}
+  .stat-row span{color:var(--muted); font-weight:600;}
+
+  .btn{
+    border:none; border-radius:var(--r-sm); font-family:var(--font-body); font-weight:700; font-size:14.5px;
+    cursor:pointer; display:flex; align-items:center; justify-content:center; gap:8px;
+  }
+  .btn-primary{background:var(--gold); color:var(--navy-900); height:54px; width:100%;}
+  .btn-outline{background:transparent; border:1.5px solid var(--navy); color:var(--navy); height:48px; width:100%;}
+  .btn-danger-outline{background:transparent; border:1.5px solid var(--danger); color:var(--danger); height:48px; width:100%;}
+  .btn-danger{background:var(--danger); color:#fff; height:54px; width:100%;}
+  .btn-text{background:none; border:none; color:var(--danger); font-weight:700; font-size:13.5px; cursor:pointer; height:40px;}
+  .btn-ghost-navy{background:var(--muted-100); color:var(--navy); height:44px; width:100%; border-radius:var(--r-sm); font-weight:700; font-size:13px; border:none;}
+
+  .field{margin-top:14px;}
+  .field-label{font-size:12px; font-weight:700; color:var(--navy); margin-bottom:6px; display:flex; justify-content:space-between;}
+  .field-label .req{color:var(--danger); font-weight:800;}
+  .field-input{
+    background:var(--surface); border:1.5px solid var(--line); border-radius:var(--r-sm); padding:12px 13px;
+    font-size:14px; color:var(--navy); font-weight:600; display:flex; align-items:center; justify-content:space-between;
+  }
+  .field-input.scan{border-style:dashed; border-color:var(--gold-700); color:var(--muted); font-weight:500;}
+  .field-hint{font-size:10.5px; color:var(--muted); margin-top:5px;}
+
+  .segmented{display:flex; background:var(--muted-100); border-radius:var(--r-sm); padding:3px; margin-top:6px;}
+  .segmented button{
+    flex:1; border:none; background:none; padding:9px 0; font-size:12.5px; font-weight:700; border-radius:6px;
+    color:var(--muted); cursor:pointer; font-family:var(--font-body);
+  }
+  .segmented button.on{background:var(--navy); color:#fff;}
+
+  .locked-card{background:var(--muted-100); border-radius:var(--r-md); padding:14px;}
+  .locked-row{display:flex; justify-content:space-between; padding:6px 0; font-size:12.5px;}
+  .locked-row span:first-child{color:var(--muted); font-weight:600;}
+  .locked-row span:last-child{font-family:var(--font-mono); font-weight:600; color:var(--navy);}
+
+  .qty-display{
+    text-align:center; margin:22px 0 8px; font-family:var(--font-display); font-weight:800; font-size:52px; color:var(--navy);
+  }
+  .qty-uom{font-size:16px; color:var(--muted); font-weight:600;}
+  .qty-quick{display:flex; gap:8px; justify-content:center; margin-bottom:16px;}
+  .qty-chip{background:var(--gold-100); color:var(--gold-700); border:none; padding:8px 16px; border-radius:20px; font-weight:700; font-size:12.5px;}
+  .keypad{display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:16px;}
+  .keypad button{
+    height:52px; border-radius:var(--r-sm); border:1px solid var(--line); background:var(--surface);
+    font-family:var(--font-display); font-weight:700; font-size:18px; color:var(--navy); cursor:pointer;
+  }
+  .keypad button.op{color:var(--danger); font-size:15px;}
+
+  .timeline-day{font-family:var(--font-mono); font-size:10.5px; color:var(--muted); font-weight:700; letter-spacing:.5px; margin:16px 0 8px; text-transform:uppercase;}
+  .tl-item{display:flex; gap:10px; padding:10px 0; border-bottom:1px solid var(--line);}
+  .tl-dot{width:8px; height:8px; border-radius:50%; margin-top:6px; flex-shrink:0;}
+  .tl-dot.g{background:var(--success);} .tl-dot.r{background:var(--danger);}
+  .tl-main{flex:1;}
+  .tl-top{display:flex; justify-content:space-between; align-items:center;}
+  .tl-title{font-size:13px; font-weight:700; color:var(--navy);}
+  .tl-qty{font-family:var(--font-mono); font-weight:700; font-size:13px;}
+  .tl-qty.pos{color:var(--success);} .tl-qty.neg{color:var(--danger);}
+  .tl-meta{font-size:11px; color:var(--muted); margin-top:2px; display:flex; gap:8px; align-items:center; font-family:var(--font-mono);}
+
+  .reason-list{display:flex; flex-direction:column; gap:8px; margin-top:8px;}
+  .reason-item{
+    display:flex; align-items:center; gap:10px; border:1.5px solid var(--line); border-radius:var(--r-sm);
+    padding:11px 13px; font-size:13px; font-weight:600; color:var(--navy);
+  }
+  .reason-item.on{border-color:var(--gold-700); background:var(--gold-100);}
+  .radio{width:17px; height:17px; border-radius:50%; border:2px solid var(--muted); flex-shrink:0;}
+  .reason-item.on .radio{border-color:var(--gold-700); background:radial-gradient(circle,var(--gold-700) 40%, transparent 44%);}
+
+  .impact-box{background:var(--danger-bg); border:1px solid #f0c6c6; border-radius:var(--r-md); padding:13px; margin-top:14px;}
+  .impact-row{display:flex; justify-content:space-between; font-size:12px; padding:3px 0; color:#7a1f1f;}
+  .impact-row b{font-family:var(--font-mono);}
+
+  .tabs-row{display:flex; gap:6px; padding:4px; background:var(--muted-100); border-radius:10px; margin-bottom:4px;}
+  .tabs-row button{flex:1; border:none; background:none; padding:9px 0; font-size:11.5px; font-weight:700; color:var(--muted); border-radius:7px;}
+  .tabs-row button.on{background:var(--surface); color:var(--navy); box-shadow:0 1px 3px rgba(0,0,0,.08);}
+
+  .sync-summary{display:flex; gap:8px; margin:14px 0;}
+  .sync-sum-item{flex:1; background:var(--surface); border:1px solid var(--line); border-radius:var(--r-sm); padding:9px; text-align:center;}
+  .sync-sum-item b{display:block; font-family:var(--font-display); font-size:18px; color:var(--navy);}
+  .sync-sum-item span{font-size:9.5px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:.3px;}
+
+  .list-row{display:flex; align-items:center; gap:12px; padding:13px 0; border-bottom:1px solid var(--line);}
+  .list-row:last-child{border-bottom:none;}
+  .list-icon{width:38px; height:38px; border-radius:10px; background:var(--muted-100); display:flex; align-items:center; justify-content:center; flex-shrink:0; color:var(--navy);}
+  .list-main{flex:1; min-width:0;}
+  .list-title{font-size:13px; font-weight:700; color:var(--navy);}
+  .list-sub{font-size:11px; color:var(--muted); margin-top:2px; font-family:var(--font-mono);}
+  .retry-btn{background:var(--navy); color:#fff; border:none; padding:6px 12px; border-radius:7px; font-size:11px; font-weight:700; flex-shrink:0;}
+
+  .profile-card{background:linear-gradient(135deg,var(--navy),var(--navy-700)); border-radius:var(--r-lg); padding:20px; color:#fff; text-align:center;}
+  .profile-card .avatar{width:60px; height:60px; font-size:20px; margin:0 auto 12px;}
+  .profile-role{display:inline-block; margin-top:8px; background:rgba(255,255,255,.12); padding:4px 12px; border-radius:20px; font-size:11px; font-weight:700; letter-spacing:.4px;}
+
+  .settings-group{margin-top:18px;}
+  .settings-row{display:flex; justify-content:space-between; align-items:center; padding:12px 0; border-bottom:1px solid var(--line); font-size:12.5px;}
+  .settings-row:last-child{border-bottom:none;}
+  .settings-row span:first-child{color:var(--muted); font-weight:600;}
+  .settings-row span:last-child{color:var(--navy); font-weight:700; font-family:var(--font-mono); font-size:11.5px;}
+  .perm-chips{display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;}
+  .perm-chip{background:var(--muted-100); color:var(--navy); font-size:10.5px; font-weight:700; padding:5px 10px; border-radius:20px;}
+
+  .scan-stage{
+    flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:30px;
+    background:radial-gradient(circle at 50% 40%, #1c2c58 0%, var(--navy-900) 70%);
+  }
+  .viewfinder{width:210px; height:210px; position:relative; margin-bottom:26px;}
+  .vf-corner{position:absolute; width:34px; height:34px; border-color:var(--gold); border-style:solid; border-width:0;}
+  .vf-tl{top:0; left:0; border-top-width:4px; border-left-width:4px; border-radius:10px 0 0 0;}
+  .vf-tr{top:0; right:0; border-top-width:4px; border-right-width:4px; border-radius:0 10px 0 0;}
+  .vf-bl{bottom:0; left:0; border-bottom-width:4px; border-left-width:4px; border-radius:0 0 0 10px;}
+  .vf-br{bottom:0; right:0; border-bottom-width:4px; border-right-width:4px; border-radius:0 0 10px 0;}
+  .scan-line{position:absolute; left:8px; right:8px; height:2px; background:linear-gradient(90deg,transparent,var(--gold),transparent); animation:scan 2.2s ease-in-out infinite;}
+  @keyframes scan{0%{top:14px;} 50%{top:196px;} 100%{top:14px;}}
+  .scan-title{color:#fff; font-family:var(--font-display); font-weight:800; font-size:18px; text-align:center;}
+  .scan-sub{color:#93a0cc; font-size:12.5px; text-align:center; margin-top:6px; max-width:240px; line-height:1.5;}
+  .scan-manual{margin-top:26px; color:var(--gold); font-size:12.5px; font-weight:700; text-decoration:underline; cursor:pointer; background:none; border:none;}
+  .scan-footer{position:absolute; bottom:16px; left:0; right:0; text-align:center; font-family:var(--font-mono); font-size:9.5px; color:#5c6690;}
+  .scan-logo{position:absolute; top:26px; left:0; right:0; text-align:center;}
+  .scan-logo .m{width:44px; height:44px; margin:0 auto 8px; border-radius:12px; background:linear-gradient(135deg,var(--gold),var(--gold-700)); display:flex; align-items:center; justify-content:center; font-family:var(--font-display); font-weight:800; color:var(--navy-900); font-size:17px;}
+  .scan-logo .t{color:#fff; font-family:var(--font-display); font-weight:800; font-size:13px; letter-spacing:1px;}
+  .scan-logo .s{color:#6b76a3; font-family:var(--font-mono); font-size:9.5px; margin-top:2px;}
+
+  .fab{
+    position:absolute; right:18px; bottom:80px; width:56px; height:56px; border-radius:18px;
+    background:var(--gold); color:var(--navy-900); border:none; display:flex; align-items:center; justify-content:center;
+    box-shadow:0 10px 24px -6px rgba(201,162,75,.6); cursor:pointer; z-index:4;
+  }
+
+  .filter-row{display:flex; gap:8px; overflow-x:auto; padding-bottom:2px;}
+  .filter-chip{
+    flex-shrink:0; display:flex; align-items:center; gap:5px; background:var(--surface); border:1.5px solid var(--line);
+    padding:7px 12px; border-radius:20px; font-size:12px; font-weight:700; color:var(--navy);
+  }
+
+  .bottom-nav{display:flex; background:var(--surface); border-top:1px solid var(--line); flex-shrink:0; height:66px;}
+  .nav-tab{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; color:var(--muted); cursor:pointer;}
+  .nav-tab.on{color:var(--navy);}
+  .nav-tab span{font-size:9.5px; font-weight:700;}
+  .nav-tab.on svg{stroke:var(--gold-700);}
+
+  ::-webkit-scrollbar{width:0; height:0;}
+</style>
+</head>
+<body>
+
+<div class="sidebar">
+  <div class="brand">
+    <div class="brand-mark">CG</div>
+    <div>
+      <div class="brand-name">CASLA GROUP</div>
+      <div class="brand-sub">ỨNG DỤNG GHI NHẬN SẢN LƯỢNG</div>
+    </div>
+  </div>
+  <div class="sidebar-desc">Demo giao diện theo Đặc tả sản phẩm &amp; kỹ thuật v1.0 — chọn màn hình để xem trong khung thiết bị cầm tay (PDA/điện thoại dùng chung).</div>
+
+  <div class="nav-group">
+    <div class="nav-group-title">Đăng nhập</div>
+    <button class="nav-item active" data-screen="S02"><span class="id-tag">S02</span>Quét mã nhân viên</button>
+    <button class="nav-item" data-screen="S02b"><span class="id-tag">S02b</span>Tài khoản / mật khẩu</button>
+  </div>
+
+  <div class="nav-group">
+    <div class="nav-group-title">Công nhân</div>
+    <button class="nav-item" data-screen="S03"><span class="id-tag">S03</span>Hôm nay</button>
+    <button class="nav-item" data-screen="S04"><span class="id-tag">S04</span>Ghi nhận sản lượng</button>
+  </div>
+
+  <div class="nav-group">
+    <div class="nav-group-title">Supervisor</div>
+    <button class="nav-item" data-screen="S06"><span class="id-tag">S06</span>Tổng quan</button>
+    <button class="nav-item" data-screen="S07"><span class="id-tag">S07</span>Tạo phân công</button>
+    <button class="nav-item" data-screen="S08"><span class="id-tag">S08</span>Chi tiết phân công</button>
+    <button class="nav-item" data-screen="S09"><span class="id-tag">S09</span>Thu hồi</button>
+  </div>
+
+  <div class="nav-group">
+    <div class="nav-group-title">Chung</div>
+    <button class="nav-item" data-screen="S12"><span class="id-tag">S12</span>Đồng bộ</button>
+    <button class="nav-item" data-screen="S13"><span class="id-tag">S13</span>Tài khoản</button>
+  </div>
+</div>
+
+<div class="stage">
+  <div class="stage-caption">
+    <div class="stage-eyebrow" id="cap-id">S02 · QUÉT/ĐĂNG NHẬP</div>
+    <div class="stage-title" id="cap-title">Nhận diện nhân viên trên thiết bị dùng chung</div>
+    <div class="stage-goal" id="cap-goal">Không hiển thị dữ liệu người trước; sẵn sàng nhận quét ngay khi mở màn hình.</div>
+  </div>
+
+  <div class="device">
+    <div class="device-inner">
+      <div class="device-content" id="device-content">
+
+        <!-- S02 -->
+        <div class="screen active" data-screen="S02">
+          <div class="scan-stage" style="position:relative;">
+            <div class="scan-logo">
+              <div class="m">CG</div>
+              <div class="t">CASLA GROUP</div>
+              <div class="s">GHI NHẬN SẢN LƯỢNG</div>
+            </div>
+            <div class="viewfinder">
+              <div class="vf-corner vf-tl"></div><div class="vf-corner vf-tr"></div>
+              <div class="vf-corner vf-bl"></div><div class="vf-corner vf-br"></div>
+              <div class="scan-line"></div>
+            </div>
+            <div class="scan-title">Quét mã nhân viên</div>
+            <div class="scan-sub">Đưa mã badge vào khung hình hoặc dùng đầu đọc PDA để bắt đầu phiên làm việc.</div>
+            <button class="scan-manual">Nhập mã nhân viên bằng tay</button>
+            <div class="scan-footer">THIẾT BỊ · PDA-CT02-A17 &nbsp;·&nbsp; v1.0.0</div>
+          </div>
+        </div>
+
+        <!-- S02b -->
+        <div class="screen" data-screen="S02b">
+          <div class="screen-body" style="display:flex; flex-direction:column; justify-content:center; flex:1; background:var(--bg);">
+            <div style="text-align:center; margin-bottom:24px;">
+              <div class="scan-logo" style="position:static;">
+                <div class="m" style="margin:0 auto 10px;">CG</div>
+              </div>
+              <div class="section-title" style="margin:0 0 4px; font-size:16px;">Đăng nhập tài khoản</div>
+              <div class="field-hint" style="font-size:11.5px;">Dùng cho cả Supervisor và Công nhân — quyền hạn được cấp theo tài khoản SAP.</div>
+            </div>
+
+            <div class="field" style="margin-top:0;">
+              <div class="field-label">Tài khoản <span class="req">*</span></div>
+              <div class="field-input"><span style="color:var(--navy)">tranthib</span>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>
+              </div>
+            </div>
+            <div class="field">
+              <div class="field-label">Mật khẩu <span class="req">*</span></div>
+              <div class="field-input"><span style="letter-spacing:3px; color:var(--navy)">••••••••</span>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+              </div>
+            </div>
+            <div style="text-align:right; margin-top:8px;">
+              <button class="scan-manual" style="color:var(--muted); font-size:11.5px;">Quên mật khẩu?</button>
+            </div>
+
+            <button class="btn btn-primary" style="margin-top:20px;">Đăng nhập</button>
+
+            <div style="text-align:center; margin-top:16px;">
+              <button class="scan-manual" style="color:var(--gold-700);">Dùng mã badge để quét thay thế</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- S03 -->
+        <div class="screen" data-screen="S03">
+          <div class="appbar">
+            <div class="appbar-row">
+              <div class="identity">
+                <div class="avatar">VA</div>
+                <div>
+                  <div class="identity-name">Nguyễn Văn A</div>
+                  <div class="identity-meta">MNV00123 · Tổ Cắt 2</div>
+                </div>
+              </div>
+              <button class="icon-btn" title="Đổi người dùng">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 014-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>
+              </button>
+            </div>
+            <div class="context-chip">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+              05/08/2026 · Ca ngày 06:00–14:00
+            </div>
+          </div>
+          <div class="screen-body">
+            <div class="section-title">Tổng quan hôm nay</div>
+            <div class="kpi-grid">
+              <div class="kpi-card accent"><div class="kpi-label">Giao hiệu lực</div><div class="kpi-value">450<span class="kpi-uom">cái</span></div></div>
+              <div class="kpi-card"><div class="kpi-label">Hoàn thành hôm nay</div><div class="kpi-value">120<span class="kpi-uom">cái</span></div></div>
+              <div class="kpi-card"><div class="kpi-label">Lũy kế</div><div class="kpi-value">300<span class="kpi-uom">cái</span></div></div>
+              <div class="kpi-card"><div class="kpi-label">Còn lại</div><div class="kpi-value">150<span class="kpi-uom">cái</span></div></div>
+            </div>
+
+            <div class="banner">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="9"/></svg>
+              3 bản ghi đang chờ đồng bộ
+              <span class="chev">›</span>
+            </div>
+
+            <div class="section-title">Phân công của bạn</div>
+
+            <div class="card">
+              <div class="card-top">
+                <div><div class="order-code">DH-2026-00417</div><div class="order-name">Áo khoác gió — size L</div></div>
+                <span class="chip chip-open">OPEN</span>
+              </div>
+              <div class="progress-track"><div class="progress-fill" style="width:67%"></div></div>
+              <div class="stat-row">
+                <div><span>Giao</span><b>450</b></div>
+                <div><span>Hoàn thành</span><b>300</b></div>
+                <div><span>Còn lại</span><b>150</b></div>
+              </div>
+            </div>
+
+            <div class="card" style="opacity:.6">
+              <div class="card-top">
+                <div><div class="order-code">DH-2026-00391</div><div class="order-name">Quần jean nam — size 32</div></div>
+                <span class="chip chip-synced">COMPLETED</span>
+              </div>
+              <div class="progress-track"><div class="progress-fill" style="width:100%"></div></div>
+              <div class="stat-row">
+                <div><span>Giao</span><b>200</b></div>
+                <div><span>Hoàn thành</span><b>200</b></div>
+                <div><span>Còn lại</span><b>0</b></div>
+              </div>
+            </div>
+          </div>
+          <div class="bottom-nav">
+            <div class="nav-tab on"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12l9-9 9 9"/><path d="M5 10v10h14V10"/></svg><span>Hôm nay</span></div>
+            <div class="nav-tab"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg><span>Ghi nhận</span></div>
+            <div class="nav-tab"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="9"/></svg><span>Lịch sử</span></div>
+            <div class="nav-tab"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg><span>Tài khoản</span></div>
+          </div>
+        </div>
+
+        <!-- S04 -->
+        <div class="screen" data-screen="S04">
+          <div class="subheader">
+            <button class="icon-btn"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M15 18l-6-6 6-6"/></svg></button>
+            <div><div class="subheader-title">Ghi nhận sản lượng</div><div class="subheader-sub">DH-2026-00417 · Áo khoác gió L</div></div>
+          </div>
+          <div class="screen-body">
+            <div class="locked-card">
+              <div class="locked-row"><span>Nhân viên</span><span>Nguyễn Văn A · MNV00123</span></div>
+              <div class="locked-row"><span>Sản phẩm</span><span>Áo khoác gió — L</span></div>
+              <div class="locked-row"><span>Đơn vị tính</span><span>Cái</span></div>
+              <div class="locked-row"><span>Ca / Ngày</span><span>Ca ngày · 05/08/2026</span></div>
+            </div>
+
+            <div class="stat-row" style="margin-top:16px;">
+              <div><span>Giao hiệu lực</span><b>450</b></div>
+              <div><span>Hoàn thành</span><b>300</b></div>
+              <div><span>Còn lại</span><b style="color:var(--gold-700)">150</b></div>
+            </div>
+
+            <div class="qty-display">45<span class="qty-uom"> cái</span></div>
+            <div class="qty-quick">
+              <button class="qty-chip">+10</button><button class="qty-chip">+50</button><button class="qty-chip">+100</button>
+            </div>
+            <div class="keypad">
+              <button>1</button><button>2</button><button>3</button>
+              <button>4</button><button>5</button><button>6</button>
+              <button>7</button><button>8</button><button>9</button>
+              <button class="op">Xoá</button><button>0</button><button class="op">⌫</button>
+            </div>
+          </div>
+          <div style="padding:14px 18px 18px;"><button class="btn btn-primary">Lưu ghi nhận</button></div>
+        </div>
+
+        <!-- S06 -->
+        <div class="screen" data-screen="S06">
+          <div class="appbar">
+            <div class="appbar-row">
+              <div class="identity">
+                <div class="avatar" style="background:linear-gradient(135deg,#4a5a92,#26305c); color:#fff;">TB</div>
+                <div><div class="identity-name">Trần Thị B</div><div class="identity-meta">Supervisor · Tổ Cắt 1–3</div></div>
+              </div>
+              <button class="icon-btn"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></button>
+            </div>
+          </div>
+          <div class="screen-body" style="position:relative;">
+            <div class="filter-row">
+              <div class="filter-chip">Tổ: Tất cả ▾</div>
+              <div class="filter-chip">Ca ngày ▾</div>
+              <div class="filter-chip">Hôm nay ▾</div>
+            </div>
+
+            <div class="kpi-grid" style="margin-top:14px;">
+              <div class="kpi-card accent"><div class="kpi-label">Tổng giao hiệu lực</div><div class="kpi-value">2.140</div></div>
+              <div class="kpi-card"><div class="kpi-label">Tổng hoàn thành</div><div class="kpi-value">1.360</div></div>
+              <div class="kpi-card"><div class="kpi-label">Đang làm việc</div><div class="kpi-value">18<span class="kpi-uom">NV</span></div></div>
+              <div class="kpi-card"><div class="kpi-label">Phân công OPEN</div><div class="kpi-value">27</div></div>
+            </div>
+
+            <div class="section-title">Nhân viên trong tổ</div>
+
+            <div class="card">
+              <div class="card-top">
+                <div><div class="order-name">Nguyễn Văn A</div><div class="order-code">MNV00123 · Tổ Cắt 2</div></div>
+                <span class="chip chip-synced">SYNCED</span>
+              </div>
+              <div class="progress-track"><div class="progress-fill" style="width:67%"></div></div>
+              <div class="stat-row"><div><span>Giao</span><b>450</b></div><div><span>H.thành</span><b>300</b></div><div><span>Còn lại</span><b>150</b></div></div>
+            </div>
+            <div class="card">
+              <div class="card-top">
+                <div><div class="order-name">Lê Thị C</div><div class="order-code">MNV00147 · Tổ Cắt 1</div></div>
+                <span class="chip chip-pending">2 PENDING</span>
+              </div>
+              <div class="progress-track"><div class="progress-fill" style="width:40%"></div></div>
+              <div class="stat-row"><div><span>Giao</span><b>320</b></div><div><span>H.thành</span><b>128</b></div><div><span>Còn lại</span><b>192</b></div></div>
+            </div>
+            <div class="card">
+              <div class="card-top">
+                <div><div class="order-name">Phạm Văn D</div><div class="order-code">MNV00158 · Tổ Cắt 3</div></div>
+                <span class="chip chip-failed">1 FAILED</span>
+              </div>
+              <div class="progress-track"><div class="progress-fill" style="width:88%"></div></div>
+              <div class="stat-row"><div><span>Giao</span><b>280</b></div><div><span>H.thành</span><b>246</b></div><div><span>Còn lại</span><b>34</b></div></div>
+            </div>
+
+            <button class="fab"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg></button>
+          </div>
+          <div class="bottom-nav">
+            <div class="nav-tab on"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg><span>Tổng quan</span></div>
+            <div class="nav-tab"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/></svg><span>Phân công</span></div>
+            <div class="nav-tab"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.5 9a9 9 0 0114.5-3.4L23 10M1 14l5-4.6A9 9 0 0020.5 15"/></svg><span>Đồng bộ</span></div>
+            <div class="nav-tab"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg><span>Tài khoản</span></div>
+          </div>
+        </div>
+
+        <!-- S07 -->
+        <div class="screen" data-screen="S07">
+          <div class="subheader">
+            <button class="icon-btn"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M15 18l-6-6 6-6"/></svg></button>
+            <div><div class="subheader-title">Tạo phân công</div><div class="subheader-sub">Giao số lượng cho công nhân</div></div>
+          </div>
+          <div class="screen-body">
+            <div class="field">
+              <div class="field-label">Công nhân <span class="req">*</span></div>
+              <div class="field-input"><span>Nguyễn Văn A · MNV00123</span>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="4" height="4"/><rect x="16" y="4" width="4" height="4"/><rect x="4" y="16" width="4" height="4"/><rect x="16" y="16" width="4" height="4"/><path d="M9 6h6M9 18h2M18 9v2M18 15v2"/></svg>
+              </div>
+              <div class="field-hint">Chỉ hiển thị nhân viên thuộc tổ bạn quản lý.</div>
+            </div>
+            <div class="field">
+              <div class="field-label">Đơn hàng <span class="req">*</span></div>
+              <div class="field-input scan"><span>Quét hoặc chọn đơn hàng</span><span>▾</span></div>
+            </div>
+            <div class="field">
+              <div class="field-label">Sản phẩm</div>
+              <div class="field-input" style="color:var(--muted)"><span>Tự động theo đơn hàng</span></div>
+            </div>
+            <div class="field">
+              <div class="field-label">Số lượng giao <span class="req">*</span></div>
+              <div class="field-input"><span style="font-family:var(--font-display); font-weight:800; font-size:18px; color:var(--navy)">200</span><span style="color:var(--muted)">cái</span></div>
+            </div>
+            <div class="field">
+              <div class="field-label">Ngày bắt đầu <span class="req">*</span></div>
+              <div class="field-input"><span>05/08/2026</span>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+              </div>
+            </div>
+            <div class="field">
+              <div class="field-label">Ca <span class="req">*</span></div>
+              <div class="segmented"><button class="on">Ca ngày</button><button>Ca chiều</button><button>Ca đêm</button></div>
+            </div>
+            <div class="field">
+              <div class="field-label">Ghi chú</div>
+              <div class="field-input" style="color:var(--muted); height:44px;">Không bắt buộc</div>
+            </div>
+          </div>
+          <div style="padding:14px 18px 18px;"><button class="btn btn-primary">Xác nhận phân công</button></div>
+        </div>
+
+        <!-- S08 -->
+        <div class="screen" data-screen="S08">
+          <div class="subheader">
+            <button class="icon-btn"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M15 18l-6-6 6-6"/></svg></button>
+            <div><div class="subheader-title">DH-2026-00417</div><div class="subheader-sub">Áo khoác gió L · Nguyễn Văn A</div></div>
+          </div>
+          <div class="screen-body">
+            <div class="kpi-grid">
+              <div class="kpi-card"><div class="kpi-label">Giao ban đầu</div><div class="kpi-value" style="font-size:20px">450</div></div>
+              <div class="kpi-card"><div class="kpi-label">Đã thu hồi</div><div class="kpi-value" style="font-size:20px; color:var(--danger)">0</div></div>
+            </div>
+            <div class="ring-card">
+              <div class="ring" style="--pct:67"><div class="ring-pct">67%</div></div>
+              <div class="ring-info">
+                <div class="kpi-label">Còn lại</div>
+                <div class="kpi-value" style="font-size:22px">150 <span class="kpi-uom">cái</span></div>
+                <div class="ring-detail">Giao hiệu lực 450 · Hoàn thành lũy kế 300</div>
+              </div>
+            </div>
+
+            <div class="section-title">Lịch sử giao dịch</div>
+            <div class="timeline-day">05/08/2026 · Ca ngày</div>
+            <div class="tl-item">
+              <div class="tl-dot g"></div>
+              <div class="tl-main">
+                <div class="tl-top"><span class="tl-title">Ghi nhận sản lượng</span><span class="tl-qty pos">+45</span></div>
+                <div class="tl-meta">09:24 · Nguyễn Văn A · <span class="chip chip-synced">SYNCED</span></div>
+              </div>
+            </div>
+            <div class="timeline-day">04/08/2026 · Ca ngày</div>
+            <div class="tl-item">
+              <div class="tl-dot g"></div>
+              <div class="tl-main">
+                <div class="tl-top"><span class="tl-title">Ghi nhận sản lượng</span><span class="tl-qty pos">+120</span></div>
+                <div class="tl-meta">15:02 · Nguyễn Văn A · <span class="chip chip-synced">SYNCED</span></div>
+              </div>
+            </div>
+            <div class="tl-item">
+              <div class="tl-dot g"></div>
+              <div class="tl-main">
+                <div class="tl-top"><span class="tl-title">Ghi nhận sản lượng</span><span class="tl-qty pos">+135</span></div>
+                <div class="tl-meta">08:40 · Nguyễn Văn A · <span class="chip chip-synced">SYNCED</span></div>
+              </div>
+            </div>
+          </div>
+          <div style="padding:14px 18px 18px;"><button class="btn btn-danger-outline">Thu hồi phần chưa làm</button></div>
+        </div>
+
+        <!-- S09 -->
+        <div class="screen" data-screen="S09">
+          <div class="subheader">
+            <button class="icon-btn"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M15 18l-6-6 6-6"/></svg></button>
+            <div><div class="subheader-title">Thu hồi phân công</div><div class="subheader-sub">DH-2026-00417 · Nguyễn Văn A</div></div>
+          </div>
+          <div class="screen-body">
+            <div class="stat-row">
+              <div><span>Giao ban đầu</span><b>450</b></div>
+              <div><span>Đã hoàn thành</span><b>300</b></div>
+              <div><span>Có thể thu hồi</span><b style="color:var(--gold-700)">150</b></div>
+            </div>
+
+            <div class="field">
+              <div class="field-label">Số lượng thu hồi <span class="req">*</span></div>
+              <div class="field-input"><span style="font-family:var(--font-display); font-weight:800; font-size:18px; color:var(--navy)">80</span><span style="color:var(--muted)">/ 150 cái</span></div>
+            </div>
+
+            <div class="field">
+              <div class="field-label">Lý do <span class="req">*</span></div>
+              <div class="reason-list">
+                <div class="reason-item on"><div class="radio"></div>Không làm hết</div>
+                <div class="reason-item"><div class="radio"></div>Điều chuyển công nhân</div>
+                <div class="reason-item"><div class="radio"></div>Đổi kế hoạch sản xuất</div>
+                <div class="reason-item"><div class="radio"></div>Kết thúc đơn hàng</div>
+                <div class="reason-item"><div class="radio"></div>Khác</div>
+              </div>
+            </div>
+
+            <div class="impact-box">
+              <div class="impact-row"><span>Giao hiệu lực</span><b>450 → 370</b></div>
+              <div class="impact-row"><span>Còn lại sau thu hồi</span><b>150 → 70</b></div>
+            </div>
+          </div>
+          <div style="padding:14px 18px 18px;"><button class="btn btn-danger">Xác nhận thu hồi</button></div>
+        </div>
+
+        <!-- S12 -->
+        <div class="screen" data-screen="S12">
+          <div class="subheader">
+            <div><div class="subheader-title">Đồng bộ</div><div class="subheader-sub">Quản lý bản ghi pending / failed</div></div>
+          </div>
+          <div class="screen-body">
+            <div class="sync-summary">
+              <div class="sync-sum-item"><b>3</b><span>Pending</span></div>
+              <div class="sync-sum-item"><b>1</b><span>Failed</span></div>
+              <div class="sync-sum-item"><b>142</b><span>Synced</span></div>
+            </div>
+            <div class="tabs-row">
+              <button class="on">Tất cả</button><button>Đang chờ</button><button>Lỗi</button><button>Đã xong</button>
+            </div>
+
+            <div class="list-row">
+              <div class="list-icon"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--pending)" stroke-width="2"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="9"/></svg></div>
+              <div class="list-main"><div class="list-title">Ghi nhận sản lượng · +45</div><div class="list-sub">09:24 · PDA-CT02-A17</div></div>
+              <span class="chip chip-pending">PENDING</span>
+            </div>
+            <div class="list-row">
+              <div class="list-icon"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg></div>
+              <div class="list-main"><div class="list-title">Thu hồi phân công · −20</div><div class="list-sub">08:12 · Lỗi xác thực số lượng</div></div>
+              <button class="retry-btn">Thử lại</button>
+            </div>
+            <div class="list-row">
+              <div class="list-icon"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--pending)" stroke-width="2"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="9"/></svg></div>
+              <div class="list-main"><div class="list-title">Ghi nhận sản lượng · +30</div><div class="list-sub">Hôm qua 16:50 · PDA-CT02-A17</div></div>
+              <span class="chip chip-pending">PENDING</span>
+            </div>
+            <div class="list-row">
+              <div class="list-icon"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg></div>
+              <div class="list-main"><div class="list-title">Tạo phân công · DH-2026-00417</div><div class="list-sub">Hôm qua 07:58 · Đã đồng bộ</div></div>
+              <span class="chip chip-synced">SYNCED</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- S13 -->
+        <div class="screen" data-screen="S13">
+          <div class="subheader"><div><div class="subheader-title">Tài khoản</div></div></div>
+          <div class="screen-body">
+            <div class="profile-card">
+              <div class="avatar">TB</div>
+              <div class="identity-name" style="font-size:16px">Trần Thị B</div>
+              <div class="identity-meta" style="justify-content:center">MNV00089</div>
+              <span class="profile-role">SUPERVISOR</span>
+            </div>
+
+            <div class="section-title">Quyền hạn</div>
+            <div class="perm-chips">
+              <span class="perm-chip">ASSIGN_QUANTITY</span>
+              <span class="perm-chip">RECALL_ASSIGNMENT</span>
+              <span class="perm-chip">VIEW_TEAM_PRODUCTION</span>
+              <span class="perm-chip">VIEW_SYNC_STATUS</span>
+            </div>
+
+            <div class="settings-group">
+              <div class="settings-row"><span>Phạm vi tổ</span><span>Cắt 1 · Cắt 2 · Cắt 3</span></div>
+              <div class="settings-row"><span>Thiết bị</span><span>PDA-CT02-A17</span></div>
+              <div class="settings-row"><span>Đồng bộ lần cuối</span><span>05/08 09:41</span></div>
+              <div class="settings-row"><span>Phiên bản</span><span>v1.0.0 (MVP)</span></div>
+            </div>
+
+            <div style="margin-top:20px; display:flex; flex-direction:column; gap:10px;">
+              <button class="btn-ghost-navy">Đổi người dùng</button>
+              <div style="text-align:center;"><button class="btn-text">Đăng xuất</button></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const meta = {
+    S02:{title:'Nhận diện nhân viên trên thiết bị dùng chung', goal:'Không hiển thị dữ liệu người trước; sẵn sàng nhận quét ngay khi mở màn hình.', name:'Quét / Đăng nhập'},
+    S02b:{title:'Đăng nhập bằng tài khoản / mật khẩu', goal:'Áp dụng cho cả Supervisor và Công nhân; quyền hạn cuối cùng do vai trò của tài khoản SAP quyết định, mã badge chỉ là lối tắt nhận diện.', name:'Tài khoản / mật khẩu'},
+    S03:{title:'Tóm tắt sản lượng theo ngày và ca của công nhân', goal:'4 chỉ số chính, danh sách phân công OPEN trước, banner đồng bộ khi có bản ghi chờ.', name:'Hôm nay — Công nhân'},
+    S04:{title:'Nhập và lưu sản lượng vừa hoàn thành', goal:'Ngữ cảnh khoá cố định trên màn hình; không cho nhập vượt số còn lại.', name:'Ghi nhận sản lượng'},
+    S06:{title:'Theo dõi các tổ do Supervisor phụ trách', goal:'Bộ lọc tổ/ca/ngày, danh sách nhân viên kèm tiến độ và trạng thái đồng bộ.', name:'Tổng quan — Supervisor'},
+    S07:{title:'Giao số lượng sản xuất cho công nhân', goal:'Quét/chọn nhân viên trong phạm vi quản lý, đơn hàng đang mở, số lượng và ca.', name:'Tạo phân công'},
+    S08:{title:'Xem lũy kế và toàn bộ giao dịch của một phân công', goal:'KPI tổng hợp, dòng thời gian giao dịch, lối vào chức năng Thu hồi.', name:'Chi tiết phân công'},
+    S09:{title:'Thu hồi phần chưa làm, không sửa dữ liệu gốc', goal:'Giới hạn theo maxRecall, bắt buộc lý do, xem trước tác động trước khi xác nhận.', name:'Thu hồi'},
+    S12:{title:'Quản lý bản ghi pending / failed', goal:'Phân theo tab trạng thái, cho thử lại thủ công, không tự xoá dữ liệu chưa đồng bộ.', name:'Đồng bộ'},
+    S13:{title:'Thông tin phiên làm việc và đổi người dùng', goal:'Hiển thị quyền hạn, thiết bị, thời điểm đồng bộ cuối; lối thoát an toàn khỏi phiên.', name:'Tài khoản'}
+  };
+
+  const navItems = document.querySelectorAll('.nav-item');
+  const screens = document.querySelectorAll('.screen');
+  const capId = document.getElementById('cap-id');
+  const capTitle = document.getElementById('cap-title');
+  const capGoal = document.getElementById('cap-goal');
+
+  navItems.forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const id = btn.dataset.screen;
+      navItems.forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+      screens.forEach(s=>s.classList.toggle('active', s.dataset.screen===id));
+      const m = meta[id];
+      capId.textContent = id + ' · ' + m.name.toUpperCase();
+      capTitle.textContent = m.title;
+      capGoal.textContent = m.goal;
+      document.getElementById('device-content').scrollTop = 0;
+    });
+  });
+</script>
+
+</body>
+</html>
