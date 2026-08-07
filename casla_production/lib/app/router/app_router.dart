@@ -29,11 +29,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       }
 
       if (isLoggedIn && isGoingToLogin) {
-        if (appState.currentRole == UserRole.supervisor) {
-          return '/supervisor';
-        } else {
-          return '/worker';
-        }
+        return '/supervisor';
       }
 
       return null;

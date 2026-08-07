@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../app/theme/casla_colors.dart';
 import '../../../main.dart';
+import '../../account/widgets/change_password_dialog.dart';
 
 class S02bAccountLoginScreen extends ConsumerStatefulWidget {
   final String? initialUsername;
@@ -20,8 +21,7 @@ class S02bAccountLoginScreen extends ConsumerStatefulWidget {
 class _S02bAccountLoginScreenState
     extends ConsumerState<S02bAccountLoginScreen> {
   late TextEditingController _usernameController;
-  final TextEditingController _passwordController =
-      TextEditingController(text: '123456');
+  final TextEditingController _passwordController = TextEditingController();
   bool _obscurePassword = true;
   String? _errorMessage;
   bool _isLoading = false;
@@ -30,7 +30,7 @@ class _S02bAccountLoginScreenState
   void initState() {
     super.initState();
     _usernameController =
-        TextEditingController(text: widget.initialUsername ?? 'tranthib');
+        TextEditingController(text: widget.initialUsername ?? '');
   }
 
   @override
@@ -56,29 +56,21 @@ class _S02bAccountLoginScreenState
       _errorMessage = null;
     });
 
-    final db = ref.read(appStateProvider).db;
-    final emp = await db.login(username, password);
-
-    if (!mounted) return;
-
-    setState(() {
-      _isLoading = false;
-    });
-
-    if (emp == null) {
-      setState(() {
-        _errorMessage = 'Sai tài khoản hoặc mật khẩu';
-      });
-      return;
-    }
-
-    await ref.read(appStateProvider).loginByMaNv(emp['ma_nv']);
-
-    if (!mounted) return;
-    if (emp['vai_tro'] == 'SUPERVISOR') {
+    try {
+      await ref.read(appStateProvider).loginByCredentials(username, password);
+      if (!mounted) return;
       context.go('/supervisor');
-    } else {
-      context.go('/worker');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = e.toString().replaceAll('Exception: ', '');
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -116,7 +108,7 @@ class _S02bAccountLoginScreenState
                 ),
                 const SizedBox(height: 12),
                 const Text(
-                  'Đăng nhập tài khoản',
+                  'Đăng nhập Supervisor',
                   style: TextStyle(
                     fontFamily: 'Manrope',
                     fontWeight: FontWeight.w800,
@@ -126,7 +118,7 @@ class _S02bAccountLoginScreenState
                 ),
                 const SizedBox(height: 4),
                 const Text(
-                  'Đăng nhập dành cho Supervisor & Công nhân',
+                  'Dành riêng cho Supervisor quản lý sản xuất',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 12,
@@ -236,58 +228,11 @@ class _S02bAccountLoginScreenState
                         )
                       : const Text('Đăng nhập'),
                 ),
-
-                const SizedBox(height: 24),
-                const Divider(height: 1),
-                const SizedBox(height: 16),
-
-                // Quick Demo User Selector Chips
-                const Text(
-                  '⚡ Đăng nhập nhanh 5 Tài khoản Demo:',
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w700,
-                    color: CaslaColors.muted,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 8,
-                  alignment: WrapAlignment.center,
-                  children: [
-                    _buildDemoChip('Supervisor (Trần Thị B)', 'tranthib'),
-                    _buildDemoChip('1. SYNCED (Nguyễn Văn A)', 'vana123'),
-                    _buildDemoChip('2. PENDING (Lê Thị C)', 'lethic'),
-                    _buildDemoChip('3. FAILED (Phạm Văn D)', 'phamvand'),
-                    _buildDemoChip('4. CHƯA XÁC NHẬN (Hoàng Văn E)', 'hoangvane'),
-                  ],
-                ),
               ],
             ),
           ),
         ),
       ),
-    );
-  }
-
-  Widget _buildDemoChip(String label, String username) {
-    return ActionChip(
-      backgroundColor: CaslaColors.gold100,
-      side: const BorderSide(color: CaslaColors.gold700, width: 1),
-      label: Text(
-        label,
-        style: const TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w700,
-          color: CaslaColors.gold700,
-        ),
-      ),
-      onPressed: () {
-        _usernameController.text = username;
-        _passwordController.text = '123456';
-        _submitLogin(username, '123456');
-      },
     );
   }
 }

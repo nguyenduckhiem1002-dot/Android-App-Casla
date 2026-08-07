@@ -6,6 +6,7 @@ import '../../../app/theme/casla_colors.dart';
 import '../../../main.dart';
 import '../../../presentation/widgets/kpi_card.dart';
 import '../../../presentation/widgets/status_chip.dart';
+import '../../account/widgets/change_password_dialog.dart';
 
 class S06SupervisorOverviewScreen extends ConsumerStatefulWidget {
   const S06SupervisorOverviewScreen({super.key});
@@ -20,6 +21,21 @@ class _S06SupervisorOverviewScreenState
   bool _isSearching = false;
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
+  bool _hasCheckedMandatoryPassword = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_hasCheckedMandatoryPassword && mounted) {
+        _hasCheckedMandatoryPassword = true;
+        final session = ref.read(appStateProvider).currentSession;
+        if (session?.passwordChangeRequired == true) {
+          showChangePasswordDialog(context, isMandatory: true, ref: ref);
+        }
+      }
+    });
+  }
 
   // Filter States
   String _selectedTeamId = 'ALL'; // 'ALL', 'team-1', 'team-2', 'team-3'
@@ -359,246 +375,258 @@ class _S06SupervisorOverviewScreenState
                 return name.contains(_searchQuery) || code.contains(_searchQuery);
               }).toList();
 
-              return SingleChildScrollView(
-                padding: const EdgeInsets.all(18),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Interactive Filter Row
-                    SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        children: [
-                          _buildFilterChip(
-                            '$_selectedTeamLabel ▾',
-                            isSelected: true,
-                            onTap: _showTeamFilterSheet,
-                          ),
-                          const SizedBox(width: 8),
-                          _buildFilterChip(
-                            '$_selectedShiftLabel ▾',
-                            onTap: _showShiftFilterSheet,
-                          ),
-                          const SizedBox(width: 8),
-                          _buildFilterChip(
-                            '${_formatDisplayDate(_selectedDate)} ▾',
-                            onTap: _showDatePickerDialog,
-                          ),
-                        ],
-                      ),
-                    ),
-
-                    const SizedBox(height: 14),
-
-                    // KPI Grid
-                    GridView.count(
-                      crossAxisCount: 2,
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      crossAxisSpacing: 10,
-                      mainAxisSpacing: 10,
-                      childAspectRatio: 1.6,
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // FIXED TOP SECTION: Filter Row + KPI Grid + Section Title
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(18, 16, 18, 0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        KpiCard(
-                          label: 'Tổng giao hiệu lực',
-                          value: totalEffective.toStringAsFixed(0),
-                          isAccent: true,
-                        ),
-                        const KpiCard(
-                          label: 'Tổng hoàn thành',
-                          value: '851',
-                        ),
-                        KpiCard(
-                          label: 'Đang làm việc',
-                          value: '${employees.length}',
-                          uom: 'NV',
-                        ),
-                        KpiCard(
-                          label: 'Phân công OPEN',
-                          value:
-                              '${assignments.where((a) => a['status'] == 'OPEN').length}',
-                        ),
-                      ],
-                    ),
-
-                    const SizedBox(height: 20),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          'Nhân viên trong tổ',
-                          style: TextStyle(
-                            fontFamily: 'Manrope',
-                            fontWeight: FontWeight.w800,
-                            fontSize: 14,
-                            color: CaslaColors.primaryNavy,
+                        // Interactive Filter Row
+                        SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            children: [
+                              _buildFilterChip(
+                                '$_selectedTeamLabel ▾',
+                                isSelected: true,
+                                onTap: _showTeamFilterSheet,
+                              ),
+                              const SizedBox(width: 8),
+                              _buildFilterChip(
+                                '$_selectedShiftLabel ▾',
+                                onTap: _showShiftFilterSheet,
+                              ),
+                              const SizedBox(width: 8),
+                              _buildFilterChip(
+                                '${_formatDisplayDate(_selectedDate)} ▾',
+                                onTap: _showDatePickerDialog,
+                              ),
+                            ],
                           ),
                         ),
-                        Text(
-                          '(${employees.length} NV)',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: CaslaColors.muted,
-                            fontFamily: 'monospace',
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
 
-                    if (employees.isEmpty)
-                      Container(
-                        padding: const EdgeInsets.all(24),
-                        decoration: BoxDecoration(
-                          color: CaslaColors.surface,
-                          border: Border.all(color: CaslaColors.line),
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: const Center(
-                          child: Text(
-                            'Không tìm thấy nhân viên nào phù hợp bộ lọc.',
-                            style: TextStyle(
-                              color: CaslaColors.muted,
-                              fontSize: 13,
+                        const SizedBox(height: 14),
+
+                        // KPI Grid Cards (FIXED)
+                        GridView.count(
+                          crossAxisCount: 2,
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          crossAxisSpacing: 10,
+                          mainAxisSpacing: 10,
+                          childAspectRatio: 1.6,
+                          children: [
+                            KpiCard(
+                              label: 'Tổng giao hiệu lực',
+                              value: totalEffective.toStringAsFixed(0),
+                              isAccent: true,
                             ),
-                          ),
+                            const KpiCard(
+                              label: 'Tổng hoàn thành',
+                              value: '851',
+                            ),
+                            KpiCard(
+                              label: 'Đang làm việc',
+                              value: '${employees.length}',
+                              uom: 'NV',
+                            ),
+                            KpiCard(
+                              label: 'Phân công OPEN',
+                              value:
+                                  '${assignments.where((a) => a['status'] == 'OPEN').length}',
+                            ),
+                          ],
                         ),
-                      )
-                    else
-                      ListView.builder(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        itemCount: employees.length,
-                        itemBuilder: (context, index) {
-                          final worker = employees[index];
-                          final workerAssignments = assignments
-                              .where((a) => a['nhan_vien_id'] == worker['id'])
-                              .toList();
 
-                          double workerAssigned = 0.0;
-                          for (final a in workerAssignments) {
-                            workerAssigned +=
-                                (a['assigned_quantity'] as double? ?? 0.0);
-                          }
+                        const SizedBox(height: 16),
 
-                          // Match status according to worker
-                          String status = 'SYNCED';
-                          String statusLabel = 'SYNCED';
+                        // Section Title Row (FIXED)
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text(
+                              'Công nhân được giao hôm nay',
+                              style: TextStyle(
+                                fontFamily: 'Manrope',
+                                fontWeight: FontWeight.w800,
+                                fontSize: 14,
+                                color: CaslaColors.primaryNavy,
+                              ),
+                            ),
+                            Text(
+                              '(${employees.length} NV)',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: CaslaColors.muted,
+                                fontFamily: 'monospace',
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                      ],
+                    ),
+                  ),
 
-                          if (worker['ma_nv'] == 'MNV00147') {
-                            status = 'PENDING';
-                            statusLabel = '2 PENDING';
-                          } else if (worker['ma_nv'] == 'MNV00158') {
-                            status = 'FAILED';
-                            statusLabel = '1 FAILED';
-                          } else if (worker['ma_nv'] == 'MNV00199') {
-                            status = 'OPEN';
-                            statusLabel = 'CHƯA XÁC NHẬN';
-                          }
-
-                          final completionRate = workerAssigned > 0
-                              ? (status == 'OPEN' ? 0.0 : 0.67)
-                              : 0.0;
-                          final completedQty = workerAssigned * completionRate;
-                          final remainingQty = workerAssigned - completedQty;
-
-                          return Container(
-                            margin: const EdgeInsets.only(bottom: 10),
-                            child: Material(
-                              color: CaslaColors.surface,
-                              borderRadius: BorderRadius.circular(14),
-                              child: InkWell(
-                                onTap: () {
-                                  context.push('/supervisor/employee_detail',
-                                      extra: worker);
-                                },
+                  // INDEPENDENTLY SCROLLABLE SECTION: Worker Cards List
+                  Expanded(
+                    child: employees.isEmpty
+                        ? Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 18),
+                            child: Container(
+                              padding: const EdgeInsets.all(24),
+                              decoration: BoxDecoration(
+                                color: CaslaColors.surface,
+                                border: Border.all(color: CaslaColors.line),
                                 borderRadius: BorderRadius.circular(14),
-                                child: Container(
-                                  padding: const EdgeInsets.all(14),
-                                  decoration: BoxDecoration(
-                                    border: Border.all(color: CaslaColors.line),
-                                    borderRadius: BorderRadius.circular(14),
-                                  ),
-                                  child: Column(
-                                    children: [
-                                      Row(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.spaceBetween,
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                worker['ten'] ?? 'Nhân viên',
-                                                style: const TextStyle(
-                                                  fontFamily: 'Manrope',
-                                                  fontWeight: FontWeight.w700,
-                                                  fontSize: 14.5,
-                                                  color:
-                                                      CaslaColors.primaryNavy,
-                                                ),
-                                              ),
-                                              const SizedBox(height: 2),
-                                              Text(
-                                                '${worker['ma_nv']} · ${worker['bo_phan']}',
-                                                style: const TextStyle(
-                                                  fontFamily: 'monospace',
-                                                  fontSize: 11.5,
-                                                  color: CaslaColors.muted,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                          StatusChip(
-                                            status: status,
-                                            label: statusLabel,
-                                          ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 12),
-
-                                      // Progress bar
-                                      ClipRRect(
-                                        borderRadius: BorderRadius.circular(8),
-                                        child: LinearProgressIndicator(
-                                          value: completionRate,
-                                          minHeight: 7,
-                                          backgroundColor: CaslaColors.muted100,
-                                          valueColor:
-                                              const AlwaysStoppedAnimation<
-                                                  Color>(
-                                            CaslaColors.accentGold,
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(height: 10),
-
-                                      // Stats row
-                                      Row(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.spaceBetween,
-                                        children: [
-                                          _buildStatItem('Giao',
-                                              workerAssigned.toStringAsFixed(0)),
-                                          _buildStatItem('H.thành',
-                                              completedQty.toStringAsFixed(0)),
-                                          _buildStatItem('Còn lại',
-                                              remainingQty.toStringAsFixed(0)),
-                                        ],
-                                      ),
-                                    ],
+                              ),
+                              child: const Center(
+                                child: Text(
+                                  'Không tìm thấy nhân viên nào phù hợp bộ lọc.',
+                                  style: TextStyle(
+                                    color: CaslaColors.muted,
+                                    fontSize: 13,
                                   ),
                                 ),
                               ),
                             ),
-                          );
-                        },
-                      ),
-                  ],
-                ),
+                          )
+                        : ListView.builder(
+                            padding: const EdgeInsets.fromLTRB(18, 0, 18, 80),
+                            itemCount: employees.length,
+                            itemBuilder: (context, index) {
+                              final worker = employees[index];
+                              final workerAssignments = assignments
+                                  .where((a) => a['nhan_vien_id'] == worker['id'])
+                                  .toList();
+
+                              double workerAssigned = 0.0;
+                              for (final a in workerAssignments) {
+                                workerAssigned +=
+                                    (a['assigned_quantity'] as double? ?? 0.0);
+                              }
+
+                              // Match status according to worker
+                              String status = 'SYNCED';
+                              String statusLabel = 'SYNCED';
+
+                              if (worker['ma_nv'] == 'MNV00147') {
+                                status = 'PENDING';
+                                statusLabel = '2 PENDING';
+                              } else if (worker['ma_nv'] == 'MNV00158') {
+                                status = 'FAILED';
+                                statusLabel = '1 FAILED';
+                              } else if (worker['ma_nv'] == 'MNV00199') {
+                                status = 'OPEN';
+                                statusLabel = 'CHƯA XÁC NHẬN';
+                              }
+
+                              final completionRate = workerAssigned > 0
+                                  ? (status == 'OPEN' ? 0.0 : 0.67)
+                                  : 0.0;
+                              final completedQty = workerAssigned * completionRate;
+                              final remainingQty = workerAssigned - completedQty;
+
+                              return Container(
+                                margin: const EdgeInsets.only(bottom: 10),
+                                child: Material(
+                                  color: CaslaColors.surface,
+                                  borderRadius: BorderRadius.circular(14),
+                                  child: InkWell(
+                                    onTap: () {
+                                      context.push('/supervisor/employee_detail',
+                                          extra: worker);
+                                    },
+                                    borderRadius: BorderRadius.circular(14),
+                                    child: Container(
+                                      padding: const EdgeInsets.all(14),
+                                      decoration: BoxDecoration(
+                                        border: Border.all(color: CaslaColors.line),
+                                        borderRadius: BorderRadius.circular(14),
+                                      ),
+                                      child: Column(
+                                        children: [
+                                          Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.spaceBetween,
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    worker['ten'] ?? 'Nhân viên',
+                                                    style: const TextStyle(
+                                                      fontFamily: 'Manrope',
+                                                      fontWeight: FontWeight.w700,
+                                                      fontSize: 14.5,
+                                                      color:
+                                                          CaslaColors.primaryNavy,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(height: 2),
+                                                  Text(
+                                                    '${worker['ma_nv']} · ${worker['bo_phan']}',
+                                                    style: const TextStyle(
+                                                      fontFamily: 'monospace',
+                                                      fontSize: 11.5,
+                                                      color: CaslaColors.muted,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                              StatusChip(
+                                                status: status,
+                                                label: statusLabel,
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 12),
+
+                                          // Progress bar
+                                          ClipRRect(
+                                            borderRadius: BorderRadius.circular(8),
+                                            child: LinearProgressIndicator(
+                                              value: completionRate,
+                                              minHeight: 7,
+                                              backgroundColor: CaslaColors.muted100,
+                                              valueColor:
+                                                  const AlwaysStoppedAnimation<
+                                                      Color>(
+                                                CaslaColors.accentGold,
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(height: 10),
+
+                                          // Stats row
+                                          Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.spaceBetween,
+                                            children: [
+                                              _buildStatItem('Giao',
+                                                  workerAssigned.toStringAsFixed(0)),
+                                              _buildStatItem('H.thành',
+                                                  completedQty.toStringAsFixed(0)),
+                                              _buildStatItem('Còn lại',
+                                                  remainingQty.toStringAsFixed(0)),
+                                            ],
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
               );
             },
           );

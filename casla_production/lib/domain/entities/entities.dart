@@ -294,6 +294,9 @@ class UserSession {
   final String maNv;
   final String fullName;
   final String teamName;
+  final String email;
+  final String accessToken;
+  final bool passwordChangeRequired;
   final UserRole role;
   final Set<Permission> permissions;
   final List<String> toIds;
@@ -303,6 +306,9 @@ class UserSession {
     required this.maNv,
     required this.fullName,
     required this.teamName,
+    this.email = '',
+    this.accessToken = '',
+    this.passwordChangeRequired = false,
     required this.role,
     required this.permissions,
     this.toIds = const ['team-1', 'team-2', 'team-3'],

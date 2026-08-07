@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/theme/casla_colors.dart';
 import '../../../domain/entities/enums.dart';
 import '../../../main.dart';
+import '../widgets/change_password_dialog.dart';
 
 class S13AccountScreen extends ConsumerWidget {
   const S13AccountScreen({super.key});
@@ -12,8 +13,9 @@ class S13AccountScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final appState = ref.watch(appStateProvider);
     final emp = appState.currentSession;
-    final userName = emp?.userName ?? 'Nguyễn Văn A';
-    final userCode = emp?.maNv ?? 'MNV00123';
+    final userName = emp?.fullName ?? emp?.userName ?? 'Trần Thị B';
+    final userCode = emp?.maNv ?? 'PB9_LO';
+    final userEmail = emp?.email.isNotEmpty == true ? emp!.email : '$userCode@caslastone.com';
     final isSupervisor = emp?.role == UserRole.supervisor;
     final role = isSupervisor ? 'SUPERVISOR' : 'CÔNG NHÂN';
 
@@ -33,7 +35,7 @@ class S13AccountScreen extends ConsumerWidget {
         backgroundColor: CaslaColors.primaryNavy,
         foregroundColor: Colors.white,
         title: const Text(
-          'Tài khoản',
+          'Tài khoản SAP',
           style: TextStyle(
             fontFamily: 'Manrope',
             fontWeight: FontWeight.w700,
@@ -72,7 +74,7 @@ class S13AccountScreen extends ConsumerWidget {
                     child: Text(
                       userName.isNotEmpty
                           ? userName.split(' ').last[0].toUpperCase()
-                          : 'A',
+                          : 'B',
                       style: const TextStyle(
                         fontFamily: 'Manrope',
                         fontWeight: FontWeight.w800,
@@ -91,16 +93,24 @@ class S13AccountScreen extends ConsumerWidget {
                       color: Colors.white,
                     ),
                   ),
-                  const SizedBox(height: 2),
+                  const SizedBox(height: 4),
                   Text(
-                    userCode,
+                    'Tài khoản: $userCode',
                     style: const TextStyle(
                       fontFamily: 'monospace',
                       fontSize: 12,
                       color: CaslaColors.identityMeta,
                     ),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 2),
+                  Text(
+                    userEmail,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Colors.white70,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
                   Container(
                     padding:
                         const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -124,7 +134,7 @@ class S13AccountScreen extends ConsumerWidget {
 
             const SizedBox(height: 18),
 
-            // Settings Group
+            // Settings & Account Info
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
@@ -136,7 +146,27 @@ class S13AccountScreen extends ConsumerWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Quyền hạn của tài khoản',
+                    'Thông tin chi tiết SAP',
+                    style: TextStyle(
+                      fontFamily: 'Manrope',
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13,
+                      color: CaslaColors.primaryNavy,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  _buildSettingRow('Họ và tên', userName),
+                  _buildSettingRow('Tài khoản SAP', userCode),
+                  _buildSettingRow('Email liên hệ', userEmail),
+                  _buildSettingRow('Phạm vi quản lý', 'Tổ Cắt 1–3'),
+                  _buildSettingRow('Mã thiết bị PDA', 'PDA-CT02-A17'),
+
+                  const SizedBox(height: 14),
+                  const Divider(height: 1),
+                  const SizedBox(height: 14),
+
+                  const Text(
+                    'Quyền hạn tài khoản',
                     style: TextStyle(
                       fontFamily: 'Manrope',
                       fontWeight: FontWeight.w700,
@@ -167,13 +197,6 @@ class S13AccountScreen extends ConsumerWidget {
                       );
                     }).toList(),
                   ),
-                  const SizedBox(height: 16),
-                  const Divider(height: 1),
-                  const SizedBox(height: 12),
-                  _buildSettingRow('Phạm vi quản lý', 'Tổ Cắt 1–3'),
-                  _buildSettingRow('Mã thiết bị', 'PDA-CT02-A17'),
-                  _buildSettingRow('Đồng bộ lần cuối', 'Hôm nay 10:45'),
-                  _buildSettingRow('Phiên bản app', 'v1.0.0 (MVP)'),
                 ],
               ),
             ),
@@ -181,23 +204,23 @@ class S13AccountScreen extends ConsumerWidget {
             const SizedBox(height: 20),
 
             // Action Buttons
+            ElevatedButton.icon(
+              onPressed: () {
+                showChangePasswordDialog(context, ref: ref);
+              },
+              icon: const Icon(Icons.lock_reset_rounded, size: 18),
+              label: const Text('Đổi mật khẩu'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: CaslaColors.primaryNavy,
+                foregroundColor: Colors.white,
+              ),
+            ),
+            const SizedBox(height: 10),
             OutlinedButton(
               onPressed: () {
                 appState.logout();
                 context.go('/login');
               },
-              child: const Text('Đổi người dùng'),
-            ),
-            const SizedBox(height: 10),
-            ElevatedButton(
-              onPressed: () {
-                appState.logout();
-                context.go('/login');
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: CaslaColors.danger,
-                foregroundColor: Colors.white,
-              ),
               child: const Text('Đăng xuất'),
             ),
           ],
@@ -208,7 +231,7 @@ class S13AccountScreen extends ConsumerWidget {
 
   Widget _buildSettingRow(String label, String value) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
@@ -216,13 +239,17 @@ class S13AccountScreen extends ConsumerWidget {
             label,
             style: const TextStyle(fontSize: 12.5, color: CaslaColors.muted),
           ),
-          Text(
-            value,
-            style: const TextStyle(
-              fontFamily: 'monospace',
-              fontWeight: FontWeight.w700,
-              fontSize: 11.5,
-              color: CaslaColors.primaryNavy,
+          Expanded(
+            child: Text(
+              value,
+              textAlign: TextAlign.end,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontFamily: 'Manrope',
+                fontWeight: FontWeight.w700,
+                fontSize: 12,
+                color: CaslaColors.primaryNavy,
+              ),
             ),
           ),
         ],

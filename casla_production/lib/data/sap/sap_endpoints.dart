@@ -1,6 +1,7 @@
 // SAP Integration — API Endpoints
 // Spec: Section 9.2 (Logical endpoints), Section 9.5 (OData/RAP mapping)
 
+import 'package:dio/dio.dart';
 import 'sap_dtos.dart';
 import 'sap_odata_client.dart';
 

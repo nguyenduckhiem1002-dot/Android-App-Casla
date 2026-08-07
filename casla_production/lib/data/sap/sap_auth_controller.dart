@@ -1,13 +1,45 @@
 // SAP Integration — Auth Controller
 // Spec: Section 4.1 (Login flow), Section 10 (Security)
-// Base auth flow: badge scan → cache check → SAP verify
+// SAP Service: ZUI_USER_QR_API
 
+import 'dart:convert';
+import '../../core/config/app_config.dart';
 import 'sap_odata_client.dart';
 import 'sap_endpoints.dart';
 
-/// Handles SAP authentication flow.
-/// MVP Phase: Uses local cache only.
-/// SAP Phase: Verifies against SAP backend.
+/// Result DTO for SAP Login Response
+class SapLoginResult {
+  final String accessToken;
+  final String refreshToken;
+  final String sessionId;
+  final String userUuid;
+  final String status;
+  final String? expiresAt;
+  final Map<String, dynamic>? userDetail;
+
+  SapLoginResult({
+    required this.accessToken,
+    required this.refreshToken,
+    required this.sessionId,
+    required this.userUuid,
+    required this.status,
+    this.expiresAt,
+    this.userDetail,
+  });
+
+  factory SapLoginResult.fromJson(Map<String, dynamic> json) {
+    return SapLoginResult(
+      accessToken: (json['access_token'] ?? '').toString(),
+      refreshToken: (json['refresh_token'] ?? '').toString(),
+      sessionId: (json['session_id'] ?? '').toString(),
+      userUuid: (json['user_uuid'] ?? '').toString(),
+      status: (json['status'] ?? '').toString(),
+      expiresAt: json['expires_at']?.toString(),
+    );
+  }
+}
+
+/// Handles SAP authentication flow against ZUI_USER_QR_API endpoint
 class SapAuthController {
   final SapODataClient client;
   late final SapEndpoints endpoints;
@@ -16,64 +48,87 @@ class SapAuthController {
     endpoints = SapEndpoints(client);
   }
 
-  /// Authenticate user against SAP backend.
-  /// Spec 4.1 Step 2: Tra cache; nếu có mạng xác thực SAP.
-  /// Returns SAP user data or null if not found/unauthorized.
-  Future<Map<String, dynamic>?> authenticateWithSap(String maNv) async {
-    try {
-      final response = await endpoints.getEmployee(maNv);
-      if (response.isSuccess) {
-        return response.data;
-      }
-      return null;
-    } catch (e) {
-      // If SAP unavailable, return null (use cache)
-      return null;
-    }
-  }
-
-  /// Fetch user permissions from SAP (Spec 2.1)
-  Future<List<String>> fetchPermissions() async {
-    try {
-      final response = await endpoints.getMyPermissions();
-      if (response.isSuccess && response.data != null) {
-        final permissions = response.data!['permissions'] as List<dynamic>?;
-        return permissions?.map((e) => e.toString()).toList() ?? [];
-      }
-      return [];
-    } catch (e) {
-      return [];
-    }
-  }
-
-  /// Fetch supervisor scope (teams managed) from SAP (Spec 2)
-  Future<List<String>> fetchSupervisorScope() async {
-    try {
-      final response = await endpoints.getSupervisorScope();
-      if (response.isSuccess && response.data != null) {
-        return response.data!.map((e) => e['teamId'].toString()).toList();
-      }
-      return [];
-    } catch (e) {
-      return [];
-    }
-  }
-
-  /// Login with username/password (Spec S02b)
-  Future<Map<String, dynamic>?> loginWithCredentials(
+  /// Login with Username / Password against SAP ZUI_USER_QR_API/login
+  Future<SapLoginResult?> loginWithCredentials(
       String username, String password) async {
-    try {
-      final response = await client.dio.post(
-        'sap/opu/odata/sap/ZC_PRODUCTION_SRV/Login',
-        data: {'username': username, 'password': password},
-      );
+    // 1. Fetch fresh CSRF token & cookies from SAP before POST login
+    await client.fetchCsrfToken();
 
-      if (response.statusCode == 200) {
-        final token = response.data['token'] as String?;
-        if (token != null) {
-          client.setAuthToken(token);
+    final deviceId = AppConfig.deviceId;
+    // Single quotes around parameters per OData Function Import specification
+    final path =
+        "login?Username='$username'&password='$password'&device_id='$deviceId'";
+
+    final response = await client.dio.post(path);
+
+    // 2. Inspect SAP Response Header `sap-message` for SAP error messages
+    final sapMessageHeader = response.headers.value('sap-message');
+    if (sapMessageHeader != null && sapMessageHeader.isNotEmpty) {
+      try {
+        final Map<String, dynamic> sapMsg = jsonDecode(sapMessageHeader);
+        final severity = (sapMsg['severity'] ?? '').toString().toLowerCase();
+        final msgText = (sapMsg['message'] ?? '').toString();
+
+        if (severity == 'error' || msgText.toLowerCase().contains('invalid')) {
+          // Clean up SAP message prefix (e.g. "I:ZAUTH:031 Invalid username or password")
+          final cleanMsg = msgText.replaceAll(RegExp(r'^[A-Z]:[A-Z0-9_]+:\d+\s*'), '');
+          throw Exception(cleanMsg.isNotEmpty ? cleanMsg : 'Tài khoản hoặc mật khẩu không đúng');
         }
-        return response.data;
+      } catch (e) {
+        if (e is Exception) rethrow;
+      }
+    }
+
+    // 3. Inspect Body Data & validate access_token
+    if (response.statusCode == 200 && response.data != null) {
+      final d = response.data['d'];
+      if (d != null && d['login'] != null) {
+        final loginData = d['login'] as Map<String, dynamic>;
+        final result = SapLoginResult.fromJson(loginData);
+
+        // Validation: access_token MUST NOT BE EMPTY and status MUST NOT BE 'e'/'E'
+        if (result.accessToken.isEmpty ||
+            result.status.toLowerCase() == 'e' ||
+            result.userUuid == '00000000-0000-0000-0000-000000000000') {
+          throw Exception('Tài khoản hoặc mật khẩu không đúng');
+        }
+
+        // Fetch full user details if userUuid is provided
+        Map<String, dynamic>? detail;
+        if (result.userUuid.isNotEmpty) {
+          detail = await getUserDetail(result.userUuid, accessToken: result.accessToken);
+        }
+
+        return SapLoginResult(
+          accessToken: result.accessToken,
+          refreshToken: result.refreshToken,
+          sessionId: result.sessionId,
+          userUuid: result.userUuid,
+          status: result.status,
+          expiresAt: result.expiresAt,
+          userDetail: detail,
+        );
+      }
+    }
+
+    throw Exception('Đăng nhập thất bại. Không nhận được phản hồi hợp lệ từ SAP.');
+  }
+
+  /// Fetch user profile from SAP ZC_USER_QR_API(guid'{UserUuid}')
+  Future<Map<String, dynamic>?> getUserDetail(String userUuid, {String? accessToken}) async {
+    try {
+      final cleanUuid = userUuid.replaceAll(RegExp(r"['\s]"), '');
+      var path = "ZC_USER_QR_API(guid'$cleanUuid')";
+      if (accessToken != null && accessToken.isNotEmpty) {
+        path += "?access_token='$accessToken'";
+      }
+
+      final response = await client.dio.get(path);
+      if (response.statusCode == 200 && response.data != null) {
+        final d = response.data['d'];
+        if (d != null) {
+          return Map<String, dynamic>.from(d as Map);
+        }
       }
       return null;
     } catch (e) {
@@ -81,27 +136,76 @@ class SapAuthController {
     }
   }
 
-  /// Refresh auth token
-  Future<bool> refreshToken() async {
+  /// Logout action on SAP backend
+  Future<bool> logout(String accessToken) async {
     try {
-      final response = await client.dio.post(
-        'sap/opu/odata/sap/ZC_PRODUCTION_SRV/RefreshToken',
-      );
-      if (response.statusCode == 200) {
-        final token = response.data['token'] as String?;
-        if (token != null) {
-          client.setAuthToken(token);
-          return true;
-        }
-      }
-      return false;
+      final path = "logout?access_token='$accessToken'";
+      final response = await client.dio.post(path);
+      return response.statusCode == 200;
     } catch (e) {
       return false;
     }
   }
 
-  /// Logout — clear token
-  void logout() {
-    client.setAuthToken(null);
+  /// Refresh token action on SAP backend
+  Future<SapLoginResult?> refreshToken(
+      String userUuid, String refreshToken) async {
+    try {
+      final cleanUuid = userUuid.replaceAll(RegExp(r"['\s]"), '');
+      final path =
+          "refresh?user_uuid=guid'$cleanUuid'&refresh_token='$refreshToken'";
+
+      final response = await client.dio.post(path);
+      if (response.statusCode == 200 && response.data != null) {
+        final d = response.data['d'];
+        if (d != null && d['refresh'] != null) {
+          final result = SapLoginResult.fromJson(d['refresh']);
+          return result;
+        }
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Change password action on SAP backend
+  /// POST changePassword?user_uuid=guid'{user_uuid}'&access_token='{access_token}'&old_password='{old_password}'&new_password='{new_password}'
+  Future<bool> changePassword({
+    required String userUuid,
+    required String accessToken,
+    required String oldPassword,
+    required String newPassword,
+  }) async {
+    try {
+      await client.fetchCsrfToken();
+      final cleanUuid = userUuid.replaceAll(RegExp(r"['\s]"), '');
+      final path =
+          "changePassword?user_uuid=guid'$cleanUuid'&access_token='$accessToken'&old_password='$oldPassword'&new_password='$newPassword'";
+
+      final response = await client.dio.post(path);
+
+      // Check sap-message header for error
+      final sapMessageHeader = response.headers.value('sap-message');
+      if (sapMessageHeader != null && sapMessageHeader.isNotEmpty) {
+        try {
+          final Map<String, dynamic> sapMsg = jsonDecode(sapMessageHeader);
+          final severity = (sapMsg['severity'] ?? '').toString().toLowerCase();
+          final msgText = (sapMsg['message'] ?? '').toString();
+
+          if (severity == 'error') {
+            final cleanMsg = msgText.replaceAll(RegExp(r'^[A-Z]:[A-Z0-9_]+:\d+\s*'), '');
+            throw Exception(cleanMsg.isNotEmpty ? cleanMsg : 'Đổi mật khẩu thất bại trên hệ thống SAP');
+          }
+        } catch (e) {
+          if (e is Exception) rethrow;
+        }
+      }
+
+      return response.statusCode == 200;
+    } catch (e) {
+      if (e is Exception) rethrow;
+      throw Exception('Không thể kết nối đến hệ thống SAP để đổi mật khẩu');
+    }
   }
 }

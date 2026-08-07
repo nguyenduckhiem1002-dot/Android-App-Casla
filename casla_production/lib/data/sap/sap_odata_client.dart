@@ -1,37 +1,56 @@
 // SAP Integration — OData Client
 // Spec: Section 9, 7.2 (dio)
-// Configurable base URL, auth token interceptor, logging with redaction
+// Configurable base URL, auth token interceptor, CSRF token handling, logging with redaction
 
+import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:logger/logger.dart';
+import '../../core/config/app_config.dart';
 
 class SapODataClient {
   final String baseUrl;
   String? _authToken;
+  String? _csrfToken;
+  List<String>? _cookies;
   late final Dio dio;
   final _logger = Logger(filter: ProductionFilter());
 
   SapODataClient({
-    this.baseUrl = 'https://sap-gateway.caslagroup.vn/',
+    String? baseUrl,
     String? authToken,
-  }) : _authToken = authToken {
+  })  : baseUrl = baseUrl ?? AppConfig.sapBaseUrl,
+        _authToken = authToken {
+    final basicAuthCredentials = _getBasicAuthCredentials();
+
     dio = Dio(BaseOptions(
-      baseUrl: baseUrl,
-      connectTimeout: const Duration(seconds: 30),
-      receiveTimeout: const Duration(seconds: 30),
-      sendTimeout: const Duration(seconds: 30),
+      baseUrl: this.baseUrl,
+      connectTimeout: const Duration(seconds: 20),
+      receiveTimeout: const Duration(seconds: 20),
+      sendTimeout: const Duration(seconds: 20),
       headers: {
         'Accept': 'application/json',
         'Content-Type': 'application/json',
+        'Authorization': 'Basic $basicAuthCredentials',
       },
     ));
 
-    // Auth interceptor
     dio.interceptors.add(InterceptorsWrapper(
       onRequest: (options, handler) {
-        if (_authToken != null && _authToken!.isNotEmpty) {
-          options.headers['Authorization'] = 'Bearer $_authToken';
+        // Always use Basic Auth header per SAP NetWeaver/OData requirement
+        options.headers['Authorization'] = 'Basic $basicAuthCredentials';
+
+        // Attach session cookies if present
+        if (_cookies != null && _cookies!.isNotEmpty) {
+          options.headers['Cookie'] = _cookies!.join('; ');
         }
+
+        // Attach CSRF token for non-GET requests
+        if (options.method != 'GET' && options.method != 'HEAD') {
+          if (_csrfToken != null && _csrfToken!.isNotEmpty) {
+            options.headers['x-csrf-token'] = _csrfToken;
+          }
+        }
+
         handler.next(options);
       },
       onError: (error, handler) {
@@ -42,23 +61,85 @@ class SapODataClient {
 
     // Logging interceptor (with token redaction per Spec Section 10)
     dio.interceptors.add(LogInterceptor(
-      requestHeader: false,
-      responseHeader: false,
+      requestHeader: true,
+      responseHeader: true,
       requestBody: true,
       responseBody: true,
       logPrint: (obj) {
-        // Redact sensitive data
-        final redacted = obj.toString()
-            .replaceAll(RegExp(r'Bearer\s+\S+'), 'Bearer [REDACTED]')
-            .replaceAll(RegExp(r'"password"\s*:\s*"[^"]*"'), '"password":"[REDACTED]"');
+        // Redact sensitive credentials in logs (Basic Auth, Passwords, Tokens)
+        final redacted = obj
+            .toString()
+            .replaceAll(RegExp(r'Basic\s+\S+'), 'Basic [REDACTED]')
+            .replaceAll(RegExp(r"password='[^']*'", caseSensitive: false), "password='[REDACTED]'")
+            .replaceAll(RegExp(r'password="[^"]*"', caseSensitive: false), 'password="[REDACTED]"')
+            .replaceAll(RegExp(r"access_token='[^']*'", caseSensitive: false), "access_token='[REDACTED]'")
+            .replaceAll(RegExp(r"refresh_token='[^']*'", caseSensitive: false), "refresh_token='[REDACTED]'");
         _logger.d(redacted);
       },
     ));
   }
 
+  String _getBasicAuthCredentials() {
+    return base64Encode(
+      utf8.encode('${AppConfig.sapBasicAuthUser}:${AppConfig.sapBasicAuthPassword}'),
+    );
+  }
+
+  /// Explicitly fetches fresh CSRF Token and Session Cookies from SAP backend.
+  /// Uses a clean standalone Dio instance to avoid interceptor recursion.
+  Future<String?> fetchCsrfToken() async {
+    try {
+      final basicAuthCredentials = _getBasicAuthCredentials();
+      final cleanDio = Dio(BaseOptions(
+        baseUrl: baseUrl,
+        connectTimeout: const Duration(seconds: 15),
+        receiveTimeout: const Duration(seconds: 15),
+      ));
+
+      final response = await cleanDio.get(
+        '\$metadata',
+        options: Options(
+          headers: {
+            'Accept': '*/*',
+            'Authorization': 'Basic $basicAuthCredentials',
+            'x-csrf-token': 'Fetch',
+          },
+        ),
+      );
+
+      // Read CSRF Token from response headers
+      final tokenHeader = response.headers['x-csrf-token'];
+      if (tokenHeader != null && tokenHeader.isNotEmpty) {
+        final token = tokenHeader.first;
+        if (token.isNotEmpty && token.toLowerCase() != 'fetch') {
+          _csrfToken = token;
+          _logger.i('SAP CSRF Token fetched successfully');
+        }
+      }
+
+      // Read Set-Cookie headers for session persistence
+      final setCookieHeaders = response.headers['set-cookie'];
+      if (setCookieHeaders != null && setCookieHeaders.isNotEmpty) {
+        _cookies = setCookieHeaders.map((c) => c.split(';')[0]).toList();
+        _logger.i('SAP Session Cookies fetched');
+      }
+
+      return _csrfToken;
+    } catch (e) {
+      _logger.w('Failed to fetch SAP CSRF token: $e');
+      return null;
+    }
+  }
+
   /// Update auth token (after login/refresh)
   void setAuthToken(String? token) {
     _authToken = token;
+  }
+
+  /// Reset CSRF token & cookies (e.g. on logout)
+  void resetCsrfSession() {
+    _csrfToken = null;
+    _cookies = null;
   }
 
   /// Check if client has a valid auth token
@@ -69,8 +150,6 @@ class SapODataClient {
 class ProductionFilter extends LogFilter {
   @override
   bool shouldLog(LogEvent event) {
-    // In production, only log warnings and errors
-    // For development, log everything
-    return true; // TODO: Check kIsRelease
+    return true;
   }
 }

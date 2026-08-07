@@ -10,11 +10,20 @@ import '../../domain/entities/enums.dart';
 import '../../domain/policies/production_math.dart';
 import '../../domain/repositories/repositories.dart';
 
+import '../../core/config/app_config.dart';
+import '../sap/sap_odata_client.dart';
+import '../sap/sap_auth_controller.dart';
+
 // ─── Auth Repository ────────────────────────────────────────────────
 class AuthRepositoryImpl implements AuthRepository {
   final CaslaDatabase db;
+  late final SapODataClient _sapClient;
+  late final SapAuthController _sapAuth;
 
-  AuthRepositoryImpl(this.db);
+  AuthRepositoryImpl(this.db) {
+    _sapClient = SapODataClient();
+    _sapAuth = SapAuthController(_sapClient);
+  }
 
   @override
   Future<UserSession> loginByMaNv(String maNv) async {
@@ -24,23 +33,19 @@ class AuthRepositoryImpl implements AuthRepository {
     }
 
     final isSupervisor = emp['vai_tro'] == 'SUPERVISOR';
+    if (!isSupervisor) {
+      throw Exception('Công nhân không có quyền đăng nhập. Hệ thống chỉ dành cho Supervisor.');
+    }
 
-    final permissions = isSupervisor
-        ? {
-            Permission.viewOwnProduction,
-            Permission.assignQuantity,
-            Permission.recallAssignment,
-            Permission.viewTeamProduction,
-            Permission.viewEmployeeHistory,
-            Permission.viewSyncStatus,
-            Permission.switchUser,
-          }
-        : {
-            Permission.viewOwnProduction,
-            Permission.recordOwnProduction,
-            Permission.viewSyncStatus,
-            Permission.switchUser,
-          };
+    final permissions = {
+      Permission.viewOwnProduction,
+      Permission.assignQuantity,
+      Permission.recallAssignment,
+      Permission.viewTeamProduction,
+      Permission.viewEmployeeHistory,
+      Permission.viewSyncStatus,
+      Permission.switchUser,
+    };
 
     final session = UserSession(
       id: emp['id'] as String,
@@ -68,11 +73,54 @@ class AuthRepositoryImpl implements AuthRepository {
 
   @override
   Future<UserSession> loginByCredentials(String username, String password) async {
-    // MVP: delegate to loginByMaNv for testing, hardcode password 123456
-    if (password != '123456') {
-      throw Exception('Mật khẩu không đúng');
+    final sapResult = await _sapAuth.loginWithCredentials(username, password);
+    if (sapResult != null && sapResult.accessToken.isNotEmpty) {
+      final userDetail = sapResult.userDetail;
+      final fullName = (userDetail?['FullName'] ?? userDetail?['Username'] ?? username).toString();
+      final email = (userDetail?['Email'] ?? userDetail?['email'] ?? '$username@caslastone.com').toString();
+      final pwdReqVal = userDetail?['PasswordChangeRequired'] ?? userDetail?['password_change_required'];
+      final passwordChangeRequired = pwdReqVal == true ||
+          pwdReqVal.toString().toLowerCase() == 'true' ||
+          pwdReqVal == 1;
+      final userUuid = sapResult.userUuid;
+
+      final permissions = {
+        Permission.viewOwnProduction,
+        Permission.assignQuantity,
+        Permission.recallAssignment,
+        Permission.viewTeamProduction,
+        Permission.viewEmployeeHistory,
+        Permission.viewSyncStatus,
+        Permission.switchUser,
+      };
+
+      final session = UserSession(
+        id: userUuid.isNotEmpty ? userUuid : 'sap-$username',
+        maNv: username,
+        fullName: fullName,
+        email: email,
+        accessToken: sapResult.accessToken,
+        passwordChangeRequired: passwordChangeRequired,
+        teamName: 'Supervisor (SAP)',
+        role: UserRole.supervisor,
+        permissions: permissions,
+      );
+
+      await db.insertAuditLog({
+        'id': IdGenerator.newId(),
+        'event_type': 'LOGIN_SAP',
+        'actor_id': username,
+        'target_employee_id': username,
+        'entity_type': 'SESSION',
+        'entity_id': session.id,
+        'device_id': DeviceInfoHelper.deviceId,
+        'occurred_at_utc': DateTime.now().millisecondsSinceEpoch,
+      });
+
+      return session;
     }
-    return loginByMaNv(username);
+
+    throw Exception('Đăng nhập thất bại. Vui lòng kiểm tra lại tài khoản hoặc mật khẩu SAP!');
   }
 
   @override

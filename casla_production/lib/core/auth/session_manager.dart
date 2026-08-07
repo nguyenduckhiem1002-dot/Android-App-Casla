@@ -38,7 +38,17 @@ class AppState extends ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
-      return false;
+      rethrow;
+    }
+  }
+
+  Future<bool> loginByCredentials(String username, String password) async {
+    try {
+      _currentSession = await authRepo.loginByCredentials(username, password);
+      notifyListeners();
+      return true;
+    } catch (e) {
+      rethrow;
     }
   }
 

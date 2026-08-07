@@ -73,6 +73,12 @@ class CaslaDatabase {
         'vai_tro': 'CONG_NHAN', 'quyen_han': ['VIEW_OWN_PRODUCTION'],
         'to_ids': ['team-2'],
       },
+      {
+        'id': 'emp-6', 'ma_nv': 'NV0001', 'ten': 'Nguyễn Văn A', 'bo_phan': 'Công nhân sản xuất',
+        'trang_thai': 'ACTIVE', 'tai_khoan': 'nv0001', 'mat_khau_hash': '123456',
+        'vai_tro': 'CONG_NHAN', 'quyen_han': ['VIEW_OWN_PRODUCTION'],
+        'to_ids': ['team-2'],
+      },
     ]);
 
     _teams.addAll([
@@ -220,16 +226,6 @@ class CaslaDatabase {
   }
 
   // ─── Auth / Employee Queries ──────────────────────────────────────
-  Future<Map<String, dynamic>?> login(String taiKhoan, String matKhau) async {
-    try {
-      final emp = _employees.firstWhere((e) =>
-          e['tai_khoan'] == taiKhoan && e['trang_thai'] == 'ACTIVE');
-      if (emp['mat_khau_hash'] != matKhau) return null;
-      return emp;
-    } catch (_) {
-      return null;
-    }
-  }
 
   Future<Map<String, dynamic>?> getEmployeeByCode(String code) async {
     try {
@@ -248,21 +244,36 @@ class CaslaDatabase {
     }
   }
 
+  Future<Map<String, dynamic>> ensureEmployeeExists(String maNv, String ten) async {
+    final existing = await getEmployeeByCode(maNv);
+    if (existing != null) {
+      return existing;
+    }
+    final newEmp = {
+      'id': 'emp-$maNv',
+      'ma_nv': maNv,
+      'ten': ten,
+      'bo_phan': 'Công nhân sản xuất',
+      'trang_thai': 'ACTIVE',
+      'tai_khoan': maNv.toLowerCase(),
+      'mat_khau_hash': '123456',
+      'vai_tro': 'CONG_NHAN',
+      'quyen_han': ['VIEW_OWN_PRODUCTION'],
+      'to_ids': ['team-1', 'team-2', 'team-3'],
+    };
+    _employees.add(newEmp);
+    return newEmp;
+  }
+
   Future<List<Map<String, dynamic>>> getAllEmployees() async => List.from(_employees);
 
   Future<List<Map<String, dynamic>>> getEmployeesByTeamIds(List<String> teamIds) async {
-    return _employees.where((e) {
-      if (e['vai_tro'] == 'SUPERVISOR') return false; // Chỉ lấy công nhân
-      final ids = (e['to_ids'] as List).cast<String>();
-      return ids.any((t) => teamIds.contains(t));
-    }).toList();
+    return _employees.where((e) => e['vai_tro'] == 'CONG_NHAN').toList();
   }
 
   Future<bool> isEmployeeInScope(String employeeId, List<String> supervisorToIds) async {
-    final emp = await getEmployeeById(employeeId);
-    if (emp == null) return false;
-    final ids = (emp['to_ids'] as List).cast<String>();
-    return ids.any((t) => supervisorToIds.contains(t));
+    // Workers are not fixed to any team, so any worker is accessible to supervisors.
+    return true;
   }
 
   // ─── Team Queries ─────────────────────────────────────────────────

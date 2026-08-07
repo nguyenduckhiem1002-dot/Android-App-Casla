@@ -10,15 +10,6 @@ import 'core/auth/session_manager.dart';
 import 'domain/entities/entities.dart';
 import 'domain/entities/enums.dart';
 
-import 'features/authentication/screens/scan_login_screen.dart';
-import 'features/shared/screens/worker_shell.dart';
-import 'features/shared/screens/supervisor_shell.dart';
-import 'features/worker/screens/record_production_screen.dart';
-import 'features/supervisor/screens/create_assignment_screen.dart';
-import 'features/supervisor/screens/assignment_detail_screen.dart';
-import 'features/supervisor/screens/recall_screen.dart';
-import 'features/sync/screens/sync_status_screen.dart';
-
 import 'app/router/app_router.dart';
 
 void main() {

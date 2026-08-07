@@ -6,6 +6,8 @@ import '../../../app/theme/casla_colors.dart';
 import '../../../main.dart';
 import '../../../presentation/widgets/qr_scanner_view.dart';
 
+import '../../../core/utils/worker_qr_parser.dart';
+
 class S07CreateAssignmentWizardScreen extends ConsumerStatefulWidget {
   const S07CreateAssignmentWizardScreen({super.key});
 
@@ -39,75 +41,19 @@ class _S07CreateAssignmentWizardScreenState
   }
 
   Future<void> _loadDefaultWorker() async {
-    final appState = ref.read(appStateProvider);
-    final supervisorToIds = appState.currentSession?.toIds ?? ['team-1', 'team-2', 'team-3'];
-    final workers = await appState.db.getEmployeesByTeamIds(supervisorToIds);
-    if (workers.isNotEmpty && mounted) {
-      setState(() {
-        _selectedWorker = workers.first;
-      });
-    }
+    // Default to sample badge NV0001 (Nguyễn Văn A) for demo convenience
+    setState(() {
+      _selectedWorker = {
+        'id': 'emp-NV0001',
+        'ma_nv': 'NV0001',
+        'ten': 'Nguyễn Văn A',
+        'bo_phan': 'Công nhân sản xuất',
+      };
+    });
   }
 
-  void _openWorkerPicker() async {
-    final appState = ref.read(appStateProvider);
-    final supervisorToIds = appState.currentSession?.toIds ?? ['team-1', 'team-2', 'team-3'];
-    final workers = await appState.db.getEmployeesByTeamIds(supervisorToIds);
-
-    if (!mounted) return;
-
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (context) {
-        return Container(
-          padding: const EdgeInsets.all(18),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Chọn công nhân',
-                style: TextStyle(
-                  fontFamily: 'Manrope',
-                  fontWeight: FontWeight.w800,
-                  fontSize: 16,
-                  color: CaslaColors.primaryNavy,
-                ),
-              ),
-              const SizedBox(height: 12),
-              ListView.builder(
-                shrinkWrap: true,
-                itemCount: workers.length,
-                itemBuilder: (context, index) {
-                  final w = workers[index];
-                  final isSelected = _selectedWorker?['id'] == w['id'];
-                  return ListTile(
-                    selected: isSelected,
-                    title: Text(
-                      '${w['ten']} · ${w['ma_nv']}',
-                      style: const TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                    subtitle: Text(w['bo_phan'] ?? ''),
-                    trailing: isSelected
-                        ? const Icon(Icons.check, color: CaslaColors.accentGold)
-                        : null,
-                    onTap: () {
-                      Navigator.pop(context);
-                      setState(() {
-                        _selectedWorker = w;
-                      });
-                    },
-                  );
-                },
-              ),
-            ],
-          ),
-        );
-      },
-    );
+  void _openWorkerPicker() {
+    _scanWorkerQR();
   }
 
   void _scanWorkerQR() {
@@ -115,54 +61,66 @@ class _S07CreateAssignmentWizardScreenState
       context,
       MaterialPageRoute(
         builder: (context) => Scaffold(
-          body: QrScannerView(
-            title: 'Quét mã công nhân',
-            subtitle: 'Đưa thẻ công nhân vào khung hình.',
-            onScan: (code) async {
-              String searchKey = code.trim();
-              if (searchKey.startsWith('{') && searchKey.endsWith('}')) {
-                try {
-                  final Map<String, dynamic> json = Map<String, dynamic>.from(
-                      Uri.splitQueryString(searchKey.replaceAll(RegExp(r'[{}"\s]'), '')));
-                  searchKey = json['userId'] ?? json['username'] ?? json['ma_nv'] ?? searchKey;
-                } catch (_) {}
-              }
-
-              final db = ref.read(appStateProvider).db;
-              final worker = await db.getEmployeeByCode(searchKey);
-              final supervisorToIds = ref.read(appStateProvider).currentSession?.toIds ?? ['team-1', 'team-2', 'team-3'];
-
-              if (mounted) {
-                if (worker == null) {
-                  // Check if it's a product QR by mistake
-                  final possibleProduct = await db.getOrderByCode(searchKey);
-                  final msg = possibleProduct != null
-                      ? 'Mã QR này là của Sản phẩm (${possibleProduct['ten_sp']}), không phải mã Nhân viên.'
-                      : 'Không tìm thấy nhân viên có mã QR: $searchKey';
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(msg),
-                      backgroundColor: CaslaColors.danger,
+          body: Stack(
+            children: [
+              QrScannerView(
+                title: 'Quét mã QR công nhân',
+                subtitle: 'Đưa thẻ nhân viên (mã NV0001 - Nguyễn Văn A) vào khung hình.',
+                onScan: (code) {
+                  final res = WorkerQrParser.parse(code);
+                  if (!res.isValid) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(res.error ?? 'Mã QR không hợp lệ'),
+                        backgroundColor: CaslaColors.danger,
+                      ),
+                    );
+                    return;
+                  }
+                  if (mounted) {
+                    Navigator.pop(context); // Pop camera page
+                    setState(() {
+                      _selectedWorker = {
+                        'id': 'emp-${res.maNv}',
+                        'ma_nv': res.maNv,
+                        'ten': res.tenNv,
+                        'display': res.displayText,
+                        'bo_phan': 'Công nhân sản xuất',
+                      };
+                    });
+                  }
+                },
+              ),
+              Positioned(
+                bottom: 30,
+                left: 20,
+                right: 20,
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    final parsed = WorkerQrParser.parseWorkerQr('NV0001');
+                    Navigator.pop(context);
+                    setState(() {
+                      _selectedWorker = {
+                        'id': 'emp-${parsed['ma_nv']}',
+                        'ma_nv': parsed['ma_nv'],
+                        'ten': parsed['ten'],
+                        'bo_phan': 'Công nhân sản xuất',
+                      };
+                    });
+                  },
+                  icon: const Icon(Icons.qr_code),
+                  label: const Text('Mô phỏng Quét Mã NV0001 (Nguyễn Văn A)'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: CaslaColors.accentGold,
+                    foregroundColor: CaslaColors.navy900,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
                     ),
-                  );
-                  return;
-                }
-                final inScope = await db.isEmployeeInScope(worker['id'], supervisorToIds);
-                if (!inScope) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('Nhân viên ${worker['ten']} không thuộc tổ quản lý!'),
-                      backgroundColor: CaslaColors.danger,
-                    ),
-                  );
-                  return;
-                }
-                Navigator.pop(context); // Pop camera page on success
-                setState(() {
-                  _selectedWorker = worker;
-                });
-              }
-            },
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -303,9 +261,15 @@ class _S07CreateAssignmentWizardScreenState
     final appState = ref.read(appStateProvider);
     final emp = appState.currentSession;
 
-    final workerId = _selectedWorker!['id'];
+    final workerMaNv = (_selectedWorker!['ma_nv'] ?? _selectedWorker!['id']).toString();
+    final workerTen = (_selectedWorker!['ten'] ?? 'Nguyễn Văn A').toString();
+
+    // Ensure worker exists in system DB/API transaction on submission
+    final empRecord = await appState.db.ensureEmployeeExists(workerMaNv, workerTen);
+
+    final workerId = empRecord['id'];
     final orderId = _selectedOrder!['id'];
-    final toId = (_selectedWorker!['to_ids'] as List).first;
+    final toId = (empRecord['to_ids'] as List?)?.first ?? 'team-1';
     final createdBy = emp?.maNv ?? 'MNV00100';
 
     final dateFormatted = DateFormat('yyyy-MM-dd').format(_startDate);
@@ -343,7 +307,7 @@ class _S07CreateAssignmentWizardScreenState
   @override
   Widget build(BuildContext context) {
     final workerDisplayName = _selectedWorker != null
-        ? '${_selectedWorker!['ten']} · ${_selectedWorker!['ma_nv']}'
+        ? (_selectedWorker!['display'] ?? '${_selectedWorker!['ma_nv']} ( ${_selectedWorker!['ten']} )')
         : 'Chọn hoặc quét mã công nhân';
 
     final productDisplayName = _selectedOrder != null
@@ -445,7 +409,7 @@ class _S07CreateAssignmentWizardScreenState
                   ),
                   const SizedBox(height: 5),
                   const Text(
-                    'Chỉ hiển thị nhân viên thuộc tổ bạn quản lý.',
+                    'Quét mã QR thẻ nhân viên để chọn công nhân giao NVL.',
                     style: TextStyle(fontSize: 10.5, color: CaslaColors.muted),
                   ),
 
