@@ -52,7 +52,11 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  void logout() {
+  Future<void> logout() async {
+    final token = _currentSession?.accessToken;
+    if (token != null && token.isNotEmpty) {
+      await authRepo.logout(accessToken: token);
+    }
     _currentSession = null;
     notifyListeners();
   }

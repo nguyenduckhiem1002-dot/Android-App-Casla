@@ -132,7 +132,7 @@ class _S03WorkerHistoryScreenState
                           ),
                         ),
                       ),
-                      const SizedBox(width: 11),
+                      const SizedBox(width: 12),
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -140,16 +140,18 @@ class _S03WorkerHistoryScreenState
                             workerName,
                             style: const TextStyle(
                               fontFamily: 'Manrope',
-                              fontWeight: FontWeight.w700,
-                              fontSize: 14.5,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 17,
                               color: Colors.white,
                             ),
                           ),
+                          const SizedBox(height: 2),
                           Text(
                             '$workerCode · $teamName',
                             style: const TextStyle(
-                              fontFamily: 'monospace',
-                              fontSize: 10.5,
+                              fontFamily: 'Inter',
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w500,
                               color: CaslaColors.identityMeta,
                             ),
                           ),
@@ -160,9 +162,11 @@ class _S03WorkerHistoryScreenState
                   IconButton(
                     icon: const Icon(Icons.swap_horiz, color: Colors.white),
                     tooltip: 'Đổi người dùng',
-                    onPressed: () {
-                      appState.logout();
-                      context.go('/login');
+                    onPressed: () async {
+                      await appState.logout();
+                      if (context.mounted) {
+                        context.go('/login');
+                      }
                     },
                   ),
                 ],

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../app/theme/casla_colors.dart';
+import 'casla_logo_white.dart';
 
 class QrScannerView extends StatefulWidget {
   final String title;
@@ -60,6 +61,36 @@ class _QrScannerViewState extends State<QrScannerView>
         // Camera feed
         MobileScanner(
           controller: controller,
+          errorBuilder: (context, error) {
+            return Container(
+              color: CaslaColors.navy900,
+              alignment: Alignment.center,
+              padding: const EdgeInsets.all(24),
+              child: const Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.camera_alt_outlined,
+                      color: CaslaColors.accentGold, size: 54),
+                  SizedBox(height: 16),
+                  Text(
+                    'Camera Máy ảo đang sẵn sàng',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700),
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'Vui lòng bấm "Nhập thủ công" bên dưới để test nhanh',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                        color: CaslaColors.identityMeta, fontSize: 12.5),
+                  ),
+                ],
+              ),
+            );
+          },
           onDetect: (capture) {
             final barcodes = capture.barcodes;
             for (final barcode in barcodes) {
@@ -81,30 +112,13 @@ class _QrScannerViewState extends State<QrScannerView>
               // Brand Logo Header
               Column(
                 children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [CaslaColors.accentGold, CaslaColors.gold700],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    alignment: Alignment.center,
-                    child: const Text(
-                      'CG',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w800,
-                        fontSize: 17,
-                        color: CaslaColors.navy900,
-                      ),
-                    ),
+                  const CaslaLogoWhite(
+                    size: 68,
+                    textColor: Colors.white,
                   ),
                   const SizedBox(height: 6),
                   const Text(
-                    'CASLA GROUP',
+                    'GHI NHẬN SẢN LƯỢNG',
                     style: TextStyle(
                       fontFamily: 'Manrope',
                       fontWeight: FontWeight.w800,
@@ -112,15 +126,7 @@ class _QrScannerViewState extends State<QrScannerView>
                       letterSpacing: 1.0,
                       color: Colors.white,
                     ),
-                  ),
-                  const Text(
-                    'GHI NHẬN SẢN LƯỢNG',
-                    style: TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 9.5,
-                      color: Color(0xFF6B76A3),
-                    ),
-                  ),
+                  )
                 ],
               ),
 

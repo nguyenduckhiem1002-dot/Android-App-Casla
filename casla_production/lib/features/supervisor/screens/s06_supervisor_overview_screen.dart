@@ -281,11 +281,11 @@ class _S06SupervisorOverviewScreenState
                     Row(
                       children: [
                         Container(
-                          width: 38,
-                          height: 38,
+                          width: 44,
+                          height: 44,
                           decoration: BoxDecoration(
                             color: const Color(0xFF26305C),
-                            borderRadius: BorderRadius.circular(10),
+                            borderRadius: BorderRadius.circular(12),
                           ),
                           alignment: Alignment.center,
                           child: Text(
@@ -298,12 +298,12 @@ class _S06SupervisorOverviewScreenState
                             style: const TextStyle(
                               fontFamily: 'Manrope',
                               fontWeight: FontWeight.w800,
-                              fontSize: 14,
+                              fontSize: 18,
                               color: Colors.white,
                             ),
                           ),
                         ),
-                        const SizedBox(width: 10),
+                        const SizedBox(width: 12),
                         Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisAlignment: MainAxisAlignment.center,
@@ -312,16 +312,18 @@ class _S06SupervisorOverviewScreenState
                               supervisorName,
                               style: const TextStyle(
                                 fontFamily: 'Manrope',
-                                fontWeight: FontWeight.w700,
-                                fontSize: 14.5,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 17,
                                 color: Colors.white,
                               ),
                             ),
+                            const SizedBox(height: 2),
                             const Text(
                               'Supervisor · Tổ Cắt 1–3',
                               style: TextStyle(
-                                fontFamily: 'monospace',
-                                fontSize: 10.5,
+                                fontFamily: 'Inter',
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w500,
                                 color: CaslaColors.identityMeta,
                               ),
                             ),
@@ -329,14 +331,30 @@ class _S06SupervisorOverviewScreenState
                         ),
                       ],
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.search, color: Colors.white),
-                      tooltip: 'Tìm kiếm nhân viên',
-                      onPressed: () {
-                        setState(() {
-                          _isSearching = true;
-                        });
-                      },
+                    Row(
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.qr_code_scanner, color: Colors.white),
+                          tooltip: 'Quét thẻ/QR công nhân',
+                          onPressed: () {
+                            context.push('/supervisor/employee_detail', extra: {
+                              'id': 'emp-1',
+                              'ma_nv': 'MNV00123',
+                              'ten': 'Nguyễn Văn A',
+                              'bo_phan': 'Tổ Cắt 2',
+                            });
+                          },
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.search, color: Colors.white),
+                          tooltip: 'Tìm kiếm nhân viên',
+                          onPressed: () {
+                            setState(() {
+                              _isSearching = true;
+                            });
+                          },
+                        ),
+                      ],
                     ),
                   ],
                 ),

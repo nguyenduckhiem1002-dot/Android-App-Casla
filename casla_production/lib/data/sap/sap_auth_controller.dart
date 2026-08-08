@@ -136,13 +136,18 @@ class SapAuthController {
     }
   }
 
-  /// Logout action on SAP backend
+  /// Logout action on SAP backend: POST logout?access_token='{access_token}'
   Future<bool> logout(String accessToken) async {
     try {
+      await client.fetchCsrfToken();
       final path = "logout?access_token='$accessToken'";
       final response = await client.dio.post(path);
+      client.setAuthToken(null);
+      client.resetCsrfSession();
       return response.statusCode == 200;
     } catch (e) {
+      client.setAuthToken(null);
+      client.resetCsrfSession();
       return false;
     }
   }

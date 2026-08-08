@@ -111,15 +111,17 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
               'Thu hồi phân công',
               style: TextStyle(
                 fontFamily: 'Manrope',
-                fontWeight: FontWeight.w700,
-                fontSize: 16,
+                fontWeight: FontWeight.w800,
+                fontSize: 19,
               ),
             ),
+            const SizedBox(height: 2),
             Text(
               '${widget.assignment['don_hang_id']} · Nguyễn Văn A',
               style: const TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 11,
+                fontFamily: 'Inter',
+                fontSize: 12.5,
+                fontWeight: FontWeight.w500,
                 color: CaslaColors.identityMeta,
               ),
             ),

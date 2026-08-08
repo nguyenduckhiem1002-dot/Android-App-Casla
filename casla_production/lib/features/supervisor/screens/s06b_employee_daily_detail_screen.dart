@@ -49,15 +49,17 @@ class _S06bEmployeeDailyDetailScreenState
               workerName,
               style: const TextStyle(
                 fontFamily: 'Manrope',
-                fontWeight: FontWeight.w700,
-                fontSize: 16,
+                fontWeight: FontWeight.w800,
+                fontSize: 19,
               ),
             ),
+            const SizedBox(height: 2),
             Text(
               '$workerCode · $workerTeam',
               style: const TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 11,
+                fontFamily: 'Inter',
+                fontSize: 12.5,
+                fontWeight: FontWeight.w500,
                 color: CaslaColors.identityMeta,
               ),
             ),

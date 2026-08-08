@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../presentation/widgets/casla_logo_white.dart';
 import '../../../app/theme/casla_colors.dart';
 import '../../../main.dart';
 import '../../account/widgets/change_password_dialog.dart';
@@ -86,25 +87,9 @@ class _S02bAccountLoginScreenState
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 // Logo
-                Container(
-                  width: 54,
-                  height: 54,
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [CaslaColors.accentGold, CaslaColors.gold700],
-                    ),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  alignment: Alignment.center,
-                  child: const Text(
-                    'CG',
-                    style: TextStyle(
-                      fontFamily: 'Manrope',
-                      fontWeight: FontWeight.w800,
-                      fontSize: 22,
-                      color: CaslaColors.navy900,
-                    ),
-                  ),
+                const CaslaLogo(
+                  height: 68,
+                  isDarkBackground: false,
                 ),
                 const SizedBox(height: 12),
                 const Text(

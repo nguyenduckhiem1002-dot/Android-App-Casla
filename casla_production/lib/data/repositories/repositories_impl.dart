@@ -129,8 +129,10 @@ class AuthRepositoryImpl implements AuthRepository {
   }
 
   @override
-  Future<void> logout() async {
-    // Clear session state
+  Future<void> logout({String? accessToken}) async {
+    if (accessToken != null && accessToken.isNotEmpty) {
+      await _sapAuth.logout(accessToken);
+    }
   }
 
   Future<List<Employee>> getAllEmployees() async {

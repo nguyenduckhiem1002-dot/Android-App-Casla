@@ -10,6 +10,7 @@ import 'core/auth/session_manager.dart';
 import 'domain/entities/entities.dart';
 import 'domain/entities/enums.dart';
 
+import 'core/config/app_config.dart';
 import 'app/router/app_router.dart';
 
 void main() {
@@ -35,7 +36,7 @@ class CaslaApp extends ConsumerWidget {
     final router = ref.watch(routerProvider);
 
     return MaterialApp.router(
-      title: 'Casla Group',
+      title: AppConfig.appName,
       theme: CaslaTheme.light,
       routerConfig: router,
       debugShowCheckedModeBanner: false,

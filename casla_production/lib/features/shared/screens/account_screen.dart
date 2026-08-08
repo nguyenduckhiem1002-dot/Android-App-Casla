@@ -77,7 +77,7 @@ class AccountScreen extends StatelessWidget {
           
           // Logout Button
           ElevatedButton.icon(
-            onPressed: () => appState.logout(),
+            onPressed: () async => await appState.logout(),
             icon: const Icon(Icons.logout),
             label: const Text('Đăng xuất'),
             style: ElevatedButton.styleFrom(

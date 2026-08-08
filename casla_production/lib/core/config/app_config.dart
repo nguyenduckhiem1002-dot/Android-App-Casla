@@ -2,6 +2,18 @@
 // Spec: SAP OData / RAP Integration Setup
 
 class AppConfig {
+  /// Tên ứng dụng hiển thị
+  static const String appName = 'Casla Group';
+
+  /// Tiêu đề đầy đủ ứng dụng
+  static const String appTitle = 'Casla Group — Quản lý sản lượng';
+
+  /// Đơn vị sở hữu
+  static const String companyName = 'Casla Group';
+
+  /// Đường dẫn logo SVG trắng của ứng dụng
+  static const String logoSvgPath = 'assets/images/logo_white.svg';
+
   /// SAP OData ZUI_USER_QR_API Base URL
   static String sapBaseUrl =
       'https://my426501-api.s4hana.cloud.sap/sap/opu/odata/sap/ZUI_USER_QR_API/';

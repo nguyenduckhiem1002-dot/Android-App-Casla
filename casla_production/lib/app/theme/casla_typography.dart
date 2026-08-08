@@ -76,16 +76,16 @@ class CaslaTypography {
   /// Identity Name
   static const TextStyle identityName = TextStyle(
     fontFamily: fontDisplay,
-    fontWeight: FontWeight.w700,
-    fontSize: 14.5,
+    fontWeight: FontWeight.w800,
+    fontSize: 17,
     color: Colors.white,
   );
 
-  /// Identity Meta (mono)
+  /// Identity Meta
   static const TextStyle identityMeta = TextStyle(
-    fontFamily: 'monospace',
+    fontFamily: 'Inter',
     fontWeight: FontWeight.w500,
-    fontSize: 10.5,
+    fontSize: 12.5,
     color: CaslaColors.identityMeta,
   );
 

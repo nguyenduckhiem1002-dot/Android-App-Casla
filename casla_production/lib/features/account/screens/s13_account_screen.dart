@@ -38,8 +38,8 @@ class S13AccountScreen extends ConsumerWidget {
           'Tài khoản SAP',
           style: TextStyle(
             fontFamily: 'Manrope',
-            fontWeight: FontWeight.w700,
-            fontSize: 16,
+            fontWeight: FontWeight.w800,
+            fontSize: 19,
           ),
         ),
       ),
@@ -217,9 +217,11 @@ class S13AccountScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 10),
             OutlinedButton(
-              onPressed: () {
-                appState.logout();
-                context.go('/login');
+              onPressed: () async {
+                await appState.logout();
+                if (context.mounted) {
+                  context.go('/login');
+                }
               },
               child: const Text('Đăng xuất'),
             ),
