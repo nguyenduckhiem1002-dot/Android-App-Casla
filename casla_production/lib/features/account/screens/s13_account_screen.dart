@@ -14,8 +14,10 @@ class S13AccountScreen extends ConsumerWidget {
     final appState = ref.watch(appStateProvider);
     final emp = appState.currentSession;
     final userName = emp?.fullName ?? emp?.userName ?? 'Trần Thị B';
-    final userCode = emp?.maNv ?? 'PB9_LO';
-    final userEmail = emp?.email.isNotEmpty == true ? emp!.email : '$userCode@caslastone.com';
+    final userCode = emp?.maNv ?? 'N/A';
+    final userEmail = emp?.email.isNotEmpty == true
+        ? emp!.email
+        : '$userCode@caslastone.com';
     final isSupervisor = emp?.role == UserRole.supervisor;
     final role = isSupervisor ? 'SUPERVISOR' : 'CÔNG NHÂN';
 
@@ -105,17 +107,16 @@ class S13AccountScreen extends ConsumerWidget {
                   const SizedBox(height: 2),
                   Text(
                     userEmail,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: Colors.white70,
-                    ),
+                    style: const TextStyle(fontSize: 12, color: Colors.white70),
                   ),
                   const SizedBox(height: 10),
                   Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.12),
+                      color: Colors.white.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: Text(
@@ -181,7 +182,9 @@ class S13AccountScreen extends ConsumerWidget {
                     children: permissions.map((p) {
                       return Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 5),
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
                         decoration: BoxDecoration(
                           color: CaslaColors.muted100,
                           borderRadius: BorderRadius.circular(20),

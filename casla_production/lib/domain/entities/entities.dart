@@ -131,8 +131,10 @@ class Assignment {
 
   /// Có thể thu hồi = Giao ban đầu − Hoàn thành − Đã thu hồi (Spec 3.1)
   double get maxRecall =>
-      (assignedQuantity - completedQuantity - recalledQuantity)
-          .clamp(0.0, double.infinity);
+      (assignedQuantity - completedQuantity - recalledQuantity).clamp(
+        0.0,
+        double.infinity,
+      );
 
   /// Tỷ lệ hoàn thành
   double get completionRate =>

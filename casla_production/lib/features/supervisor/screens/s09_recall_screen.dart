@@ -7,18 +7,16 @@ import '../../../main.dart';
 class S09RecallScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic> assignment;
 
-  const S09RecallScreen({
-    super.key,
-    required this.assignment,
-  });
+  const S09RecallScreen({super.key, required this.assignment});
 
   @override
   ConsumerState<S09RecallScreen> createState() => _S09RecallScreenState();
 }
 
 class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
-  final TextEditingController _qtyController =
-      TextEditingController(text: '80');
+  final TextEditingController _qtyController = TextEditingController(
+    text: '80',
+  );
   final TextEditingController _noteController = TextEditingController();
   String _selectedReason = 'KHONG_LAM_HET';
   bool _isSubmitting = false;
@@ -44,7 +42,8 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-              'Số lượng thu hồi phải > 0 và <= ${maxRecall.toStringAsFixed(0)}'),
+            'Số lượng thu hồi phải > 0 và <= ${maxRecall.toStringAsFixed(0)}',
+          ),
           backgroundColor: CaslaColors.danger,
         ),
       );
@@ -166,10 +165,14 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.spaceAround,
                           children: [
-                            _buildStatCol('Giao ban đầu',
-                                effective.toStringAsFixed(0)),
-                            _buildStatCol('Đã hoàn thành',
-                                completed.toStringAsFixed(0)),
+                            _buildStatCol(
+                              'Giao ban đầu',
+                              effective.toStringAsFixed(0),
+                            ),
+                            _buildStatCol(
+                              'Đã hoàn thành',
+                              completed.toStringAsFixed(0),
+                            ),
                             _buildStatCol(
                               'Có thể thu hồi',
                               maxRecall.toStringAsFixed(0),
@@ -197,8 +200,9 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
                         onChanged: (v) => setState(() {}),
                         decoration: InputDecoration(
                           suffixText: '/ ${maxRecall.toStringAsFixed(0)} cái',
-                          suffixStyle:
-                              const TextStyle(color: CaslaColors.muted),
+                          suffixStyle: const TextStyle(
+                            color: CaslaColors.muted,
+                          ),
                         ),
                       ),
 
@@ -215,45 +219,45 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
                       ),
                       const SizedBox(height: 8),
 
-                      Column(
-                        children: _reasons.entries.map((entry) {
-                          final isSelected = _selectedReason == entry.key;
-                          return Container(
-                            margin: const EdgeInsets.only(bottom: 8),
-                            decoration: BoxDecoration(
-                              color: isSelected
-                                  ? CaslaColors.gold100
-                                  : CaslaColors.surface,
-                              border: Border.all(
+                      RadioGroup<String>(
+                        groupValue: _selectedReason,
+                        onChanged: (value) {
+                          if (value != null) {
+                            setState(() => _selectedReason = value);
+                          }
+                        },
+                        child: Column(
+                          children: _reasons.entries.map((entry) {
+                            final isSelected = _selectedReason == entry.key;
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 8),
+                              decoration: BoxDecoration(
                                 color: isSelected
-                                    ? CaslaColors.gold700
-                                    : CaslaColors.line,
-                                width: 1.5,
+                                    ? CaslaColors.gold100
+                                    : CaslaColors.surface,
+                                border: Border.all(
+                                  color: isSelected
+                                      ? CaslaColors.gold700
+                                      : CaslaColors.line,
+                                  width: 1.5,
+                                ),
+                                borderRadius: BorderRadius.circular(8),
                               ),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: RadioListTile<String>(
-                              value: entry.key,
-                              groupValue: _selectedReason,
-                              activeColor: CaslaColors.gold700,
-                              title: Text(
-                                entry.value,
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: CaslaColors.primaryNavy,
+                              child: RadioListTile<String>(
+                                value: entry.key,
+                                activeColor: CaslaColors.gold700,
+                                title: Text(
+                                  entry.value,
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: CaslaColors.primaryNavy,
+                                  ),
                                 ),
                               ),
-                              onChanged: (val) {
-                                if (val != null) {
-                                  setState(() {
-                                    _selectedReason = val;
-                                  });
-                                }
-                              },
-                            ),
-                          );
-                        }).toList(),
+                            );
+                          }).toList(),
+                        ),
                       ),
 
                       if (_selectedReason == 'KHAC') ...[
@@ -284,7 +288,9 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
                                 const Text(
                                   'Giao hiệu lực',
                                   style: TextStyle(
-                                      color: Color(0xFF7A1F1F), fontSize: 12),
+                                    color: Color(0xFF7A1F1F),
+                                    fontSize: 12,
+                                  ),
                                 ),
                                 Text(
                                   '${effective.toStringAsFixed(0)} → ${afterEffective < 0 ? 0 : afterEffective.toStringAsFixed(0)}',
@@ -303,7 +309,9 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
                                 const Text(
                                   'Còn lại sau thu hồi',
                                   style: TextStyle(
-                                      color: Color(0xFF7A1F1F), fontSize: 12),
+                                    color: Color(0xFF7A1F1F),
+                                    fontSize: 12,
+                                  ),
                                 ),
                                 Text(
                                   '${maxRecall.toStringAsFixed(0)} → ${afterRemaining < 0 ? 0 : afterRemaining.toStringAsFixed(0)}',

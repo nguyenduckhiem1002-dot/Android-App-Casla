@@ -60,10 +60,7 @@ class _SupervisorShellState extends State<SupervisorShell> {
               icon: Icon(Icons.qr_code_scanner),
               label: 'Xác nhận',
             ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.sync),
-              label: 'Đồng bộ',
-            ),
+            BottomNavigationBarItem(icon: Icon(Icons.sync), label: 'Đồng bộ'),
             BottomNavigationBarItem(
               icon: Icon(Icons.person_outline),
               label: 'Tài khoản',

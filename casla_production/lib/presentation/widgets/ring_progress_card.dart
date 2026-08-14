@@ -24,7 +24,7 @@ class RingProgressCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: CaslaColors.surface,
         border: Border.all(color: CaslaColors.line),
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
         children: [
@@ -43,7 +43,8 @@ class RingProgressCard extends StatelessWidget {
                     strokeWidth: 8,
                     backgroundColor: CaslaColors.muted100,
                     valueColor: const AlwaysStoppedAnimation<Color>(
-                        CaslaColors.accentGold),
+                      CaslaColors.accentGold,
+                    ),
                   ),
                 ),
                 Text(

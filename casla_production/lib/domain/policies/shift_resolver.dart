@@ -13,7 +13,8 @@ class ShiftResolver {
   /// Spec 3.3: Ca qua 0 giờ thuộc ngày bắt đầu ca.
   static ShiftInfo getCurrentShiftInfo({DateTime? now}) {
     // Use UTC+7 (Asia/Ho_Chi_Minh = UTC+7)
-    final dateTime = now ?? DateTime.now().toUtc().add(const Duration(hours: 7));
+    final dateTime =
+        now ?? DateTime.now().toUtc().add(const Duration(hours: 7));
     final hour = dateTime.hour;
 
     if (hour >= 6 && hour < 14) {

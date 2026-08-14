@@ -5,11 +5,7 @@ class StatusChip extends StatelessWidget {
   final String status;
   final String? label;
 
-  const StatusChip({
-    super.key,
-    required this.status,
-    this.label,
-  });
+  const StatusChip({super.key, required this.status, this.label});
 
   @override
   Widget build(BuildContext context) {
@@ -40,31 +36,28 @@ class StatusChip extends StatelessWidget {
     final displayText = label ?? status.toUpperCase();
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
         color: bg,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: fg.withValues(alpha: 0.22), width: 1),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            width: 6,
-            height: 6,
-            decoration: BoxDecoration(
-              color: fg,
-              shape: BoxShape.circle,
-            ),
+            width: 6.5,
+            height: 6.5,
+            decoration: BoxDecoration(color: fg, shape: BoxShape.circle),
           ),
-          const SizedBox(width: 5),
+          const SizedBox(width: 6),
           Text(
             displayText,
             style: TextStyle(
-              fontFamily: 'monospace',
-              fontSize: 10.5,
+              fontSize: 11.5,
               fontWeight: FontWeight.w700,
               color: fg,
-              letterSpacing: 0.3,
+              letterSpacing: 0.4,
             ),
           ),
         ],

@@ -11,7 +11,7 @@ abstract class AuthRepository {
   Future<UserSession> loginByMaNv(String maNv);
   Future<UserSession> loginByCredentials(String username, String password);
   Future<List<Permission>> getSessionPermissions(String userId);
-  Future<void> logout();
+  Future<void> logout({String? accessToken});
 }
 
 /// Employee & master data

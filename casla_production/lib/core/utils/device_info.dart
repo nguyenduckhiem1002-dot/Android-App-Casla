@@ -17,20 +17,22 @@ class DeviceInfoHelper {
       final deviceInfo = DeviceInfoPlugin();
       if (Platform.isAndroid) {
         final android = await deviceInfo.androidInfo;
-        _cachedDeviceId = 'PDA-${android.model.replaceAll(' ', '-')}-${android.id.substring(0, 4)}';
+        _cachedDeviceId =
+            'PDA-${android.model.replaceAll(' ', '-')}-${android.id.substring(0, 4)}';
       } else if (Platform.isIOS) {
         final ios = await deviceInfo.iosInfo;
-        _cachedDeviceId = 'IOS-${ios.model}-${ios.identifierForVendor?.substring(0, 4) ?? 'XXXX'}';
+        _cachedDeviceId =
+            'IOS-${ios.model}-${ios.identifierForVendor?.substring(0, 4) ?? 'XXXX'}';
       } else {
-        _cachedDeviceId = 'DEVICE-UNKNOWN';
+        _cachedDeviceId = 'DEVICE-${Platform.operatingSystem.toUpperCase()}';
       }
     } catch (_) {
-      _cachedDeviceId = 'PDA-CT02-A17'; // Fallback mock
+      _cachedDeviceId = 'DEVICE-UNKNOWN';
     }
 
     return _cachedDeviceId!;
   }
 
   /// Get cached device ID (sync, after first async call)
-  static String get deviceId => _cachedDeviceId ?? 'PDA-CT02-A17';
+  static String get deviceId => _cachedDeviceId ?? 'DEVICE-UNKNOWN';
 }

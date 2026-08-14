@@ -43,3 +43,9 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# SAP credentials — NEVER commit real credentials
+# Copy .env.example → .env and fill in real values.
+# Run with: flutter run --dart-define-from-file=.env
+.env
+env.json

@@ -61,9 +61,13 @@ C86.7,25.9,90.3,30.5,91.4,38.1z"/>
 
   @override
   Widget build(BuildContext context) {
-    final assetPath = isDarkBackground ? 'assets/images/logo_white.svg' : 'assets/images/logo.svg';
+    final assetPath = isDarkBackground
+        ? 'assets/images/logo_white.svg'
+        : 'assets/images/logo.svg';
     final fallbackSvg = isDarkBackground ? _rawWhiteSvg : _rawLogoSvg;
-    final colorFilter = color != null ? ColorFilter.mode(color!, BlendMode.srcIn) : null;
+    final colorFilter = color != null
+        ? ColorFilter.mode(color!, BlendMode.srcIn)
+        : null;
 
     Widget logoWidget = SvgPicture.asset(
       assetPath,

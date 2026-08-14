@@ -9,10 +9,7 @@ import '../../../presentation/widgets/status_chip.dart';
 class S06bEmployeeDailyDetailScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic> worker;
 
-  const S06bEmployeeDailyDetailScreen({
-    super.key,
-    required this.worker,
-  });
+  const S06bEmployeeDailyDetailScreen({super.key, required this.worker});
 
   @override
   ConsumerState<S06bEmployeeDailyDetailScreen> createState() =>
@@ -158,7 +155,9 @@ class _S06bEmployeeDailyDetailScreenState
                                 child: Text(
                                   'Không có phân công nào trong ngày này.',
                                   style: TextStyle(
-                                      color: CaslaColors.muted, fontSize: 13),
+                                    color: CaslaColors.muted,
+                                    fontSize: 13,
+                                  ),
                                 ),
                               ),
                             )
@@ -184,7 +183,9 @@ class _S06bEmployeeDailyDetailScreenState
                                       margin: const EdgeInsets.only(bottom: 10),
                                       padding: const EdgeInsets.all(14),
                                       decoration: BoxDecoration(
-                                        border: Border.all(color: CaslaColors.line),
+                                        border: Border.all(
+                                          color: CaslaColors.line,
+                                        ),
                                         borderRadius: BorderRadius.circular(14),
                                       ),
                                       child: Column(
@@ -220,11 +221,14 @@ class _S06bEmployeeDailyDetailScreenState
                                                   fontFamily: 'Manrope',
                                                   fontWeight: FontWeight.w700,
                                                   fontSize: 14,
-                                                  color: CaslaColors.primaryNavy,
+                                                  color:
+                                                      CaslaColors.primaryNavy,
                                                 ),
                                               ),
-                                              const Icon(Icons.chevron_right,
-                                                  color: CaslaColors.muted),
+                                              const Icon(
+                                                Icons.chevron_right,
+                                                color: CaslaColors.muted,
+                                              ),
                                             ],
                                           ),
                                         ],
@@ -259,7 +263,9 @@ class _S06bEmployeeDailyDetailScreenState
                                 child: Text(
                                   'Chưa có lượt xác nhận sản lượng nào.',
                                   style: TextStyle(
-                                      color: CaslaColors.muted, fontSize: 13),
+                                    color: CaslaColors.muted,
+                                    fontSize: 13,
+                                  ),
                                 ),
                               ),
                             )
@@ -268,13 +274,14 @@ class _S06bEmployeeDailyDetailScreenState
                               shrinkWrap: true,
                               physics: const NeverScrollableScrollPhysics(),
                               itemCount: records.length,
-                              separatorBuilder: (_, __) =>
+                              separatorBuilder: (_, _) =>
                                   const SizedBox(height: 8),
                               itemBuilder: (context, index) {
                                 final r = records[index];
                                 final timeStr = DateFormat('HH:mm').format(
                                   DateTime.fromMillisecondsSinceEpoch(
-                                      r['occurred_at_utc'] ?? 0),
+                                    r['occurred_at_utc'] ?? 0,
+                                  ),
                                 );
 
                                 return Container(

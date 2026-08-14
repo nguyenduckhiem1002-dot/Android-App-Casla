@@ -12,10 +12,7 @@ import '../../../presentation/widgets/status_chip.dart';
 class S08AssignmentDetailScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic> assignment;
 
-  const S08AssignmentDetailScreen({
-    super.key,
-    required this.assignment,
-  });
+  const S08AssignmentDetailScreen({super.key, required this.assignment});
 
   @override
   ConsumerState<S08AssignmentDetailScreen> createState() =>
@@ -304,7 +301,9 @@ class _S08AssignmentDetailScreenState
                                 child: Text(
                                   'Chưa có giao dịch nào được ghi nhận.',
                                   style: TextStyle(
-                                      color: CaslaColors.muted, fontSize: 13),
+                                    color: CaslaColors.muted,
+                                    fontSize: 13,
+                                  ),
                                 ),
                               ),
                             )
@@ -313,13 +312,14 @@ class _S08AssignmentDetailScreenState
                               shrinkWrap: true,
                               physics: const NeverScrollableScrollPhysics(),
                               itemCount: records.length,
-                              separatorBuilder: (_, __) =>
+                              separatorBuilder: (_, _) =>
                                   const SizedBox(height: 8),
                               itemBuilder: (context, index) {
                                 final r = records[index];
                                 final timeStr = DateFormat('HH:mm').format(
                                   DateTime.fromMillisecondsSinceEpoch(
-                                      r['occurred_at_utc'] ?? 0),
+                                    r['occurred_at_utc'] ?? 0,
+                                  ),
                                 );
 
                                 return Container(
@@ -380,8 +380,9 @@ class _S08AssignmentDetailScreenState
                                           ),
                                           const SizedBox(height: 2),
                                           StatusChip(
-                                              status: r['sync_status'] ??
-                                                  'SYNCED'),
+                                            status:
+                                                r['sync_status'] ?? 'SYNCED',
+                                          ),
                                         ],
                                       ),
                                     ],

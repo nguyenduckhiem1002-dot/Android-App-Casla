@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import '../../../app/theme/casla_colors.dart';
 import '../../../main.dart';
 import '../../../presentation/widgets/status_chip.dart';
@@ -53,10 +52,12 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
         builder: (context, snapshot) {
           final feedItems = snapshot.data ?? [];
 
-          final pendingCount =
-              feedItems.where((i) => i['status'] == 'PENDING').length;
-          final failedCount =
-              feedItems.where((i) => i['status'] == 'FAILED').length;
+          final pendingCount = feedItems
+              .where((i) => i['status'] == 'PENDING')
+              .length;
+          final failedCount = feedItems
+              .where((i) => i['status'] == 'FAILED')
+              .length;
           final syncedCount = 142; // Demo count
 
           final filteredItems = feedItems.where((i) {
@@ -76,11 +77,17 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
                   children: [
                     _buildSummaryBox('$pendingCount', 'PENDING'),
                     const SizedBox(width: 8),
-                    _buildSummaryBox('$failedCount', 'FAILED',
-                        color: CaslaColors.danger),
+                    _buildSummaryBox(
+                      '$failedCount',
+                      'FAILED',
+                      color: CaslaColors.danger,
+                    ),
                     const SizedBox(width: 8),
-                    _buildSummaryBox('$syncedCount', 'SYNCED',
-                        color: CaslaColors.success),
+                    _buildSummaryBox(
+                      '$syncedCount',
+                      'SYNCED',
+                      color: CaslaColors.success,
+                    ),
                   ],
                 ),
 
@@ -118,7 +125,9 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
                       child: Text(
                         'Không có bản ghi nào trong mục này.',
                         style: TextStyle(
-                            color: CaslaColors.muted, fontSize: 13),
+                          color: CaslaColors.muted,
+                          fontSize: 13,
+                        ),
                       ),
                     ),
                   )
@@ -127,7 +136,7 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
                     itemCount: filteredItems.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    separatorBuilder: (_, _) => const Divider(height: 1),
                     itemBuilder: (context, index) {
                       final item = filteredItems[index];
                       final isFailed = item['status'] == 'FAILED';
@@ -148,14 +157,14 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
                                 isFailed
                                     ? Icons.error_outline
                                     : (isPending
-                                        ? Icons.access_time
-                                        : Icons.check_circle_outline),
+                                          ? Icons.access_time
+                                          : Icons.check_circle_outline),
                                 size: 20,
                                 color: isFailed
                                     ? CaslaColors.danger
                                     : (isPending
-                                        ? CaslaColors.pending
-                                        : CaslaColors.success),
+                                          ? CaslaColors.pending
+                                          : CaslaColors.success),
                               ),
                             ),
                             const SizedBox(width: 12),
@@ -175,7 +184,7 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
                                   Text(
                                     isFailed
                                         ? (item['last_error_message'] ??
-                                            'Lỗi xác thực')
+                                              'Lỗi xác thực')
                                         : 'PDA-CT02-A17 · Đã lưu offline',
                                     style: TextStyle(
                                       fontFamily: 'monospace',
@@ -197,7 +206,8 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       const SnackBar(
                                         content: Text(
-                                            'Đã đồng bộ lại thành công!'),
+                                          'Đã đồng bộ lại thành công!',
+                                        ),
                                         backgroundColor: CaslaColors.success,
                                       ),
                                     );
@@ -208,10 +218,13 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
                                   foregroundColor: Colors.white,
                                   minimumSize: const Size(64, 32),
                                   padding: const EdgeInsets.symmetric(
-                                      horizontal: 10),
+                                    horizontal: 10,
+                                  ),
                                 ),
-                                child: const Text('Thử lại',
-                                    style: TextStyle(fontSize: 11)),
+                                child: const Text(
+                                  'Thử lại',
+                                  style: TextStyle(fontSize: 11),
+                                ),
                               )
                             else
                               StatusChip(status: item['status']),
@@ -278,9 +291,9 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
             boxShadow: isSelected
                 ? [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.06),
+                      color: Colors.black.withValues(alpha: 0.06),
                       blurRadius: 3,
-                    )
+                    ),
                   ]
                 : null,
           ),

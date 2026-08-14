@@ -10,7 +10,6 @@ import '../../domain/entities/enums.dart';
 import '../../domain/policies/production_math.dart';
 import '../../domain/repositories/repositories.dart';
 
-import '../../core/config/app_config.dart';
 import '../sap/sap_odata_client.dart';
 import '../sap/sap_auth_controller.dart';
 
@@ -34,7 +33,9 @@ class AuthRepositoryImpl implements AuthRepository {
 
     final isSupervisor = emp['vai_tro'] == 'SUPERVISOR';
     if (!isSupervisor) {
-      throw Exception('Công nhân không có quyền đăng nhập. Hệ thống chỉ dành cho Supervisor.');
+      throw Exception(
+        'Công nhân không có quyền đăng nhập. Hệ thống chỉ dành cho Supervisor.',
+      );
     }
 
     final permissions = {
@@ -72,14 +73,26 @@ class AuthRepositoryImpl implements AuthRepository {
   }
 
   @override
-  Future<UserSession> loginByCredentials(String username, String password) async {
+  Future<UserSession> loginByCredentials(
+    String username,
+    String password,
+  ) async {
     final sapResult = await _sapAuth.loginWithCredentials(username, password);
     if (sapResult != null && sapResult.accessToken.isNotEmpty) {
       final userDetail = sapResult.userDetail;
-      final fullName = (userDetail?['FullName'] ?? userDetail?['Username'] ?? username).toString();
-      final email = (userDetail?['Email'] ?? userDetail?['email'] ?? '$username@caslastone.com').toString();
-      final pwdReqVal = userDetail?['PasswordChangeRequired'] ?? userDetail?['password_change_required'];
-      final passwordChangeRequired = pwdReqVal == true ||
+      final fullName =
+          (userDetail?['FullName'] ?? userDetail?['Username'] ?? username)
+              .toString();
+      final email =
+          (userDetail?['Email'] ??
+                  userDetail?['email'] ??
+                  '$username@caslastone.com')
+              .toString();
+      final pwdReqVal =
+          userDetail?['PasswordChangeRequired'] ??
+          userDetail?['password_change_required'];
+      final passwordChangeRequired =
+          pwdReqVal == true ||
           pwdReqVal.toString().toLowerCase() == 'true' ||
           pwdReqVal == 1;
       final userUuid = sapResult.userUuid;
@@ -120,7 +133,9 @@ class AuthRepositoryImpl implements AuthRepository {
       return session;
     }
 
-    throw Exception('Đăng nhập thất bại. Vui lòng kiểm tra lại tài khoản hoặc mật khẩu SAP!');
+    throw Exception(
+      'Đăng nhập thất bại. Vui lòng kiểm tra lại tài khoản hoặc mật khẩu SAP!',
+    );
   }
 
   @override
@@ -137,26 +152,34 @@ class AuthRepositoryImpl implements AuthRepository {
 
   Future<List<Employee>> getAllEmployees() async {
     final list = await db.getAllEmployees();
-    return list.map((e) => Employee(
-      id: e['id'] as String,
-      maNv: e['ma_nv'] as String,
-      fullName: e['ten'] as String,
-      department: e['bo_phan'] as String,
-      status: e['trang_thai'] as String? ?? 'ACTIVE',
-    )).toList();
+    return list
+        .map(
+          (e) => Employee(
+            id: e['id'] as String,
+            maNv: e['ma_nv'] as String,
+            fullName: e['ten'] as String,
+            department: e['bo_phan'] as String,
+            status: e['trang_thai'] as String? ?? 'ACTIVE',
+          ),
+        )
+        .toList();
   }
 
   Future<List<ProductionOrder>> getOpenOrders() async {
     final list = await db.getOpenOrders();
-    return list.map((o) => ProductionOrder(
-      id: o['id'] as String,
-      orderCode: o['ma_don_hang'] as String,
-      productCode: o['ma_sp'] as String,
-      productName: o['ten_sp'] as String,
-      uom: o['uom'] as String,
-      totalQuantity: o['so_luong_don'] as double,
-      status: o['trang_thai'] as String? ?? 'OPEN',
-    )).toList();
+    return list
+        .map(
+          (o) => ProductionOrder(
+            id: o['id'] as String,
+            orderCode: o['ma_don_hang'] as String,
+            productCode: o['ma_sp'] as String,
+            productName: o['ten_sp'] as String,
+            uom: o['uom'] as String,
+            totalQuantity: o['so_luong_don'] as double,
+            status: o['trang_thai'] as String? ?? 'OPEN',
+          ),
+        )
+        .toList();
   }
 }
 
@@ -232,22 +255,14 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
   @override
   Stream<List<Assignment>> watchWorkerAssignments(String workerId) {
     return db.watchAssignmentsByWorker(workerId).asyncMap((entities) async {
-      final result = <Assignment>[];
-      for (final e in entities) {
-        result.add(await _mapToAssignment(e));
-      }
-      return result;
+      return _mapToAssignmentsBatch(entities);
     });
   }
 
   @override
   Stream<List<Assignment>> watchAllAssignments() {
     return db.watchAllAssignments().asyncMap((entities) async {
-      final result = <Assignment>[];
-      for (final e in entities) {
-        result.add(await _mapToAssignment(e));
-      }
-      return result;
+      return _mapToAssignmentsBatch(entities);
     });
   }
 
@@ -255,53 +270,77 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
   Future<Assignment?> getAssignmentById(String id) async {
     final entity = await db.getAssignmentById(id);
     if (entity == null) return null;
-    return _mapToAssignment(entity);
+    final results = await _mapToAssignmentsBatch([entity]);
+    return results.isNotEmpty ? results.first : null;
   }
 
-  Future<Assignment> _mapToAssignment(Map<String, dynamic> entity) async {
-    final empId = entity['nhan_vien_id'] as String;
-    final orderId = entity['don_hang_id'] as String;
-    final assignmentId = entity['id'] as String;
+  /// Batch-maps assignment entities to domain models.
+  /// Fetches employees and orders ONCE, builds O(1) lookup maps,
+  /// then maps each assignment without redundant DB queries.
+  Future<List<Assignment>> _mapToAssignmentsBatch(
+    List<Map<String, dynamic>> entities,
+  ) async {
+    if (entities.isEmpty) return [];
 
-    // Lookup employee and order details
+    // Fetch lookup data once — O(E + O) instead of O(N × (E + O))
     final employees = await db.getAllEmployees();
-    final emp = employees.cast<Map<String, dynamic>?>().firstWhere(
-      (e) => e!['id'] == empId, orElse: () => null);
     final orders = await db.getOpenOrders();
-    final ord = orders.cast<Map<String, dynamic>?>().firstWhere(
-      (o) => o!['id'] == orderId, orElse: () => null);
 
-    final completed = await db.getCompletedQuantity(assignmentId);
-    final recalled = await db.getRecalledQuantity(assignmentId);
+    final empLookup = <String, Map<String, dynamic>>{};
+    for (final e in employees) {
+      empLookup[e['id'] as String] = e;
+    }
 
-    return Assignment(
-      id: assignmentId,
-      workerId: empId,
-      workerMaNv: emp?['ma_nv'] as String? ?? empId,
-      workerName: emp?['ten'] as String? ?? 'Công nhân',
-      teamId: entity['to_id'] as String,
-      orderId: orderId,
-      orderCode: ord?['ma_don_hang'] as String? ?? orderId,
-      productCode: ord?['ma_sp'] as String? ?? 'SP',
-      productName: ord?['ten_sp'] as String? ?? 'Sản phẩm',
-      uom: ord?['uom'] as String? ?? 'cái',
-      assignedQuantity: entity['assigned_quantity'] as double,
-      completedQuantity: completed,
-      recalledQuantity: recalled,
-      businessDate: entity['business_date'] as String,
-      shiftId: entity['shift_id'] as String,
-      status: AssignmentStatus.values.firstWhere(
-        (s) => s.name.toUpperCase() == (entity['status'] as String).toUpperCase(),
-        orElse: () => AssignmentStatus.open,
-      ),
-      note: entity['note'] as String?,
-      createdBy: entity['created_by'] as String,
-      idempotencyKey: entity['idempotency_key'] as String,
-      syncStatus: SyncStatus.values.firstWhere(
-        (s) => s.name.toUpperCase() == (entity['sync_status'] as String).toUpperCase(),
-        orElse: () => SyncStatus.pending,
-      ),
-    );
+    final orderLookup = <String, Map<String, dynamic>>{};
+    for (final o in orders) {
+      orderLookup[o['id'] as String] = o;
+    }
+
+    final result = <Assignment>[];
+    for (final entity in entities) {
+      final empId = entity['nhan_vien_id'] as String;
+      final orderId = entity['don_hang_id'] as String;
+      final assignmentId = entity['id'] as String;
+
+      final emp = empLookup[empId];
+      final ord = orderLookup[orderId];
+
+      final completed = await db.getCompletedQuantity(assignmentId);
+      final recalled = await db.getRecalledQuantity(assignmentId);
+
+      result.add(Assignment(
+        id: assignmentId,
+        workerId: empId,
+        workerMaNv: emp?['ma_nv'] as String? ?? empId,
+        workerName: emp?['ten'] as String? ?? 'Công nhân',
+        teamId: entity['to_id'] as String,
+        orderId: orderId,
+        orderCode: ord?['ma_don_hang'] as String? ?? orderId,
+        productCode: ord?['ma_sp'] as String? ?? 'SP',
+        productName: ord?['ten_sp'] as String? ?? 'Sản phẩm',
+        uom: ord?['uom'] as String? ?? 'cái',
+        assignedQuantity: entity['assigned_quantity'] as double,
+        completedQuantity: completed,
+        recalledQuantity: recalled,
+        businessDate: entity['business_date'] as String,
+        shiftId: entity['shift_id'] as String,
+        status: AssignmentStatus.values.firstWhere(
+          (s) =>
+              s.name.toUpperCase() == (entity['status'] as String).toUpperCase(),
+          orElse: () => AssignmentStatus.open,
+        ),
+        note: entity['note'] as String?,
+        createdBy: entity['created_by'] as String,
+        idempotencyKey: entity['idempotency_key'] as String,
+        syncStatus: SyncStatus.values.firstWhere(
+          (s) =>
+              s.name.toUpperCase() ==
+              (entity['sync_status'] as String).toUpperCase(),
+          orElse: () => SyncStatus.pending,
+        ),
+      ));
+    }
+    return result;
   }
 }
 
@@ -331,10 +370,16 @@ class ProductionRepositoryImpl implements ProductionRepository {
     final completed = await db.getCompletedQuantity(assignmentId);
     final recalled = await db.getRecalledQuantity(assignmentId);
     final assignedQty = assignment['assigned_quantity'] as double;
-    final effective = ProductionMath.calculateEffectiveAssigned(assignedQty, recalled);
+    final effective = ProductionMath.calculateEffectiveAssigned(
+      assignedQty,
+      recalled,
+    );
     final remaining = ProductionMath.calculateRemaining(effective, completed);
 
-    final validationErr = ProductionMath.validateProductionEntry(quantity, remaining);
+    final validationErr = ProductionMath.validateProductionEntry(
+      quantity,
+      remaining,
+    );
     if (validationErr != null) throw Exception(validationErr);
 
     final id = IdGenerator.newId();
@@ -391,24 +436,32 @@ class ProductionRepositoryImpl implements ProductionRepository {
 
   @override
   Stream<List<ProductionRecord>> watchRecordsByAssignment(String assignmentId) {
-    return db.watchRecordsByAssignment(assignmentId).map((list) => list.map((r) =>
-      ProductionRecord(
-        id: r['id'] as String,
-        assignmentId: r['phan_cong_id'] as String,
-        quantity: r['quantity'] as double,
-        businessDate: r['business_date'] as String,
-        shiftId: r['shift_id'] as String,
-        note: r['note'] as String?,
-        createdBy: r['created_by'] as String,
-        occurredAtUtc: r['occurred_at_utc'] as int,
-        deviceId: r['device_id'] as String,
-        idempotencyKey: r['idempotency_key'] as String,
-        syncStatus: SyncStatus.values.firstWhere(
-          (s) => s.name.toUpperCase() == (r['sync_status'] as String).toUpperCase(),
-          orElse: () => SyncStatus.pending,
-        ),
-      ),
-    ).toList());
+    return db
+        .watchRecordsByAssignment(assignmentId)
+        .map(
+          (list) => list
+              .map(
+                (r) => ProductionRecord(
+                  id: r['id'] as String,
+                  assignmentId: r['phan_cong_id'] as String,
+                  quantity: r['quantity'] as double,
+                  businessDate: r['business_date'] as String,
+                  shiftId: r['shift_id'] as String,
+                  note: r['note'] as String?,
+                  createdBy: r['created_by'] as String,
+                  occurredAtUtc: r['occurred_at_utc'] as int,
+                  deviceId: r['device_id'] as String,
+                  idempotencyKey: r['idempotency_key'] as String,
+                  syncStatus: SyncStatus.values.firstWhere(
+                    (s) =>
+                        s.name.toUpperCase() ==
+                        (r['sync_status'] as String).toUpperCase(),
+                    orElse: () => SyncStatus.pending,
+                  ),
+                ),
+              )
+              .toList(),
+        );
   }
 
   @override
@@ -442,9 +495,18 @@ class RecallRepositoryImpl implements RecallRepository {
     final completed = await db.getCompletedQuantity(assignmentId);
     final recalled = await db.getRecalledQuantity(assignmentId);
     final assignedQty = assignment['assigned_quantity'] as double;
-    final maxRecall = ProductionMath.calculateMaxRecall(assignedQty, completed, recalled);
+    final maxRecall = ProductionMath.calculateMaxRecall(
+      assignedQty,
+      completed,
+      recalled,
+    );
 
-    final validationErr = ProductionMath.validateRecallEntry(quantity, maxRecall, reasonCode, note);
+    final validationErr = ProductionMath.validateRecallEntry(
+      quantity,
+      maxRecall,
+      reasonCode,
+      note,
+    );
     if (validationErr != null) throw Exception(validationErr);
 
     final id = IdGenerator.newId();

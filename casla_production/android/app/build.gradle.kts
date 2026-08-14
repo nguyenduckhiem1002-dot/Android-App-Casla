@@ -1,13 +1,31 @@
+import java.util.Base64
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+val dartDefines = providers.gradleProperty("dart-defines").orNull
+    ?.split(",")
+    ?.mapNotNull { encoded ->
+        runCatching {
+            String(Base64.getDecoder().decode(encoded))
+                .split("=", limit = 2)
+                .takeIf { it.size == 2 }
+        }.getOrNull()
+    }
+    ?.associate { it[0] to it[1] }
+    ?: emptyMap()
+
 android {
     namespace = "com.example.casla_production"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
+
+    buildFeatures {
+        resValues = true
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -23,6 +41,7 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        resValue("string", "app_name", dartDefines["APP_NAME"] ?: "Casla Group")
     }
 
     buildTypes {

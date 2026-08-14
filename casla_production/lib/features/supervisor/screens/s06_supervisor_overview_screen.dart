@@ -6,6 +6,7 @@ import '../../../app/theme/casla_colors.dart';
 import '../../../main.dart';
 import '../../../presentation/widgets/kpi_card.dart';
 import '../../../presentation/widgets/status_chip.dart';
+import '../../../presentation/widgets/casla_empty_state.dart';
 import '../../account/widgets/change_password_dialog.dart';
 
 class S06SupervisorOverviewScreen extends ConsumerStatefulWidget {
@@ -291,9 +292,9 @@ class _S06SupervisorOverviewScreenState
                           child: Text(
                             supervisorName.isNotEmpty
                                 ? supervisorName
-                                    .split(' ')
-                                    .last[0]
-                                    .toUpperCase()
+                                      .split(' ')
+                                      .last[0]
+                                      .toUpperCase()
                                 : 'B',
                             style: const TextStyle(
                               fontFamily: 'Manrope',
@@ -334,16 +335,13 @@ class _S06SupervisorOverviewScreenState
                     Row(
                       children: [
                         IconButton(
-                          icon: const Icon(Icons.qr_code_scanner, color: Colors.white),
+                          icon: const Icon(
+                            Icons.qr_code_scanner,
+                            color: Colors.white,
+                          ),
                           tooltip: 'Quét thẻ/QR công nhân',
-                          onPressed: () {
-                            context.push('/supervisor/employee_detail', extra: {
-                              'id': 'emp-1',
-                              'ma_nv': 'MNV00123',
-                              'ten': 'Nguyễn Văn A',
-                              'bo_phan': 'Tổ Cắt 2',
-                            });
-                          },
+                          onPressed: () =>
+                              context.push('/supervisor/confirm_scan'),
                         ),
                         IconButton(
                           icon: const Icon(Icons.search, color: Colors.white),
@@ -390,7 +388,8 @@ class _S06SupervisorOverviewScreenState
                 if (_searchQuery.isEmpty) return true;
                 final name = (e['ten'] ?? '').toString().toLowerCase();
                 final code = (e['ma_nv'] ?? '').toString().toLowerCase();
-                return name.contains(_searchQuery) || code.contains(_searchQuery);
+                return name.contains(_searchQuery) ||
+                    code.contains(_searchQuery);
               }).toList();
 
               return Column(
@@ -492,25 +491,10 @@ class _S06SupervisorOverviewScreenState
                   // INDEPENDENTLY SCROLLABLE SECTION: Worker Cards List
                   Expanded(
                     child: employees.isEmpty
-                        ? Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 18),
-                            child: Container(
-                              padding: const EdgeInsets.all(24),
-                              decoration: BoxDecoration(
-                                color: CaslaColors.surface,
-                                border: Border.all(color: CaslaColors.line),
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                              child: const Center(
-                                child: Text(
-                                  'Không tìm thấy nhân viên nào phù hợp bộ lọc.',
-                                  style: TextStyle(
-                                    color: CaslaColors.muted,
-                                    fontSize: 13,
-                                  ),
-                                ),
-                              ),
-                            ),
+                        ? CaslaEmptyState(
+                            icon: Icons.people_outline_rounded,
+                            title: 'Không có nhân viên phù hợp',
+                            message: 'Không tìm thấy nhân viên nào phù hợp với bộ lọc hiện tại. Thử thay đổi ngày, ca hoặc tổ sản xuất.',
                           )
                         : ListView.builder(
                             padding: const EdgeInsets.fromLTRB(18, 0, 18, 80),
@@ -518,7 +502,9 @@ class _S06SupervisorOverviewScreenState
                             itemBuilder: (context, index) {
                               final worker = employees[index];
                               final workerAssignments = assignments
-                                  .where((a) => a['nhan_vien_id'] == worker['id'])
+                                  .where(
+                                    (a) => a['nhan_vien_id'] == worker['id'],
+                                  )
                                   .toList();
 
                               double workerAssigned = 0.0;
@@ -545,25 +531,31 @@ class _S06SupervisorOverviewScreenState
                               final completionRate = workerAssigned > 0
                                   ? (status == 'OPEN' ? 0.0 : 0.67)
                                   : 0.0;
-                              final completedQty = workerAssigned * completionRate;
-                              final remainingQty = workerAssigned - completedQty;
+                              final completedQty =
+                                  workerAssigned * completionRate;
+                              final remainingQty =
+                                  workerAssigned - completedQty;
 
                               return Container(
                                 margin: const EdgeInsets.only(bottom: 10),
                                 child: Material(
                                   color: CaslaColors.surface,
-                                  borderRadius: BorderRadius.circular(14),
+                                  borderRadius: BorderRadius.circular(12),
                                   child: InkWell(
                                     onTap: () {
-                                      context.push('/supervisor/employee_detail',
-                                          extra: worker);
+                                      context.push(
+                                        '/supervisor/employee_detail',
+                                        extra: worker,
+                                      );
                                     },
-                                    borderRadius: BorderRadius.circular(14),
+                                    borderRadius: BorderRadius.circular(12),
                                     child: Container(
                                       padding: const EdgeInsets.all(14),
                                       decoration: BoxDecoration(
-                                        border: Border.all(color: CaslaColors.line),
-                                        borderRadius: BorderRadius.circular(14),
+                                        border: Border.all(
+                                          color: CaslaColors.line,
+                                        ),
+                                        borderRadius: BorderRadius.circular(12),
                                       ),
                                       child: Column(
                                         children: [
@@ -578,13 +570,15 @@ class _S06SupervisorOverviewScreenState
                                                     CrossAxisAlignment.start,
                                                 children: [
                                                   Text(
-                                                    worker['ten'] ?? 'Nhân viên',
+                                                    worker['ten'] ??
+                                                        'Nhân viên',
                                                     style: const TextStyle(
                                                       fontFamily: 'Manrope',
-                                                      fontWeight: FontWeight.w700,
+                                                      fontWeight:
+                                                          FontWeight.w700,
                                                       fontSize: 14.5,
-                                                      color:
-                                                          CaslaColors.primaryNavy,
+                                                      color: CaslaColors
+                                                          .primaryNavy,
                                                     ),
                                                   ),
                                                   const SizedBox(height: 2),
@@ -608,16 +602,18 @@ class _S06SupervisorOverviewScreenState
 
                                           // Progress bar
                                           ClipRRect(
-                                            borderRadius: BorderRadius.circular(8),
+                                            borderRadius: BorderRadius.circular(
+                                              8,
+                                            ),
                                             child: LinearProgressIndicator(
                                               value: completionRate,
                                               minHeight: 7,
-                                              backgroundColor: CaslaColors.muted100,
+                                              backgroundColor:
+                                                  CaslaColors.muted100,
                                               valueColor:
                                                   const AlwaysStoppedAnimation<
-                                                      Color>(
-                                                CaslaColors.accentGold,
-                                              ),
+                                                    Color
+                                                  >(CaslaColors.accentGold),
                                             ),
                                           ),
                                           const SizedBox(height: 10),
@@ -627,12 +623,20 @@ class _S06SupervisorOverviewScreenState
                                             mainAxisAlignment:
                                                 MainAxisAlignment.spaceBetween,
                                             children: [
-                                              _buildStatItem('Giao',
-                                                  workerAssigned.toStringAsFixed(0)),
-                                              _buildStatItem('H.thành',
-                                                  completedQty.toStringAsFixed(0)),
-                                              _buildStatItem('Còn lại',
-                                                  remainingQty.toStringAsFixed(0)),
+                                              _buildStatItem(
+                                                'Giao',
+                                                workerAssigned.toStringAsFixed(
+                                                  0,
+                                                ),
+                                              ),
+                                              _buildStatItem(
+                                                'H.thành',
+                                                completedQty.toStringAsFixed(0),
+                                              ),
+                                              _buildStatItem(
+                                                'Còn lại',
+                                                remainingQty.toStringAsFixed(0),
+                                              ),
                                             ],
                                           ),
                                         ],
@@ -663,8 +667,11 @@ class _S06SupervisorOverviewScreenState
     );
   }
 
-  Widget _buildFilterChip(String label,
-      {bool isSelected = false, VoidCallback? onTap}) {
+  Widget _buildFilterChip(
+    String label, {
+    bool isSelected = false,
+    VoidCallback? onTap,
+  }) {
     return Material(
       color: Colors.transparent,
       child: InkWell(

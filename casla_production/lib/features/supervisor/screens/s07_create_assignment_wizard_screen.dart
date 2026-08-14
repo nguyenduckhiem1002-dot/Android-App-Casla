@@ -20,8 +20,9 @@ class _S07CreateAssignmentWizardScreenState
     extends ConsumerState<S07CreateAssignmentWizardScreen> {
   Map<String, dynamic>? _selectedWorker;
   Map<String, dynamic>? _selectedOrder;
-  final TextEditingController _qtyController =
-      TextEditingController(text: '200');
+  final TextEditingController _qtyController = TextEditingController(
+    text: '200',
+  );
   final TextEditingController _noteController = TextEditingController();
   DateTime _startDate = DateTime.now();
   String _shiftId = 'SHIFT_1';
@@ -65,7 +66,8 @@ class _S07CreateAssignmentWizardScreenState
             children: [
               QrScannerView(
                 title: 'Quét mã QR công nhân',
-                subtitle: 'Đưa thẻ nhân viên (mã NV0001 - Nguyễn Văn A) vào khung hình.',
+                subtitle:
+                    'Đưa thẻ nhân viên (mã NV0001 - Nguyễn Văn A) vào khung hình.',
                 onScan: (code) {
                   final res = WorkerQrParser.parse(code);
                   if (!res.isValid) {
@@ -134,31 +136,32 @@ class _S07CreateAssignmentWizardScreenState
         builder: (context) => Scaffold(
           body: QrScannerView(
             title: 'Quét mã sản phẩm / NVL',
-            subtitle: 'Đưa mã QR trên lô sản phẩm hoặc thẻ đơn hàng vào khung hình.',
+            subtitle:
+                'Đưa mã QR trên lô sản phẩm hoặc thẻ đơn hàng vào khung hình.',
             onManualInput: () => _showManualOrderSelection(isFromCamera: true),
             onScan: (code) async {
               final db = ref.read(appStateProvider).db;
               final order = await db.getOrderByCode(code);
-              if (mounted) {
-                if (order == null) {
-                  // Check if it's a worker QR by mistake
-                  final possibleWorker = await db.getEmployeeByCode(code);
-                  final msg = possibleWorker != null
-                      ? 'Mã QR này là của Nhân viên (${possibleWorker['ten']}), không phải mã Sản phẩm.'
-                      : 'Không tìm thấy sản phẩm có mã QR: $code';
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(msg),
-                      backgroundColor: CaslaColors.danger,
-                    ),
-                  );
-                  return;
-                }
-                Navigator.pop(context); // Pop camera page on success
-                setState(() {
-                  _selectedOrder = order;
-                });
+              if (!context.mounted || !mounted) return;
+              if (order == null) {
+                // Check if it's a worker QR by mistake
+                final possibleWorker = await db.getEmployeeByCode(code);
+                if (!context.mounted || !mounted) return;
+                final msg = possibleWorker != null
+                    ? 'Mã QR này là của Nhân viên (${possibleWorker['ten']}), không phải mã Sản phẩm.'
+                    : 'Không tìm thấy sản phẩm có mã QR: $code';
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(msg),
+                    backgroundColor: CaslaColors.danger,
+                  ),
+                );
+                return;
               }
+              Navigator.pop(context); // Pop camera page on success
+              setState(() {
+                _selectedOrder = order;
+              });
             },
           ),
         ),
@@ -261,11 +264,15 @@ class _S07CreateAssignmentWizardScreenState
     final appState = ref.read(appStateProvider);
     final emp = appState.currentSession;
 
-    final workerMaNv = (_selectedWorker!['ma_nv'] ?? _selectedWorker!['id']).toString();
+    final workerMaNv = (_selectedWorker!['ma_nv'] ?? _selectedWorker!['id'])
+        .toString();
     final workerTen = (_selectedWorker!['ten'] ?? 'Nguyễn Văn A').toString();
 
     // Ensure worker exists in system DB/API transaction on submission
-    final empRecord = await appState.db.ensureEmployeeExists(workerMaNv, workerTen);
+    final empRecord = await appState.db.ensureEmployeeExists(
+      workerMaNv,
+      workerTen,
+    );
 
     final workerId = empRecord['id'];
     final orderId = _selectedOrder!['id'];
@@ -283,7 +290,9 @@ class _S07CreateAssignmentWizardScreenState
       businessDate: dateFormatted,
       createdBy: createdBy,
       deviceId: 'PDA-CT02-A17',
-      note: _noteController.text.trim().isEmpty ? null : _noteController.text.trim(),
+      note: _noteController.text.trim().isEmpty
+          ? null
+          : _noteController.text.trim(),
     );
 
     if (!mounted) return;
@@ -307,7 +316,8 @@ class _S07CreateAssignmentWizardScreenState
   @override
   Widget build(BuildContext context) {
     final workerDisplayName = _selectedWorker != null
-        ? (_selectedWorker!['display'] ?? '${_selectedWorker!['ma_nv']} ( ${_selectedWorker!['ten']} )')
+        ? (_selectedWorker!['display'] ??
+              '${_selectedWorker!['ma_nv']} ( ${_selectedWorker!['ten']} )')
         : 'Chọn hoặc quét mã công nhân';
 
     final productDisplayName = _selectedOrder != null
@@ -379,7 +389,10 @@ class _S07CreateAssignmentWizardScreenState
                     onTap: _openWorkerPicker,
                     borderRadius: BorderRadius.circular(8),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 13,
+                        vertical: 12,
+                      ),
                       decoration: BoxDecoration(
                         color: CaslaColors.surface,
                         border: Border.all(color: CaslaColors.line, width: 1.5),
@@ -400,7 +413,11 @@ class _S07CreateAssignmentWizardScreenState
                             ),
                           ),
                           IconButton(
-                            icon: const Icon(Icons.qr_code_scanner, size: 20, color: CaslaColors.primaryNavy),
+                            icon: const Icon(
+                              Icons.qr_code_scanner,
+                              size: 20,
+                              color: CaslaColors.primaryNavy,
+                            ),
                             onPressed: _scanWorkerQR,
                             padding: EdgeInsets.zero,
                             constraints: const BoxConstraints(),
@@ -439,13 +456,20 @@ class _S07CreateAssignmentWizardScreenState
                     onTap: _scanProductQR,
                     borderRadius: BorderRadius.circular(8),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 13,
+                        vertical: 12,
+                      ),
                       decoration: BoxDecoration(
                         color: CaslaColors.surface,
                         border: Border.all(
-                          color: _selectedOrder != null ? CaslaColors.gold700 : CaslaColors.line,
+                          color: _selectedOrder != null
+                              ? CaslaColors.gold700
+                              : CaslaColors.line,
                           width: 1.5,
-                          style: _selectedOrder == null ? BorderStyle.solid : BorderStyle.solid,
+                          style: _selectedOrder == null
+                              ? BorderStyle.solid
+                              : BorderStyle.solid,
                         ),
                         borderRadius: BorderRadius.circular(8),
                       ),
@@ -463,7 +487,11 @@ class _S07CreateAssignmentWizardScreenState
                               ),
                             ),
                           ),
-                          const Icon(Icons.qr_code_scanner, size: 20, color: CaslaColors.gold700),
+                          const Icon(
+                            Icons.qr_code_scanner,
+                            size: 20,
+                            color: CaslaColors.gold700,
+                          ),
                         ],
                       ),
                     ),
@@ -544,7 +572,10 @@ class _S07CreateAssignmentWizardScreenState
                     },
                     borderRadius: BorderRadius.circular(8),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 13,
+                        vertical: 12,
+                      ),
                       decoration: BoxDecoration(
                         color: CaslaColors.surface,
                         border: Border.all(color: CaslaColors.line, width: 1.5),
@@ -561,7 +592,11 @@ class _S07CreateAssignmentWizardScreenState
                               color: CaslaColors.primaryNavy,
                             ),
                           ),
-                          const Icon(Icons.calendar_today_outlined, size: 18, color: CaslaColors.primaryNavy),
+                          const Icon(
+                            Icons.calendar_today_outlined,
+                            size: 18,
+                            color: CaslaColors.primaryNavy,
+                          ),
                         ],
                       ),
                     ),
@@ -619,7 +654,10 @@ class _S07CreateAssignmentWizardScreenState
                     controller: _noteController,
                     decoration: const InputDecoration(
                       hintText: 'Không bắt buộc',
-                      hintStyle: TextStyle(color: CaslaColors.muted, fontSize: 13),
+                      hintStyle: TextStyle(
+                        color: CaslaColors.muted,
+                        fontSize: 13,
+                      ),
                     ),
                   ),
                 ],

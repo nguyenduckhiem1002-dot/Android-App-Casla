@@ -28,7 +28,7 @@ class KpiCard extends StatelessWidget {
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(12),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -37,7 +37,7 @@ class KpiCard extends StatelessWidget {
             Text(
               label,
               style: const TextStyle(
-                fontSize: 11,
+                fontSize: 11.5,
                 color: CaslaColors.accentLabelDark,
                 fontWeight: FontWeight.w600,
                 letterSpacing: 0.2,
@@ -63,7 +63,7 @@ class KpiCard extends StatelessWidget {
                   Text(
                     uom!,
                     style: const TextStyle(
-                      fontSize: 11,
+                      fontSize: 11.5,
                       color: CaslaColors.accentLabelDark,
                       fontWeight: FontWeight.w600,
                     ),
@@ -81,7 +81,7 @@ class KpiCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: CaslaColors.surface,
         border: Border.all(color: CaslaColors.line),
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

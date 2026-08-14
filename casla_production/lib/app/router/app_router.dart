@@ -1,9 +1,8 @@
-import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../main.dart';
-import '../../domain/entities/enums.dart';
+import 'app_route_observer.dart';
 
 import '../../features/authentication/screens/s02b_account_login_screen.dart';
 import '../../features/shared/screens/worker_shell.dart';
@@ -12,6 +11,7 @@ import '../../features/supervisor/screens/s06b_employee_daily_detail_screen.dart
 import '../../features/supervisor/screens/s07_create_assignment_wizard_screen.dart';
 import '../../features/supervisor/screens/s08_assignment_detail_screen.dart';
 import '../../features/supervisor/screens/s09_recall_screen.dart';
+import '../../features/supervisor/screens/s10_confirm_scan_screen.dart';
 import '../../features/sync/screens/s12_sync_screen.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
@@ -19,6 +19,7 @@ final routerProvider = Provider<GoRouter>((ref) {
 
   return GoRouter(
     initialLocation: '/login',
+    observers: [appRouteObserver],
     refreshListenable: appState,
     redirect: (context, state) {
       final isLoggedIn = appState.isLoggedIn;
@@ -75,6 +76,10 @@ final routerProvider = Provider<GoRouter>((ref) {
               final assignment = state.extra as Map<String, dynamic>;
               return S09RecallScreen(assignment: assignment);
             },
+          ),
+          GoRoute(
+            path: 'confirm_scan',
+            builder: (context, state) => const S10ConfirmScanScreen(),
           ),
         ],
       ),

@@ -11,59 +11,39 @@ dependencies:
     sdk: flutter
 
   # State Management & DI
-  flutter_riverpod: ^2.5.1
-  riverpod_annotation: ^2.3.5
-
+  flutter_riverpod: 2.6.1
   # Navigation
-  go_router: any
-
-  # Database (Offline-first)
-  drift: any
-  drift_flutter: any
-  sqlite3_flutter_libs: any
+  go_router: 17.4.0
 
   # QR/Barcode Scanner
-  mobile_scanner: any
+  mobile_scanner: 7.4.0
 
   # Networking (SAP OData/RAP)
-  dio: any
-
-  # Immutable Models
-  freezed_annotation: any
-  json_annotation: any
-
-  # Security
-  flutter_secure_storage: any
+  dio: 5.11.0
 
   # Utilities
-  uuid: any
-  intl: any
-  connectivity_plus: any
-  device_info_plus: any
-  logger: any
-  package_info_plus: any
+  uuid: 4.6.0
+  intl: 0.20.3
+  device_info_plus: 13.2.0
+  logger: 2.7.0
 
   # UI
-  cupertino_icons: ^1.0.8
-  flutter_svg: any
+  flutter_svg: 2.3.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: any
+  flutter_lints: 6.0.0
 
-  # Code Generation
-  build_runner: any
-  freezed: any
-  json_serializable: any
-  riverpod_generator: any
-  drift_dev: any
   flutter_launcher_icons: ^0.13.1
 
 flutter_launcher_icons:
   android: "ic_launcher"
   ios: true
-  image_path: "assets/images/logo_white.svg"
+  image_path: "assets/images/app_icon.png"
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/images/app_icon_foreground.png"
+  remove_alpha_ios: true
   min_sdk_android: 21
 
 flutter:

@@ -5,7 +5,8 @@ class WorkerQrResult {
   final bool isValid;
   final String maNv;
   final String tenNv;
-  final String displayText; // Format: "Mã nhân viên ( Tên nhân viên )" e.g. "NV0001 ( Nguyễn Văn A )"
+  final String
+  displayText; // Format: "Mã nhân viên ( Tên nhân viên )" e.g. "NV0001 ( Nguyễn Văn A )"
   final String? error;
 
   WorkerQrResult({
@@ -56,24 +57,26 @@ class WorkerQrParser {
     if (str.startsWith('{') && str.endsWith('}')) {
       try {
         final Map<String, dynamic> json = jsonDecode(str);
-        maNv = (json['ma_nv'] ??
-                json['ma_nhan_vien'] ??
-                json['manv'] ??
-                json['userId'] ??
-                json['id'] ??
-                json['code'] ??
-                '')
-            .toString()
-            .trim();
+        maNv =
+            (json['ma_nv'] ??
+                    json['ma_nhan_vien'] ??
+                    json['manv'] ??
+                    json['userId'] ??
+                    json['id'] ??
+                    json['code'] ??
+                    '')
+                .toString()
+                .trim();
 
-        tenNv = (json['ten'] ??
-                json['ten_nhan_vien'] ??
-                json['ho_ten'] ??
-                json['userName'] ??
-                json['name'] ??
-                '')
-            .toString()
-            .trim();
+        tenNv =
+            (json['ten'] ??
+                    json['ten_nhan_vien'] ??
+                    json['ho_ten'] ??
+                    json['userName'] ??
+                    json['name'] ??
+                    '')
+                .toString()
+                .trim();
 
         if (maNv.isNotEmpty && tenNv.isNotEmpty) {
           return WorkerQrResult.success(maNv, tenNv);
@@ -83,14 +86,14 @@ class WorkerQrParser {
 
     // 2. Multiline or Key-Value text format (e.g. "Mã nhân viên: NV0001\nTên nhân viên: Nguyễn Văn A\n...")
     final maNvMatch = RegExp(
-            r'(?:Mã\s*nhân\s*viên|Mã\s*NV|Ma\s*NV|Code|ID)\s*[:=]\s*([^\n\r\|;\,-]+)',
-            caseSensitive: false)
-        .firstMatch(str);
+      r'(?:Mã\s*nhân\s*viên|Mã\s*NV|Ma\s*NV|Code|ID)\s*[:=]\s*([^\n\r\|;\,-]+)',
+      caseSensitive: false,
+    ).firstMatch(str);
 
     final tenNvMatch = RegExp(
-            r'(?:Tên\s*nhân\s*viên|Tên\s*NV|Họ\s*tên|Ho\s*ten|Name)\s*[:=]\s*([^\n\r\|;\,-]+)',
-            caseSensitive: false)
-        .firstMatch(str);
+      r'(?:Tên\s*nhân\s*viên|Tên\s*NV|Họ\s*tên|Ho\s*ten|Name)\s*[:=]\s*([^\n\r\|;\,-]+)',
+      caseSensitive: false,
+    ).firstMatch(str);
 
     if (maNvMatch != null) {
       maNv = maNvMatch.group(1)?.trim() ?? '';
@@ -121,9 +124,13 @@ class WorkerQrParser {
     }
 
     // 4. Plain code string fallback (e.g. "NV0001", "MNV00123")
-    final plainCodeMatch =
-        RegExp(r'^(NV\d+|MNV\d+|\d{4,10})$', caseSensitive: false).firstMatch(str);
-    if (plainCodeMatch != null || str.toUpperCase().startsWith('NV') || str.toUpperCase().startsWith('MNV')) {
+    final plainCodeMatch = RegExp(
+      r'^(NV\d+|MNV\d+|\d{4,10})$',
+      caseSensitive: false,
+    ).firstMatch(str);
+    if (plainCodeMatch != null ||
+        str.toUpperCase().startsWith('NV') ||
+        str.toUpperCase().startsWith('MNV')) {
       maNv = str;
       if (maNv.toUpperCase() == 'NV0001' || maNv.toUpperCase() == 'MNV00123') {
         tenNv = 'Nguyễn Văn A';
@@ -147,10 +154,6 @@ class WorkerQrParser {
         'display': result.displayText,
       };
     }
-    return {
-      'ma_nv': '',
-      'ten': '',
-      'display': '',
-    };
+    return {'ma_nv': '', 'ten': '', 'display': ''};
   }
 }

@@ -3,7 +3,9 @@
 // SAP Service: ZUI_USER_QR_API
 
 import 'dart:convert';
-import '../../core/config/app_config.dart';
+import 'package:dio/dio.dart';
+import '../../core/utils/device_info.dart';
+import 'odata_sanitizer.dart';
 import 'sap_odata_client.dart';
 import 'sap_endpoints.dart';
 
@@ -50,16 +52,41 @@ class SapAuthController {
 
   /// Login with Username / Password against SAP ZUI_USER_QR_API/login
   Future<SapLoginResult?> loginWithCredentials(
-      String username, String password) async {
+    String username,
+    String password,
+  ) async {
+    try {
+      return await _loginWithCredentials(username, password);
+    } on DioException catch (error) {
+      if (error.response?.statusCode == 401) {
+        throw Exception(
+          'SAP từ chối xác thực Basic Auth. Vui lòng kiểm tra '
+          'SAP_BASIC_AUTH_USER và SAP_BASIC_AUTH_PASSWORD trong file .env.',
+        );
+      }
+      rethrow;
+    }
+  }
+
+  Future<SapLoginResult?> _loginWithCredentials(
+    String username,
+    String password,
+  ) async {
     // 1. Fetch fresh CSRF token & cookies from SAP before POST login
     await client.fetchCsrfToken();
 
-    final deviceId = AppConfig.deviceId;
-    // Single quotes around parameters per OData Function Import specification
-    final path =
-        "login?Username='$username'&password='$password'&device_id='$deviceId'";
+    final safeUser = ODataSanitizer.escapeValue(username);
+    final safePass = ODataSanitizer.escapeValue(password);
 
-    final response = await client.dio.post(path);
+    final response = await client.dio.post(
+      'login',
+      queryParameters: {
+        // SAP OData function-import string parameters include single quotes.
+        'Username': "'$safeUser'",
+        'password': "'$safePass'",
+        'device_id': "'${await DeviceInfoHelper.getDeviceId()}'",
+      },
+    );
 
     // 2. Inspect SAP Response Header `sap-message` for SAP error messages
     final sapMessageHeader = response.headers.value('sap-message');
@@ -71,8 +98,15 @@ class SapAuthController {
 
         if (severity == 'error' || msgText.toLowerCase().contains('invalid')) {
           // Clean up SAP message prefix (e.g. "I:ZAUTH:031 Invalid username or password")
-          final cleanMsg = msgText.replaceAll(RegExp(r'^[A-Z]:[A-Z0-9_]+:\d+\s*'), '');
-          throw Exception(cleanMsg.isNotEmpty ? cleanMsg : 'Tài khoản hoặc mật khẩu không đúng');
+          final cleanMsg = msgText.replaceAll(
+            RegExp(r'^[A-Z]:[A-Z0-9_]+:\d+\s*'),
+            '',
+          );
+          throw Exception(
+            cleanMsg.isNotEmpty
+                ? cleanMsg
+                : 'Tài khoản hoặc mật khẩu không đúng',
+          );
         }
       } catch (e) {
         if (e is Exception) rethrow;
@@ -96,7 +130,10 @@ class SapAuthController {
         // Fetch full user details if userUuid is provided
         Map<String, dynamic>? detail;
         if (result.userUuid.isNotEmpty) {
-          detail = await getUserDetail(result.userUuid, accessToken: result.accessToken);
+          detail = await getUserDetail(
+            result.userUuid,
+            accessToken: result.accessToken,
+          );
         }
 
         return SapLoginResult(
@@ -111,16 +148,24 @@ class SapAuthController {
       }
     }
 
-    throw Exception('Đăng nhập thất bại. Không nhận được phản hồi hợp lệ từ SAP.');
+    throw Exception(
+      'Đăng nhập thất bại. Không nhận được phản hồi hợp lệ từ SAP.',
+    );
   }
 
   /// Fetch user profile from SAP ZC_USER_QR_API(guid'{UserUuid}')
-  Future<Map<String, dynamic>?> getUserDetail(String userUuid, {String? accessToken}) async {
+  Future<Map<String, dynamic>?> getUserDetail(
+    String userUuid, {
+    String? accessToken,
+  }) async {
     try {
-      final cleanUuid = userUuid.replaceAll(RegExp(r"['\s]"), '');
+      final cleanUuid = ODataSanitizer.sanitizeUuid(userUuid);
+      final safeToken = accessToken != null
+          ? ODataSanitizer.escapeValue(accessToken)
+          : null;
       var path = "ZC_USER_QR_API(guid'$cleanUuid')";
-      if (accessToken != null && accessToken.isNotEmpty) {
-        path += "?access_token='$accessToken'";
+      if (safeToken != null && safeToken.isNotEmpty) {
+        path += "?access_token='$safeToken'";
       }
 
       final response = await client.dio.get(path);
@@ -140,7 +185,8 @@ class SapAuthController {
   Future<bool> logout(String accessToken) async {
     try {
       await client.fetchCsrfToken();
-      final path = "logout?access_token='$accessToken'";
+      final safeToken = ODataSanitizer.escapeValue(accessToken);
+      final path = "logout?access_token='$safeToken'";
       final response = await client.dio.post(path);
       client.setAuthToken(null);
       client.resetCsrfSession();
@@ -154,11 +200,14 @@ class SapAuthController {
 
   /// Refresh token action on SAP backend
   Future<SapLoginResult?> refreshToken(
-      String userUuid, String refreshToken) async {
+    String userUuid,
+    String refreshToken,
+  ) async {
     try {
-      final cleanUuid = userUuid.replaceAll(RegExp(r"['\s]"), '');
+      final cleanUuid = ODataSanitizer.sanitizeUuid(userUuid);
+      final safeRefreshToken = ODataSanitizer.escapeValue(refreshToken);
       final path =
-          "refresh?user_uuid=guid'$cleanUuid'&refresh_token='$refreshToken'";
+          "refresh?user_uuid=guid'$cleanUuid'&refresh_token='$safeRefreshToken'";
 
       final response = await client.dio.post(path);
       if (response.statusCode == 200 && response.data != null) {
@@ -184,9 +233,12 @@ class SapAuthController {
   }) async {
     try {
       await client.fetchCsrfToken();
-      final cleanUuid = userUuid.replaceAll(RegExp(r"['\s]"), '');
+      final cleanUuid = ODataSanitizer.sanitizeUuid(userUuid);
+      final safeToken = ODataSanitizer.escapeValue(accessToken);
+      final safeOldPwd = ODataSanitizer.escapeValue(oldPassword);
+      final safeNewPwd = ODataSanitizer.escapeValue(newPassword);
       final path =
-          "changePassword?user_uuid=guid'$cleanUuid'&access_token='$accessToken'&old_password='$oldPassword'&new_password='$newPassword'";
+          "changePassword?user_uuid=guid'$cleanUuid'&access_token='$safeToken'&old_password='$safeOldPwd'&new_password='$safeNewPwd'";
 
       final response = await client.dio.post(path);
 
@@ -199,8 +251,15 @@ class SapAuthController {
           final msgText = (sapMsg['message'] ?? '').toString();
 
           if (severity == 'error') {
-            final cleanMsg = msgText.replaceAll(RegExp(r'^[A-Z]:[A-Z0-9_]+:\d+\s*'), '');
-            throw Exception(cleanMsg.isNotEmpty ? cleanMsg : 'Đổi mật khẩu thất bại trên hệ thống SAP');
+            final cleanMsg = msgText.replaceAll(
+              RegExp(r'^[A-Z]:[A-Z0-9_]+:\d+\s*'),
+              '',
+            );
+            throw Exception(
+              cleanMsg.isNotEmpty
+                  ? cleanMsg
+                  : 'Đổi mật khẩu thất bại trên hệ thống SAP',
+            );
           }
         } catch (e) {
           if (e is Exception) rethrow;

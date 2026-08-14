@@ -4,15 +4,11 @@ import 'package:go_router/go_router.dart';
 import '../../../presentation/widgets/casla_logo_white.dart';
 import '../../../app/theme/casla_colors.dart';
 import '../../../main.dart';
-import '../../account/widgets/change_password_dialog.dart';
 
 class S02bAccountLoginScreen extends ConsumerStatefulWidget {
   final String? initialUsername;
 
-  const S02bAccountLoginScreen({
-    super.key,
-    this.initialUsername,
-  });
+  const S02bAccountLoginScreen({super.key, this.initialUsername});
 
   @override
   ConsumerState<S02bAccountLoginScreen> createState() =>
@@ -30,8 +26,9 @@ class _S02bAccountLoginScreenState
   @override
   void initState() {
     super.initState();
-    _usernameController =
-        TextEditingController(text: widget.initialUsername ?? '');
+    _usernameController = TextEditingController(
+      text: widget.initialUsername ?? '',
+    );
   }
 
   @override
@@ -82,138 +79,185 @@ class _S02bAccountLoginScreenState
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                // Logo
-                const CaslaLogo(
-                  height: 68,
-                  isDarkBackground: false,
-                ),
-                const SizedBox(height: 12),
-                const Text(
-                  'Đăng nhập Supervisor',
-                  style: TextStyle(
-                    fontFamily: 'Manrope',
-                    fontWeight: FontWeight.w800,
-                    fontSize: 20,
-                    color: CaslaColors.primaryNavy,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                const Text(
-                  'Dành riêng cho Supervisor quản lý sản xuất',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: CaslaColors.muted,
-                  ),
-                ),
-                const SizedBox(height: 24),
-
-                // Username field
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: RichText(
-                    text: const TextSpan(
-                      text: 'Tài khoản ',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: CaslaColors.primaryNavy,
-                      ),
-                      children: [
-                        TextSpan(
-                          text: '*',
-                          style: TextStyle(color: CaslaColors.danger),
-                        ),
-                      ],
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  // Logo & Header Branding
+                  const CaslaLogo(height: 72, isDarkBackground: false),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Đăng nhập Supervisor',
+                    style: TextStyle(
+                      fontFamily: 'Manrope',
+                      fontWeight: FontWeight.w800,
+                      fontSize: 22,
+                      letterSpacing: -0.3,
+                      color: CaslaColors.primaryNavy,
                     ),
                   ),
-                ),
-                const SizedBox(height: 6),
-                TextField(
-                  controller: _usernameController,
-                  decoration: const InputDecoration(
-                    suffixIcon: Icon(Icons.person_outline, size: 20),
-                  ),
-                ),
-                const SizedBox(height: 16),
-
-                // Password field
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: RichText(
-                    text: const TextSpan(
-                      text: 'Mật khẩu ',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: CaslaColors.primaryNavy,
-                      ),
-                      children: [
-                        TextSpan(
-                          text: '*',
-                          style: TextStyle(color: CaslaColors.danger),
-                        ),
-                      ],
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Hệ thống ghi nhận sản lượng Casla Group',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w400,
+                      color: CaslaColors.muted,
                     ),
                   ),
-                ),
-                const SizedBox(height: 6),
-                TextField(
-                  controller: _passwordController,
-                  obscureText: _obscurePassword,
-                  decoration: InputDecoration(
-                    suffixIcon: IconButton(
-                      icon: Icon(
-                        _obscurePassword
-                            ? Icons.visibility_outlined
-                            : Icons.visibility_off_outlined,
-                        size: 20,
-                      ),
-                      onPressed: () {
-                        setState(() {
-                          _obscurePassword = !_obscurePassword;
-                        });
-                      },
-                    ),
-                  ),
-                ),
+                  const SizedBox(height: 28),
 
-                if (_errorMessage != null) ...[
-                  const SizedBox(height: 8),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      _errorMessage!,
-                      style: const TextStyle(
-                        color: CaslaColors.danger,
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w600,
+                  // Login Form Card
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          // Error Banner
+                          if (_errorMessage != null) ...[
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 12,
+                              ),
+                              decoration: BoxDecoration(
+                                color: CaslaColors.dangerBg,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: CaslaColors.danger.withValues(alpha: 0.25),
+                                  width: 1,
+                                ),
+                              ),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Icon(
+                                    Icons.error_outline_rounded,
+                                    color: CaslaColors.danger,
+                                    size: 18,
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      _errorMessage!,
+                                      style: const TextStyle(
+                                        color: CaslaColors.danger,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                        height: 1.3,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 18),
+                          ],
+
+                          // Username field
+                          RichText(
+                            text: const TextSpan(
+                              text: 'Tài khoản ',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: CaslaColors.primaryNavy,
+                              ),
+                              children: [
+                                TextSpan(
+                                  text: '*',
+                                  style: TextStyle(color: CaslaColors.danger),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          TextField(
+                            controller: _usernameController,
+                            textInputAction: TextInputAction.next,
+                            decoration: const InputDecoration(
+                              hintText: 'Nhập mã quản lý / username',
+                              prefixIcon: Icon(
+                                Icons.person_outline_rounded,
+                                size: 20,
+                                color: CaslaColors.muted,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 18),
+
+                          // Password field
+                          RichText(
+                            text: const TextSpan(
+                              text: 'Mật khẩu ',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: CaslaColors.primaryNavy,
+                              ),
+                              children: [
+                                TextSpan(
+                                  text: '*',
+                                  style: TextStyle(color: CaslaColors.danger),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          TextField(
+                            controller: _passwordController,
+                            obscureText: _obscurePassword,
+                            textInputAction: TextInputAction.done,
+                            onSubmitted: (_) => _submitLogin(),
+                            decoration: InputDecoration(
+                              hintText: 'Nhập mật khẩu',
+                              prefixIcon: const Icon(
+                                Icons.lock_outline_rounded,
+                                size: 20,
+                                color: CaslaColors.muted,
+                              ),
+                              suffixIcon: IconButton(
+                                icon: Icon(
+                                  _obscurePassword
+                                      ? Icons.visibility_outlined
+                                      : Icons.visibility_off_outlined,
+                                  size: 20,
+                                  color: CaslaColors.muted,
+                                ),
+                                onPressed: () {
+                                  setState(() {
+                                    _obscurePassword = !_obscurePassword;
+                                  });
+                                },
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+
+                          // Login Button
+                          ElevatedButton(
+                            onPressed: _isLoading ? null : () => _submitLogin(),
+                            child: _isLoading
+                                ? const SizedBox(
+                                    width: 22,
+                                    height: 22,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2.5,
+                                      color: CaslaColors.navy900,
+                                    ),
+                                  )
+                                : const Text('Đăng nhập'),
+                          ),
+                        ],
                       ),
                     ),
                   ),
                 ],
-
-                const SizedBox(height: 20),
-
-                // Login Button
-                ElevatedButton(
-                  onPressed: _isLoading ? null : () => _submitLogin(),
-                  child: _isLoading
-                      ? const SizedBox(
-                          width: 24,
-                          height: 24,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2.5,
-                            color: CaslaColors.navy900,
-                          ),
-                        )
-                      : const Text('Đăng nhập'),
-                ),
-              ],
+              ),
             ),
           ),
         ),

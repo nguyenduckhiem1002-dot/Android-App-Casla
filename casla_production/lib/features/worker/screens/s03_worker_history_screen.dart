@@ -111,7 +111,7 @@ class _S03WorkerHistoryScreenState
                           gradient: const LinearGradient(
                             colors: [
                               CaslaColors.accentGold,
-                              CaslaColors.gold700
+                              CaslaColors.gold700,
                             ],
                           ),
                           borderRadius: BorderRadius.circular(12),
@@ -119,10 +119,7 @@ class _S03WorkerHistoryScreenState
                         alignment: Alignment.center,
                         child: Text(
                           workerName.isNotEmpty
-                              ? workerName
-                                  .split(' ')
-                                  .last[0]
-                                  .toUpperCase()
+                              ? workerName.split(' ').last[0].toUpperCase()
                               : 'A',
                           style: const TextStyle(
                             fontFamily: 'Manrope',
@@ -252,10 +249,7 @@ class _S03WorkerHistoryScreenState
                   child: const Center(
                     child: Text(
                       'Chưa có bản ghi xác nhận nào trong kỳ này.',
-                      style: TextStyle(
-                        color: CaslaColors.muted,
-                        fontSize: 13,
-                      ),
+                      style: TextStyle(color: CaslaColors.muted, fontSize: 13),
                     ),
                   ),
                 )
@@ -264,13 +258,14 @@ class _S03WorkerHistoryScreenState
                   shrinkWrap: true,
                   physics: const NeverScrollableScrollPhysics(),
                   itemCount: _historyRecords.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 10),
+                  separatorBuilder: (_, _) => const SizedBox(height: 10),
                   itemBuilder: (context, index) {
                     final item = _historyRecords[index];
                     final dateStr = item['business_date'] ?? '';
                     final timeStr = DateFormat('HH:mm').format(
                       DateTime.fromMillisecondsSinceEpoch(
-                          item['occurred_at_utc'] ?? 0),
+                        item['occurred_at_utc'] ?? 0,
+                      ),
                     );
 
                     return Container(
@@ -328,7 +323,9 @@ class _S03WorkerHistoryScreenState
                                 ),
                               ),
                               const SizedBox(height: 4),
-                              StatusChip(status: item['sync_status'] ?? 'SYNCED'),
+                              StatusChip(
+                                status: item['sync_status'] ?? 'SYNCED',
+                              ),
                             ],
                           ),
                         ],
@@ -363,10 +360,10 @@ class _S03WorkerHistoryScreenState
             boxShadow: isSelected
                 ? [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.06),
+                      color: Colors.black.withValues(alpha: 0.06),
                       blurRadius: 3,
                       offset: const Offset(0, 1),
-                    )
+                    ),
                   ]
                 : null,
           ),

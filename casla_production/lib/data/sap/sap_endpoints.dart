@@ -59,7 +59,8 @@ class SapEndpoints {
 
   /// POST /assignments (Idempotent — Spec 9.4)
   Future<SapApiResponse<Map<String, dynamic>>> createAssignment(
-      SapAssignmentDto dto) async {
+    SapAssignmentDto dto,
+  ) async {
     final response = await client.dio.post(
       'sap/opu/odata/sap/ZC_PRODUCTION_SRV/ZC_ProductionAssignment',
       data: dto.toJson(),
@@ -71,7 +72,8 @@ class SapEndpoints {
   // ─── Production Entries ───────────────────────────────────────────
   /// POST /production-entries (Idempotent — Spec 9.3)
   Future<SapApiResponse<Map<String, dynamic>>> postProductionEntry(
-      SapProductionEntryDto dto) async {
+    SapProductionEntryDto dto,
+  ) async {
     final response = await client.dio.post(
       'sap/opu/odata/sap/ZC_PRODUCTION_SRV/ZC_ProductionEntry',
       data: dto.toJson(),
@@ -83,7 +85,8 @@ class SapEndpoints {
   // ─── Assignment Recalls ───────────────────────────────────────────
   /// POST /assignment-recalls (Idempotent)
   Future<SapApiResponse<Map<String, dynamic>>> postAssignmentRecall(
-      SapAssignmentRecallDto dto) async {
+    SapAssignmentRecallDto dto,
+  ) async {
     final response = await client.dio.post(
       'sap/opu/odata/sap/ZC_PRODUCTION_SRV/ZC_AssignmentRecall',
       data: dto.toJson(),
@@ -104,8 +107,8 @@ class SapEndpoints {
       'sap/opu/odata/sap/ZC_PRODUCTION_SRV/ZC_EmployeeProductionSummary',
       queryParameters: {
         'employeeId': employeeId,
-        if (dateFrom != null) 'dateFrom': dateFrom,
-        if (dateTo != null) 'dateTo': dateTo,
+        'dateFrom': ?dateFrom,
+        'dateTo': ?dateTo,
         if (shiftIds != null) 'shiftIds': shiftIds.join(','),
       },
     );
@@ -122,8 +125,8 @@ class SapEndpoints {
       'sap/opu/odata/sap/ZC_PRODUCTION_SRV/ZC_ProductionLog',
       queryParameters: {
         'employeeId': employeeId,
-        if (dateFrom != null) 'dateFrom': dateFrom,
-        if (dateTo != null) 'dateTo': dateTo,
+        'dateFrom': ?dateFrom,
+        'dateTo': ?dateTo,
       },
     );
     return SapApiResponse.fromJson(response.data);

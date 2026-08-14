@@ -37,7 +37,8 @@ Future<void> showChangePasswordDialog(
           // 2. newPassword >= 8 characters
           // 3. confirmPassword == newPassword
           // 4. newPassword != current (new password cannot match old password)
-          final isFormValid = current.isNotEmpty &&
+          final isFormValid =
+              current.isNotEmpty &&
               newPwd.length >= 8 &&
               confirmPwd == newPwd &&
               newPwd != current;
@@ -62,7 +63,8 @@ Future<void> showChangePasswordDialog(
               if (finalUuid.isEmpty || finalUuid.startsWith('sap-')) {
                 setState(() {
                   isLoading = false;
-                  errorText = 'Không tìm thấy User UUID hợp lệ. Vui lòng đăng nhập lại.';
+                  errorText =
+                      'Không tìm thấy User UUID hợp lệ. Vui lòng đăng nhập lại.';
                 });
                 return;
               }
@@ -155,8 +157,11 @@ Future<void> showChangePasswordDialog(
                       ),
                       child: const Row(
                         children: [
-                          Icon(Icons.info_outline,
-                              size: 18, color: CaslaColors.gold700),
+                          Icon(
+                            Icons.info_outline,
+                            size: 18,
+                            color: CaslaColors.gold700,
+                          ),
                           SizedBox(width: 8),
                           Expanded(
                             child: Text(
@@ -175,11 +180,14 @@ Future<void> showChangePasswordDialog(
                   ],
 
                   // Current password
-                  const Text('Mật khẩu hiện tại',
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: CaslaColors.primaryNavy)),
+                  const Text(
+                    'Mật khẩu hiện tại',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: CaslaColors.primaryNavy,
+                    ),
+                  ),
                   const SizedBox(height: 4),
                   TextField(
                     controller: currentPasswordController,
@@ -205,11 +213,14 @@ Future<void> showChangePasswordDialog(
                   const SizedBox(height: 10),
 
                   // New password
-                  const Text('Mật khẩu mới',
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: CaslaColors.primaryNavy)),
+                  const Text(
+                    'Mật khẩu mới',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: CaslaColors.primaryNavy,
+                    ),
+                  ),
                   const SizedBox(height: 4),
                   TextField(
                     controller: newPasswordController,
@@ -235,11 +246,14 @@ Future<void> showChangePasswordDialog(
                   const SizedBox(height: 10),
 
                   // Confirm password
-                  const Text('Xác nhận mật khẩu mới',
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: CaslaColors.primaryNavy)),
+                  const Text(
+                    'Xác nhận mật khẩu mới',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: CaslaColors.primaryNavy,
+                    ),
+                  ),
                   const SizedBox(height: 4),
                   TextField(
                     controller: confirmPasswordController,
@@ -293,8 +307,10 @@ Future<void> showChangePasswordDialog(
               if (!isMandatory)
                 TextButton(
                   onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: const Text('Hủy',
-                      style: TextStyle(color: CaslaColors.muted)),
+                  child: const Text(
+                    'Hủy',
+                    style: TextStyle(color: CaslaColors.muted),
+                  ),
                 ),
               ElevatedButton(
                 onPressed: (isFormValid && !isLoading)
@@ -303,10 +319,14 @@ Future<void> showChangePasswordDialog(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: CaslaColors.primaryNavy,
                   foregroundColor: Colors.white,
-                  disabledBackgroundColor: CaslaColors.primaryNavy.withOpacity(0.4),
+                  disabledBackgroundColor: CaslaColors.primaryNavy.withValues(
+                    alpha: 0.4,
+                  ),
                   disabledForegroundColor: Colors.white70,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 18,
+                    vertical: 12,
+                  ),
                   elevation: isFormValid ? 2 : 0,
                 ),
                 child: isLoading

@@ -6,33 +6,35 @@ class ProductionMath {
   ProductionMath._();
 
   /// Giao hiệu lực = Giao ban đầu − Đã thu hồi
-  static double calculateEffectiveAssigned(
-      double assigned, double recalled) {
+  static double calculateEffectiveAssigned(double assigned, double recalled) {
     return (assigned - recalled).clamp(0.0, double.infinity);
   }
 
   /// Còn lại = Giao hiệu lực − Hoàn thành lũy kế
-  static double calculateRemaining(
-      double effectiveAssigned, double completed) {
+  static double calculateRemaining(double effectiveAssigned, double completed) {
     return (effectiveAssigned - completed).clamp(0.0, double.infinity);
   }
 
   /// Có thể thu hồi = Giao ban đầu − Hoàn thành − Đã thu hồi
   static double calculateMaxRecall(
-      double assigned, double completed, double recalled) {
+    double assigned,
+    double completed,
+    double recalled,
+  ) {
     return (assigned - completed - recalled).clamp(0.0, double.infinity);
   }
 
   /// Tỷ lệ hoàn thành (Spec 3.1)
   static double calculateCompletionRate(
-      double completed, double effectiveAssigned) {
+    double completed,
+    double effectiveAssigned,
+  ) {
     if (effectiveAssigned <= 0) return 0.0;
     return (completed / effectiveAssigned).clamp(0.0, 1.0);
   }
 
   /// Validate ghi nhận sản lượng (Spec 3.1: 0 < newCompletion <= remaining)
-  static String? validateProductionEntry(
-      double newQuantity, double remaining) {
+  static String? validateProductionEntry(double newQuantity, double remaining) {
     if (newQuantity <= 0) {
       return 'Số lượng hoàn thành phải lớn hơn 0';
     }

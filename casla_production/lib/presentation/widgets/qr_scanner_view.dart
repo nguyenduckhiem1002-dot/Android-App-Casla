@@ -1,5 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+
+import '../../app/router/app_route_observer.dart';
 import '../../app/theme/casla_colors.dart';
 import 'casla_logo_white.dart';
 
@@ -8,7 +12,7 @@ class QrScannerView extends StatefulWidget {
   final String subtitle;
   final String? deviceLabel;
   final VoidCallback? onManualInput;
-  final Function(String code) onScan;
+  final FutureOr<void> Function(String code) onScan;
 
   const QrScannerView({
     super.key,
@@ -24,8 +28,9 @@ class QrScannerView extends StatefulWidget {
 }
 
 class _QrScannerViewState extends State<QrScannerView>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver, RouteAware {
   final MobileScannerController controller = MobileScannerController(
+    autoStart: false,
     detectionSpeed: DetectionSpeed.noDuplicates,
     facing: CameraFacing.back,
     torchEnabled: false,
@@ -33,10 +38,15 @@ class _QrScannerViewState extends State<QrScannerView>
 
   late AnimationController _animController;
   late Animation<double> _scanAnimation;
+  ModalRoute<dynamic>? _route;
+  bool _isHandlingScan = false;
+  bool _isRouteVisible = true;
+  bool _isDisposed = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _animController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 2200),
@@ -45,11 +55,102 @@ class _QrScannerViewState extends State<QrScannerView>
     _scanAnimation = Tween<double>(begin: 14.0, end: 196.0).animate(
       CurvedAnimation(parent: _animController, curve: Curves.easeInOut),
     );
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_startCamera());
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route == _route) return;
+
+    if (_route != null) appRouteObserver.unsubscribe(this);
+    _route = route;
+    if (route != null) appRouteObserver.subscribe(this, route);
+  }
+
+  @override
+  void didPushNext() {
+    _isRouteVisible = false;
+    unawaited(_stopCamera());
+  }
+
+  @override
+  void didPopNext() {
+    _isRouteVisible = true;
+    _isHandlingScan = false;
+    unawaited(_startCamera());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_isDisposed || !controller.value.hasCameraPermission) return;
+
+    switch (state) {
+      case AppLifecycleState.resumed:
+        if (_isRouteVisible) unawaited(_startCamera());
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.detached:
+        unawaited(_stopCamera());
+    }
+  }
+
+  Future<void> _startCamera() async {
+    if (_isDisposed || !_isRouteVisible || controller.value.isRunning) return;
+    try {
+      await controller.start();
+    } on MobileScannerException {
+      // MobileScanner.errorBuilder sẽ hiển thị lỗi camera cho người dùng.
+    }
+  }
+
+  Future<void> _stopCamera() async {
+    if (_isDisposed || !controller.value.isRunning) return;
+    try {
+      await controller.stop();
+    } on MobileScannerException {
+      // Camera có thể đã được hệ điều hành thu hồi trong lúc đổi lifecycle.
+    }
+  }
+
+  Future<void> _handleDetection(BarcodeCapture capture) async {
+    if (_isHandlingScan || !_isRouteVisible || !mounted) return;
+
+    String? code;
+    for (final barcode in capture.barcodes) {
+      final value = barcode.rawValue?.trim();
+      if (value != null && value.isNotEmpty) {
+        code = value;
+        break;
+      }
+    }
+    if (code == null) return;
+
+    _isHandlingScan = true;
+    await _stopCamera();
+    try {
+      await Future<void>.sync(() => widget.onScan(code!));
+    } finally {
+      // Tránh cùng một QR bị nhận liên tục khi callback chỉ hiện thông báo lỗi.
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+      if (mounted && _isRouteVisible && (_route?.isCurrent ?? true)) {
+        _isHandlingScan = false;
+        await _startCamera();
+      }
+    }
   }
 
   @override
   void dispose() {
-    controller.dispose();
+    _isDisposed = true;
+    WidgetsBinding.instance.removeObserver(this);
+    appRouteObserver.unsubscribe(this);
+    unawaited(controller.dispose());
     _animController.dispose();
     super.dispose();
   }
@@ -69,37 +170,35 @@ class _QrScannerViewState extends State<QrScannerView>
               child: const Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.camera_alt_outlined,
-                      color: CaslaColors.accentGold, size: 54),
+                  Icon(
+                    Icons.camera_alt_outlined,
+                    color: CaslaColors.accentGold,
+                    size: 54,
+                  ),
                   SizedBox(height: 16),
                   Text(
                     'Camera Máy ảo đang sẵn sàng',
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700),
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                   SizedBox(height: 8),
                   Text(
                     'Vui lòng bấm "Nhập thủ công" bên dưới để test nhanh',
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                        color: CaslaColors.identityMeta, fontSize: 12.5),
+                      color: CaslaColors.identityMeta,
+                      fontSize: 12.5,
+                    ),
                   ),
                 ],
               ),
             );
           },
-          onDetect: (capture) {
-            final barcodes = capture.barcodes;
-            for (final barcode in barcodes) {
-              if (barcode.rawValue != null) {
-                widget.onScan(barcode.rawValue!);
-                break;
-              }
-            }
-          },
+          onDetect: _handleDetection,
         ),
 
         // Transparent overlay container for clear camera view
@@ -112,10 +211,7 @@ class _QrScannerViewState extends State<QrScannerView>
               // Brand Logo Header
               Column(
                 children: [
-                  const CaslaLogoWhite(
-                    size: 68,
-                    textColor: Colors.white,
-                  ),
+                  const CaslaLogoWhite(size: 68, textColor: Colors.white),
                   const SizedBox(height: 6),
                   const Text(
                     'GHI NHẬN SẢN LƯỢNG',
@@ -126,7 +222,7 @@ class _QrScannerViewState extends State<QrScannerView>
                       letterSpacing: 1.0,
                       color: Colors.white,
                     ),
-                  )
+                  ),
                 ],
               ),
 
@@ -148,10 +244,18 @@ class _QrScannerViewState extends State<QrScannerView>
                           height: 34,
                           decoration: const BoxDecoration(
                             border: Border(
-                              top: BorderSide(color: CaslaColors.accentGold, width: 4),
-                              left: BorderSide(color: CaslaColors.accentGold, width: 4),
+                              top: BorderSide(
+                                color: CaslaColors.accentGold,
+                                width: 4,
+                              ),
+                              left: BorderSide(
+                                color: CaslaColors.accentGold,
+                                width: 4,
+                              ),
                             ),
-                            borderRadius: BorderRadius.only(topLeft: Radius.circular(10)),
+                            borderRadius: BorderRadius.only(
+                              topLeft: Radius.circular(10),
+                            ),
                           ),
                         ),
                       ),
@@ -164,10 +268,18 @@ class _QrScannerViewState extends State<QrScannerView>
                           height: 34,
                           decoration: const BoxDecoration(
                             border: Border(
-                              top: BorderSide(color: CaslaColors.accentGold, width: 4),
-                              right: BorderSide(color: CaslaColors.accentGold, width: 4),
+                              top: BorderSide(
+                                color: CaslaColors.accentGold,
+                                width: 4,
+                              ),
+                              right: BorderSide(
+                                color: CaslaColors.accentGold,
+                                width: 4,
+                              ),
                             ),
-                            borderRadius: BorderRadius.only(topRight: Radius.circular(10)),
+                            borderRadius: BorderRadius.only(
+                              topRight: Radius.circular(10),
+                            ),
                           ),
                         ),
                       ),
@@ -180,10 +292,18 @@ class _QrScannerViewState extends State<QrScannerView>
                           height: 34,
                           decoration: const BoxDecoration(
                             border: Border(
-                              bottom: BorderSide(color: CaslaColors.accentGold, width: 4),
-                              left: BorderSide(color: CaslaColors.accentGold, width: 4),
+                              bottom: BorderSide(
+                                color: CaslaColors.accentGold,
+                                width: 4,
+                              ),
+                              left: BorderSide(
+                                color: CaslaColors.accentGold,
+                                width: 4,
+                              ),
                             ),
-                            borderRadius: BorderRadius.only(bottomLeft: Radius.circular(10)),
+                            borderRadius: BorderRadius.only(
+                              bottomLeft: Radius.circular(10),
+                            ),
                           ),
                         ),
                       ),
@@ -196,10 +316,18 @@ class _QrScannerViewState extends State<QrScannerView>
                           height: 34,
                           decoration: const BoxDecoration(
                             border: Border(
-                              bottom: BorderSide(color: CaslaColors.accentGold, width: 4),
-                              right: BorderSide(color: CaslaColors.accentGold, width: 4),
+                              bottom: BorderSide(
+                                color: CaslaColors.accentGold,
+                                width: 4,
+                              ),
+                              right: BorderSide(
+                                color: CaslaColors.accentGold,
+                                width: 4,
+                              ),
                             ),
-                            borderRadius: BorderRadius.only(bottomRight: Radius.circular(10)),
+                            borderRadius: BorderRadius.only(
+                              bottomRight: Radius.circular(10),
+                            ),
                           ),
                         ),
                       ),

@@ -15,8 +15,7 @@ class S10ConfirmScanScreen extends ConsumerStatefulWidget {
       _S10ConfirmScanScreenState();
 }
 
-class _S10ConfirmScanScreenState
-    extends ConsumerState<S10ConfirmScanScreen> {
+class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
   bool _isProcessing = false;
   final TextEditingController _manualController = TextEditingController();
 
@@ -56,7 +55,8 @@ class _S10ConfirmScanScreenState
                 (e['ma_nv'] ?? '').toString().toLowerCase() ==
                     code.toLowerCase() ||
                 (e['ten'] ?? '').toString().toLowerCase().contains(
-                    code.toLowerCase()) ||
+                  code.toLowerCase(),
+                ) ||
                 (e['tai_khoan'] ?? '').toString().toLowerCase() ==
                     code.toLowerCase(),
           );
@@ -90,10 +90,7 @@ class _S10ConfirmScanScreenState
       );
 
       // Redirect to Employee Daily Detail Screen (S06b)
-      await context.push(
-        '/supervisor/employee_detail',
-        extra: worker,
-      );
+      await context.push('/supervisor/employee_detail', extra: worker);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

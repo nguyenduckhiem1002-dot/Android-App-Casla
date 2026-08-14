@@ -59,8 +59,10 @@ class NumPad extends StatelessWidget {
                   onTap: () => _onQuickAdd(add),
                   borderRadius: BorderRadius.circular(20),
                   child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
                     decoration: BoxDecoration(
                       color: CaslaColors.gold100,
                       borderRadius: BorderRadius.circular(20),
@@ -116,7 +118,9 @@ class NumPad extends StatelessWidget {
                       fontFamily: isOp ? 'Inter' : 'Manrope',
                       fontWeight: FontWeight.w700,
                       fontSize: isOp ? 15 : 18,
-                      color: isOp ? CaslaColors.danger : CaslaColors.primaryNavy,
+                      color: isOp
+                          ? CaslaColors.danger
+                          : CaslaColors.primaryNavy,
                     ),
                   ),
                 ),

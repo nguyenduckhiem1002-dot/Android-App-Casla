@@ -34,42 +34,43 @@ class CaslaTheme {
       cardTheme: CardThemeData(
         color: CaslaColors.surface,
         elevation: 0,
+        margin: EdgeInsets.zero,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
-          side: const BorderSide(color: CaslaColors.line),
+          borderRadius: BorderRadius.circular(12),
+          side: const BorderSide(color: CaslaColors.line, width: 1),
         ),
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
           backgroundColor: CaslaColors.accentGold,
           foregroundColor: CaslaColors.navy900,
-          minimumSize: const Size(double.infinity, 54),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(8),
-          ),
+          elevation: 0,
+          minimumSize: const Size(double.infinity, 52),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           textStyle: const TextStyle(
             fontWeight: FontWeight.w700,
-            fontSize: 14.5,
+            fontSize: 15,
+            letterSpacing: 0.2,
           ),
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
           foregroundColor: CaslaColors.primaryNavy,
-          minimumSize: const Size(double.infinity, 48),
+          minimumSize: const Size(double.infinity, 50),
           side: const BorderSide(color: CaslaColors.primaryNavy, width: 1.5),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(8),
-          ),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           textStyle: const TextStyle(
             fontWeight: FontWeight.w700,
-            fontSize: 14.5,
+            fontSize: 15,
+            letterSpacing: 0.2,
           ),
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: CaslaColors.surface,
+        hintStyle: const TextStyle(color: CaslaColors.muted, fontSize: 14),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
           borderSide: const BorderSide(color: CaslaColors.line, width: 1.5),
@@ -80,15 +81,21 @@ class CaslaTheme {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
-          borderSide:
-              const BorderSide(color: CaslaColors.accentGold, width: 2),
+          borderSide: const BorderSide(color: CaslaColors.primaryNavy, width: 1.8),
         ),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 13, vertical: 12),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: CaslaColors.danger, width: 1.5),
+        ),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 14,
+        ),
       ),
       dividerTheme: const DividerThemeData(
         color: CaslaColors.line,
         thickness: 1,
+        space: 1,
       ),
       bottomNavigationBarTheme: const BottomNavigationBarThemeData(
         backgroundColor: CaslaColors.surface,

@@ -63,16 +63,16 @@ class SapAssignmentDto {
   });
 
   Map<String, dynamic> toJson() => {
-        'idempotencyKey': idempotencyKey,
-        'workerId': workerId,
-        'orderId': orderId,
-        'teamId': teamId,
-        'assignedQuantity': assignedQuantity,
-        'businessDate': businessDate,
-        'shiftId': shiftId,
-        'status': status,
-        if (note != null) 'note': note,
-      };
+    'idempotencyKey': idempotencyKey,
+    'workerId': workerId,
+    'orderId': orderId,
+    'teamId': teamId,
+    'assignedQuantity': assignedQuantity,
+    'businessDate': businessDate,
+    'shiftId': shiftId,
+    'status': status,
+    if (note != null) 'note': note,
+  };
 }
 
 /// Production Entry DTO (Spec 9.3 payload)
@@ -96,14 +96,14 @@ class SapProductionEntryDto {
   });
 
   Map<String, dynamic> toJson() => {
-        'idempotencyKey': idempotencyKey,
-        'assignmentId': assignmentId,
-        'quantity': quantity,
-        'businessDate': businessDate,
-        'shiftId': shiftId,
-        'occurredAtUtc': occurredAtUtc,
-        'deviceId': deviceId,
-      };
+    'idempotencyKey': idempotencyKey,
+    'assignmentId': assignmentId,
+    'quantity': quantity,
+    'businessDate': businessDate,
+    'shiftId': shiftId,
+    'occurredAtUtc': occurredAtUtc,
+    'deviceId': deviceId,
+  };
 }
 
 /// Assignment Recall DTO
@@ -131,14 +131,14 @@ class SapAssignmentRecallDto {
   });
 
   Map<String, dynamic> toJson() => {
-        'idempotencyKey': idempotencyKey,
-        'assignmentId': assignmentId,
-        'quantity': quantity,
-        'reasonCode': reasonCode,
-        if (note != null) 'note': note,
-        'businessDate': businessDate,
-        'shiftId': shiftId,
-        'occurredAtUtc': occurredAtUtc,
-        'deviceId': deviceId,
-      };
+    'idempotencyKey': idempotencyKey,
+    'assignmentId': assignmentId,
+    'quantity': quantity,
+    'reasonCode': reasonCode,
+    if (note != null) 'note': note,
+    'businessDate': businessDate,
+    'shiftId': shiftId,
+    'occurredAtUtc': occurredAtUtc,
+    'deviceId': deviceId,
+  };
 }
