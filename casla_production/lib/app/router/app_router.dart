@@ -1,6 +1,7 @@
 import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../domain/entities/entities.dart';
 import '../../main.dart';
 import 'app_route_observer.dart';
 
@@ -64,14 +65,14 @@ final routerProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: 'assignment_detail',
             builder: (context, state) {
-              final assignment = state.extra as Map<String, dynamic>;
+              final assignment = state.extra as Assignment;
               return S08AssignmentDetailScreen(assignment: assignment);
             },
           ),
           GoRoute(
             path: 'recall_assignment',
             builder: (context, state) {
-              final assignment = state.extra as Map<String, dynamic>;
+              final assignment = state.extra as Assignment;
               return S09RecallScreen(assignment: assignment);
             },
           ),

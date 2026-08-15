@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../../app/theme/casla_colors.dart';
+import '../../../domain/entities/entities.dart';
 import '../../../main.dart';
 import '../../../presentation/widgets/status_chip.dart';
 
@@ -108,14 +109,14 @@ class _S06bEmployeeDailyDetailScreenState
           const Divider(height: 1),
 
           Expanded(
-            child: StreamBuilder<List<Map<String, dynamic>>>(
-              stream: appState.db.watchAssignmentsByWorker(workerId),
+            child: StreamBuilder<List<Assignment>>(
+              stream: appState.assignmentRepo.watchWorkerAssignments(workerId),
               builder: (context, snapshot) {
-                final allAssignments = snapshot.data ?? [];
+                final allAssignments = snapshot.data ?? const <Assignment>[];
                 final dateFormatted = _dateStr(_selectedDate);
 
                 final filteredAssignments = allAssignments
-                    .where((a) => a['business_date'] == dateFormatted)
+                    .where((a) => a.businessDate == dateFormatted)
                     .toList();
 
                 return FutureBuilder<List<Map<String, dynamic>>>(
@@ -197,7 +198,7 @@ class _S06bEmployeeDailyDetailScreenState
                                                 MainAxisAlignment.spaceBetween,
                                             children: [
                                               Text(
-                                                asg['don_hang_id'] ?? '',
+                                                asg.orderCode,
                                                 style: const TextStyle(
                                                   fontFamily: 'monospace',
                                                   fontSize: 11.5,
@@ -206,7 +207,7 @@ class _S06bEmployeeDailyDetailScreenState
                                                 ),
                                               ),
                                               StatusChip(
-                                                status: asg['status'] ?? 'OPEN',
+                                                status: asg.status.label,
                                               ),
                                             ],
                                           ),
@@ -216,7 +217,7 @@ class _S06bEmployeeDailyDetailScreenState
                                                 MainAxisAlignment.spaceBetween,
                                             children: [
                                               Text(
-                                                'Giao: ${(asg['assigned_quantity'] as num?)?.toStringAsFixed(0) ?? '—'} cái',
+                                                'Giao: ${asg.effectiveAssigned.toStringAsFixed(0)} cái',
                                                 style: const TextStyle(
                                                   fontFamily: 'Manrope',
                                                   fontWeight: FontWeight.w700,

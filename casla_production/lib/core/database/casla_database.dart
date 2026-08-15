@@ -467,6 +467,13 @@ class CaslaDatabase {
     return _orders.where((o) => o['trang_thai'] == 'OPEN').toList();
   }
 
+  /// Every order regardless of status.
+  ///
+  /// Display paths must use this, not [getOpenOrders]: an assignment against an
+  /// order that has since closed still needs to render its code and product
+  /// name, and filtering by OPEN silently drops it into a fallback label.
+  Future<List<Map<String, dynamic>>> getAllOrders() async => List.from(_orders);
+
   Future<Map<String, dynamic>?> getOrderByCode(String code) async {
     try {
       String searchKey = code.trim();
@@ -507,51 +514,6 @@ class CaslaDatabase {
   Future<void> insertAssignment(Map<String, dynamic> assignment) async {
     _assignments.add(assignment);
     _notifyAssignments();
-  }
-
-  Future<void> createAssignmentFromScan({
-    required String employeeId,
-    required String orderId,
-    required double quantity,
-    required String toId,
-    required String shiftId,
-    required String businessDate,
-    required String createdBy,
-    required String deviceId,
-    String? note,
-  }) async {
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final id = 'asg-${_uuid()}';
-    final assignment = {
-      'id': id,
-      'nhan_vien_id': employeeId,
-      'don_hang_id': orderId,
-      'to_id': toId,
-      'assigned_quantity': quantity,
-      'business_date': businessDate,
-      'shift_id': shiftId,
-      'status': 'OPEN',
-      'note': note,
-      'created_by': createdBy,
-      'occurred_at_utc': now,
-      'device_id': deviceId,
-      'sync_status': 'PENDING',
-      'idempotency_key': 'idem-${_uuid()}',
-      'created_at_utc': now,
-    };
-    await insertAssignment(assignment);
-    await insertSyncQueueItem({
-      'id': 'sync-${_uuid()}',
-      'entity_type': 'ASSIGNMENT',
-      'entity_id': id,
-      'action': 'CREATE',
-      'payload_summary': 'Giao việc · ${quantity.toStringAsFixed(0)}',
-      'created_at_utc': now,
-      'retry_count': 0,
-      'last_error_code': null,
-      'last_error_message': null,
-      'device_id': deviceId,
-    });
   }
 
   Future<Map<String, dynamic>?> getAssignmentById(String id) async {
@@ -640,6 +602,13 @@ class CaslaDatabase {
     _notifyAssignments();
   }
 
+  /// Writes a production record straight to the store, bypassing every business
+  /// rule.
+  ///
+  /// Production code must go through [ProductionRepository.recordProduction],
+  /// which enforces the assignment status and the remaining-quantity ceiling.
+  /// This entry point exists only so tests can seed the sync queue directly.
+  @visibleForTesting
   Future<void> recordProductionOffline({
     required String assignmentId,
     required double quantity,
@@ -683,6 +652,20 @@ class CaslaDatabase {
     return _productionRecords
         .where((r) => r['phan_cong_id'] == assignmentId)
         .fold<double>(0.0, (sum, r) => sum + (r['quantity'] as double));
+  }
+
+  /// Completed totals for every assignment, in one pass.
+  ///
+  /// Callers that need totals for a list of assignments must use this rather
+  /// than calling [getCompletedQuantity] per assignment — that turns an O(P)
+  /// scan into O(N × P).
+  Future<Map<String, double>> getCompletedQuantitiesByAssignment() async {
+    final totals = <String, double>{};
+    for (final r in _productionRecords) {
+      final id = r['phan_cong_id'] as String;
+      totals[id] = (totals[id] ?? 0.0) + (r['quantity'] as double);
+    }
+    return totals;
   }
 
   Future<double> getTodayCompleted(String workerId, String businessDate) async {
@@ -769,54 +752,22 @@ class CaslaDatabase {
     _notifyAssignments();
   }
 
-  Future<void> recordRecallOffline({
-    required String assignmentId,
-    required double quantity,
-    required String reason,
-    String? note,
-    required String createdBy,
-    required String deviceId,
-  }) async {
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final id = 'recall-${_uuid()}';
-    final record = {
-      'id': id,
-      'phan_cong_id': assignmentId,
-      'quantity': quantity,
-      'reason': reason,
-      'note': note,
-      'created_by': createdBy,
-      'occurred_at_utc': now,
-      'device_id': deviceId,
-      'sync_status': 'PENDING',
-      'idempotency_key': 'idem-${_uuid()}',
-      'created_at_utc': now,
-    };
-    await insertRecallRecord(record);
-
-    final remaining = await getRemaining(assignmentId);
-    if (remaining <= 0) {
-      await updateAssignmentStatus(assignmentId, 'CLOSED', 'PENDING');
-    }
-
-    await insertSyncQueueItem({
-      'id': 'sync-${_uuid()}',
-      'entity_type': 'RECALL_RECORD',
-      'entity_id': id,
-      'action': 'CREATE',
-      'payload_summary': 'Thu hồi phân công · −${quantity.toStringAsFixed(0)}',
-      'created_at_utc': now,
-      'retry_count': 0,
-      'last_error_code': null,
-      'last_error_message': null,
-      'device_id': deviceId,
-    });
-  }
-
   Future<double> getRecalledQuantity(String assignmentId) async {
     return _recallRecords
         .where((r) => r['phan_cong_id'] == assignmentId)
         .fold<double>(0.0, (sum, r) => sum + (r['quantity'] as double));
+  }
+
+  /// Recalled totals for every assignment, in one pass. See
+  /// [getCompletedQuantitiesByAssignment] for why the per-id variant is unsafe
+  /// in a loop.
+  Future<Map<String, double>> getRecalledQuantitiesByAssignment() async {
+    final totals = <String, double>{};
+    for (final r in _recallRecords) {
+      final id = r['phan_cong_id'] as String;
+      totals[id] = (totals[id] ?? 0.0) + (r['quantity'] as double);
+    }
+    return totals;
   }
 
   Stream<List<Map<String, dynamic>>> watchRecallsByAssignment(

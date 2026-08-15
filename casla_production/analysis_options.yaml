@@ -37,6 +37,10 @@ analyzer:
     unused_field: error
     unused_import: error
     unused_local_variable: error
+    # Screens must write through the repositories, where the business rules
+    # live. CaslaDatabase's raw write path is @visibleForTesting, so this
+    # promotion makes going around validation a build failure, not a warning.
+    invalid_use_of_visible_for_testing_member: error
 
 # Additional information about this file can be found at
 # https://dart.dev/guides/language/analysis-options

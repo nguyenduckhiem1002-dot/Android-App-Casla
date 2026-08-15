@@ -8,7 +8,6 @@ import '../../../app/theme/casla_colors.dart';
 import '../../../main.dart';
 import '../../../presentation/widgets/qr_scanner_view.dart';
 
-import '../../../core/utils/device_info.dart';
 import '../../../core/utils/worker_qr_parser.dart';
 
 class S07CreateAssignmentWizardScreen extends ConsumerStatefulWidget {
@@ -34,7 +33,6 @@ class _S07CreateAssignmentWizardScreenState
   @override
   void initState() {
     super.initState();
-    _loadDefaultWorker();
   }
 
   @override
@@ -42,18 +40,6 @@ class _S07CreateAssignmentWizardScreenState
     _qtyController.dispose();
     _noteController.dispose();
     super.dispose();
-  }
-
-  Future<void> _loadDefaultWorker() async {
-    // Default to sample badge NV0001 (Nguyễn Văn A) for demo convenience
-    setState(() {
-      _selectedWorker = {
-        'id': 'emp-NV0001',
-        'ma_nv': 'NV0001',
-        'ten': 'Nguyễn Văn A',
-        'bo_phan': 'Công nhân sản xuất',
-      };
-    });
   }
 
   void _openWorkerPicker() {
@@ -271,7 +257,7 @@ class _S07CreateAssignmentWizardScreenState
 
     final workerMaNv = (_selectedWorker!['ma_nv'] ?? _selectedWorker!['id'])
         .toString();
-    final workerTen = (_selectedWorker!['ten'] ?? 'Nguyễn Văn A').toString();
+    final workerTen = (_selectedWorker!['ten'] ?? workerMaNv).toString();
 
     // Ensure worker exists in system DB/API transaction on submission
     final empRecord = await appState.db.ensureEmployeeExists(
@@ -279,26 +265,40 @@ class _S07CreateAssignmentWizardScreenState
       workerTen,
     );
 
-    final workerId = empRecord['id'];
-    final orderId = _selectedOrder!['id'];
-    final toId = (empRecord['to_ids'] as List?)?.first ?? 'team-1';
-    final createdBy = emp?.maNv ?? 'MNV00100';
+    final workerId = empRecord['id'] as String;
+    final orderId = _selectedOrder!['id'] as String;
+    final toId = (empRecord['to_ids'] as List?)?.first as String? ?? 'team-1';
+    final createdBy = emp?.maNv ?? '';
 
     final dateFormatted = DateFormat('yyyy-MM-dd').format(_startDate);
 
-    await appState.db.createAssignmentFromScan(
-      employeeId: workerId,
-      orderId: orderId,
-      quantity: qty,
-      toId: toId,
-      shiftId: _shiftId,
-      businessDate: dateFormatted,
-      createdBy: createdBy,
-      deviceId: DeviceInfoHelper.deviceId,
-      note: _noteController.text.trim().isEmpty
-          ? null
-          : _noteController.text.trim(),
-    );
+    // Through the repository so the quantity check and the audit-log entry run.
+    try {
+      await appState.assignmentRepo.createAssignment(
+        workerId: workerId,
+        orderId: orderId,
+        teamId: toId,
+        assignedQuantity: qty,
+        businessDate: dateFormatted,
+        shiftId: _shiftId,
+        note: _noteController.text.trim().isEmpty
+            ? null
+            : _noteController.text.trim(),
+        createdBy: createdBy,
+      );
+    } on Exception catch (e) {
+      if (!mounted) return;
+      setState(() => _isSubmitting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            e.toString().replaceFirst(RegExp(r'^Exception:\s*'), ''),
+          ),
+          backgroundColor: CaslaColors.danger,
+        ),
+      );
+      return;
+    }
 
     if (!mounted) return;
 
