@@ -32,16 +32,6 @@ class AppState extends ChangeNotifier {
 
   ShiftInfo get currentShift => ShiftResolver.getCurrentShiftInfo();
 
-  Future<bool> loginByMaNv(String maNv) async {
-    try {
-      _currentSession = await authRepo.loginByMaNv(maNv);
-      notifyListeners();
-      return true;
-    } catch (e) {
-      rethrow;
-    }
-  }
-
   Future<bool> loginByCredentials(String username, String password) async {
     try {
       _currentSession = await authRepo.loginByCredentials(username, password);

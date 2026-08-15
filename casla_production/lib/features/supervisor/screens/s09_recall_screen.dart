@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../app/theme/casla_colors.dart';
+import '../../../core/utils/device_info.dart';
 import '../../../main.dart';
 
 class S09RecallScreen extends ConsumerStatefulWidget {
@@ -74,7 +75,7 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
           ? null
           : _noteController.text.trim(),
       createdBy: supervisorMaNv,
-      deviceId: 'PDA-CT02-A17',
+      deviceId: DeviceInfoHelper.deviceId,
     );
 
     if (!mounted) return;

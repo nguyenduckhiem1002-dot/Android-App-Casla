@@ -69,7 +69,7 @@ C86.7,25.9,90.3,30.5,91.4,38.1z"/>
         ? ColorFilter.mode(color!, BlendMode.srcIn)
         : null;
 
-    Widget logoWidget = SvgPicture.asset(
+    final Widget logoWidget = SvgPicture.asset(
       assetPath,
       height: height,
       width: width,

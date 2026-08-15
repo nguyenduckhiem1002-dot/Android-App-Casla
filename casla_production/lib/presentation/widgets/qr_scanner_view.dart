@@ -5,7 +5,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../../app/router/app_route_observer.dart';
 import '../../app/theme/casla_colors.dart';
-import 'casla_logo_white.dart';
+import 'casla_logo.dart';
 
 class QrScannerView extends StatefulWidget {
   final String title;

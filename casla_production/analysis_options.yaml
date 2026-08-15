@@ -21,8 +21,22 @@ linter:
   # `// ignore_for_file: name_of_lint` syntax on the line or in the file
   # producing the lint.
   rules:
-    # avoid_print: false  # Uncomment to disable the `avoid_print` rule
-    # prefer_single_quotes: true  # Uncomment to enable the `prefer_single_quotes` rule
+    # Catches the classes of defect found in the Aug 2026 audit so they cannot
+    # silently return. See the remediation plan, task P1-10.
+    - avoid_dynamic_calls        # untyped Map<String, dynamic> access
+    - close_sinks                # StreamController leaks
+    - cancel_subscriptions       # stream subscription leaks
+    - unawaited_futures          # fire-and-forget async writes
+    - avoid_slow_async_io
+    - prefer_final_locals
+    - use_build_context_synchronously
+
+analyzer:
+  errors:
+    unused_element: error
+    unused_field: error
+    unused_import: error
+    unused_local_variable: error
 
 # Additional information about this file can be found at
 # https://dart.dev/guides/language/analysis-options

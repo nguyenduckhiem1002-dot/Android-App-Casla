@@ -5,7 +5,6 @@ import '../../main.dart';
 import 'app_route_observer.dart';
 
 import '../../features/authentication/screens/s02b_account_login_screen.dart';
-import '../../features/shared/screens/worker_shell.dart';
 import '../../features/shared/screens/supervisor_shell.dart';
 import '../../features/supervisor/screens/s06b_employee_daily_detail_screen.dart';
 import '../../features/supervisor/screens/s07_create_assignment_wizard_screen.dart';
@@ -15,7 +14,10 @@ import '../../features/supervisor/screens/s10_confirm_scan_screen.dart';
 import '../../features/sync/screens/s12_sync_screen.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
-  final appState = ref.watch(appStateProvider);
+  // `refreshListenable` below re-evaluates redirects on session changes, so the
+  // router itself must not be rebuilt when AppState notifies — `watch` here would
+  // construct a brand-new GoRouter on every login/logout.
+  final appState = ref.read(appStateProvider);
 
   return GoRouter(
     initialLocation: '/login',
@@ -42,10 +44,6 @@ final routerProvider = Provider<GoRouter>((ref) {
           final initialUsername = state.extra as String?;
           return S02bAccountLoginScreen(initialUsername: initialUsername);
         },
-      ),
-      GoRoute(
-        path: '/worker',
-        builder: (context, state) => const WorkerShell(),
       ),
       GoRoute(
         path: '/supervisor',

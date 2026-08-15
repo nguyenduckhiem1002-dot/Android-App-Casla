@@ -10,9 +10,10 @@ import 'app/theme/casla_theme.dart';
 import 'core/auth/session_manager.dart';
 import 'core/config/app_config.dart';
 import 'core/database/casla_database.dart';
+import 'core/utils/device_info.dart';
 import 'app/router/app_router.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   FlutterError.onError = FlutterError.presentError;
   PlatformDispatcher.instance.onError = (error, stack) {
@@ -34,6 +35,10 @@ void main() {
       ),
     ),
   );
+  // Warm the device-id cache so the synchronous `DeviceInfoHelper.deviceId`
+  // getter returns a real identifier to every write path from the first record on.
+  await DeviceInfoHelper.getDeviceId();
+
   // Initialize the local data store before widgets request it.
   CaslaDatabase.instance;
 

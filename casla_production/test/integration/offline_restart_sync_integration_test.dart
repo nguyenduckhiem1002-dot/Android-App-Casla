@@ -10,9 +10,12 @@ void main() {
     late CaslaDatabase db;
 
     setUp(() {
+      CaslaDatabase.resetForTesting();
       db = CaslaDatabase.instance;
-      AppConfig.enableSapIntegration = false; // Start in Offline mode
+      AppConfig.debugOverrideSapIntegration(false); // Start in Offline mode
     });
+
+    tearDown(AppConfig.debugClearSapIntegrationOverride);
 
     test(
       '1. Create production records while Offline & verify queue items',
@@ -71,7 +74,7 @@ void main() {
 
     test('3. Online transition & Sync Queue draining', () async {
       // Turn Online mode on
-      AppConfig.enableSapIntegration = true;
+      AppConfig.debugOverrideSapIntegration(true);
 
       // Retrieve all pending queue items
       final pendingQueue = await db.watchSyncFeed().first;

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../../app/theme/casla_colors.dart';
+import '../../../core/utils/device_info.dart';
 import '../../../main.dart';
 import '../../../presentation/widgets/kpi_card.dart';
 import '../../../presentation/widgets/num_pad.dart';
@@ -161,7 +162,7 @@ class _S08AssignmentDetailScreenState
       businessDate: today,
       shiftId: widget.assignment['shift_id'] ?? 'SHIFT_1',
       createdBy: supervisorMaNv,
-      deviceId: 'PDA-CT02-A17',
+      deviceId: DeviceInfoHelper.deviceId,
     );
 
     if (!mounted) return;

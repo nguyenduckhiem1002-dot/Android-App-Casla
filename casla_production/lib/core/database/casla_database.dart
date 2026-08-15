@@ -4,6 +4,8 @@
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
+
 import '../utils/id_generator.dart';
 
 /// In-memory mock database for MVP development.
@@ -31,6 +33,16 @@ class CaslaDatabase {
   static CaslaDatabase get instance {
     _instance ??= CaslaDatabase._();
     return _instance!;
+  }
+
+  /// Drops the singleton so the next `instance` access builds a fresh store.
+  ///
+  /// Tests share one process; without this every suite inherits whatever rows the
+  /// previous one left behind, which makes them order-dependent.
+  @visibleForTesting
+  static void resetForTesting() {
+    _instance?.dispose();
+    _instance = null;
   }
 
   CaslaDatabase._() {
@@ -876,7 +888,6 @@ class CaslaDatabase {
   }
 
   Future<bool> retrySyncItem(String id) async {
-    await Future.delayed(const Duration(milliseconds: 600));
     final idx = _syncQueue.indexWhere((i) => i['id'] == id);
     if (idx == -1) return false;
     await deleteSyncQueueItem(id);
@@ -896,5 +907,10 @@ class CaslaDatabase {
     _syncQueueController.close();
     _productionController.close();
     _recallController.close();
+    // Clear the static handle too — otherwise `instance` keeps returning this
+    // object with all four controllers already closed.
+    if (identical(_instance, this)) {
+      _instance = null;
+    }
   }
 }

@@ -216,7 +216,7 @@ class _S06bEmployeeDailyDetailScreenState
                                                 MainAxisAlignment.spaceBetween,
                                             children: [
                                               Text(
-                                                'Giao: ${asg['assigned_quantity']?.toStringAsFixed(0)} cái',
+                                                'Giao: ${(asg['assigned_quantity'] as num?)?.toStringAsFixed(0) ?? '—'} cái',
                                                 style: const TextStyle(
                                                   fontFamily: 'Manrope',
                                                   fontWeight: FontWeight.w700,

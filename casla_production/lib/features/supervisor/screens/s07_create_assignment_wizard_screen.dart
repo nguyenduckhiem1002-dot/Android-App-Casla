@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -6,6 +8,7 @@ import '../../../app/theme/casla_colors.dart';
 import '../../../main.dart';
 import '../../../presentation/widgets/qr_scanner_view.dart';
 
+import '../../../core/utils/device_info.dart';
 import '../../../core/utils/worker_qr_parser.dart';
 
 class S07CreateAssignmentWizardScreen extends ConsumerStatefulWidget {
@@ -175,7 +178,9 @@ class _S07CreateAssignmentWizardScreenState
 
     if (!mounted) return;
 
-    showModalBottomSheet(
+    // Selection is handled by the onTap callbacks inside the sheet, so the
+    // sheet's own result future is intentionally not awaited.
+    unawaited(showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
@@ -224,7 +229,7 @@ class _S07CreateAssignmentWizardScreenState
           ),
         );
       },
-    );
+    ));
   }
 
   Future<void> _submitAssignment() async {
@@ -289,7 +294,7 @@ class _S07CreateAssignmentWizardScreenState
       shiftId: _shiftId,
       businessDate: dateFormatted,
       createdBy: createdBy,
-      deviceId: 'PDA-CT02-A17',
+      deviceId: DeviceInfoHelper.deviceId,
       note: _noteController.text.trim().isEmpty
           ? null
           : _noteController.text.trim(),

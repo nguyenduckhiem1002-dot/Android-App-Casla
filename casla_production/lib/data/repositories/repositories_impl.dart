@@ -25,54 +25,6 @@ class AuthRepositoryImpl implements AuthRepository {
   }
 
   @override
-  Future<UserSession> loginByMaNv(String maNv) async {
-    final emp = await db.getEmployeeByCode(maNv);
-    if (emp == null) {
-      throw Exception('Mã nhân viên $maNv không tồn tại');
-    }
-
-    final isSupervisor = emp['vai_tro'] == 'SUPERVISOR';
-    if (!isSupervisor) {
-      throw Exception(
-        'Công nhân không có quyền đăng nhập. Hệ thống chỉ dành cho Supervisor.',
-      );
-    }
-
-    final permissions = {
-      Permission.viewOwnProduction,
-      Permission.assignQuantity,
-      Permission.recallAssignment,
-      Permission.viewTeamProduction,
-      Permission.viewEmployeeHistory,
-      Permission.viewSyncStatus,
-      Permission.switchUser,
-    };
-
-    final session = UserSession(
-      id: emp['id'] as String,
-      maNv: emp['ma_nv'] as String,
-      fullName: emp['ten'] as String,
-      teamName: emp['bo_phan'] as String,
-      role: isSupervisor ? UserRole.supervisor : UserRole.worker,
-      permissions: permissions,
-    );
-
-    // Audit login
-    await db.insertAuditLog({
-      'id': IdGenerator.newId(),
-      'event_type': 'LOGIN',
-      'actor_id': maNv,
-      'target_employee_id': maNv,
-      'entity_type': 'SESSION',
-      'entity_id': session.id,
-      'device_id': DeviceInfoHelper.deviceId,
-      'occurred_at_utc': DateTime.now().millisecondsSinceEpoch,
-    });
-
-    return session;
-  }
-
-  @override
   Future<UserSession> loginByCredentials(
     String username,
     String password,
