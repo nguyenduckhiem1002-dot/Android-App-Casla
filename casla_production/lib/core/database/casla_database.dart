@@ -3,6 +3,7 @@
 // In-memory storage for MVP (Drift requires code generation setup)
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
@@ -445,18 +446,37 @@ class CaslaDatabase {
   Future<List<Map<String, dynamic>>> getAllEmployees() async =>
       List.from(_employees);
 
+  /// Workers belonging to any of [teamIds].
+  ///
+  /// This used to ignore its argument and return every worker, which made the
+  /// team filter on the overview screen change nothing but the chip label.
+  /// An empty [teamIds] means "no scope", not "everything".
   Future<List<Map<String, dynamic>>> getEmployeesByTeamIds(
     List<String> teamIds,
   ) async {
-    return _employees.where((e) => e['vai_tro'] == 'CONG_NHAN').toList();
+    if (teamIds.isEmpty) return const [];
+    final scope = teamIds.toSet();
+    return _employees
+        .where(
+          (e) =>
+              e['vai_tro'] == 'CONG_NHAN' &&
+              (e['to_ids'] as List?)?.any(scope.contains) == true,
+        )
+        .toList();
   }
 
+  /// Whether [employeeId] falls inside a supervisor's team scope.
+  ///
+  /// Previously returned true unconditionally.
   Future<bool> isEmployeeInScope(
     String employeeId,
     List<String> supervisorToIds,
   ) async {
-    // Workers are not fixed to any team, so any worker is accessible to supervisors.
-    return true;
+    if (supervisorToIds.isEmpty) return false;
+    final employee = await getEmployeeById(employeeId);
+    if (employee == null) return false;
+    final scope = supervisorToIds.toSet();
+    return (employee['to_ids'] as List?)?.any(scope.contains) == true;
   }
 
   // ─── Team Queries ─────────────────────────────────────────────────
@@ -474,40 +494,59 @@ class CaslaDatabase {
   /// name, and filtering by OPEN silently drops it into a fallback label.
   Future<List<Map<String, dynamic>>> getAllOrders() async => List.from(_orders);
 
+  /// Resolves a scanned or typed code to exactly one order.
+  ///
+  /// Matching is exact on the identifier fields only. It used to fall back to a
+  /// substring match on the product name, so scanning "a" matched nearly every
+  /// order in the table and silently returned the first one.
   Future<Map<String, dynamic>?> getOrderByCode(String code) async {
-    try {
-      String searchKey = code.trim();
-      if (searchKey.startsWith('{') && searchKey.endsWith('}')) {
-        try {
-          final Map<String, dynamic> json = Map<String, dynamic>.from(
-            Uri.splitQueryString(searchKey.replaceAll(RegExp(r'[{}"\s]'), '')),
-          );
-          searchKey =
-              json['productCode'] ??
-              json['orderCode'] ??
-              json['ma_qr'] ??
-              json['ma_sp'] ??
-              json['ma_don_hang'] ??
-              searchKey;
-        } catch (_) {}
-      }
+    final searchKey = _extractOrderKey(code);
+    if (searchKey.isEmpty) return null;
 
-      final keyLower = searchKey.toLowerCase();
-      return _orders.firstWhere((o) {
-        final maQr = (o['ma_qr'] ?? '').toString().toLowerCase();
-        final maDonHang = (o['ma_don_hang'] ?? '').toString().toLowerCase();
-        final maSp = (o['ma_sp'] ?? '').toString().toLowerCase();
-        final id = (o['id'] ?? '').toString().toLowerCase();
-        final tenSp = (o['ten_sp'] ?? '').toString().toLowerCase();
-        return maQr == keyLower ||
-            maDonHang == keyLower ||
-            maSp == keyLower ||
-            id == keyLower ||
-            tenSp.contains(keyLower);
-      });
-    } catch (_) {
-      return null;
+    final keyLower = searchKey.toLowerCase();
+    for (final o in _orders) {
+      bool matches(String field) =>
+          (o[field] ?? '').toString().toLowerCase() == keyLower;
+
+      if (matches('ma_qr') ||
+          matches('ma_don_hang') ||
+          matches('ma_sp') ||
+          matches('id')) {
+        return o;
+      }
     }
+    return null;
+  }
+
+  /// Pulls the order identifier out of a QR payload.
+  ///
+  /// Handles both a bare code and a JSON object. The previous implementation
+  /// stripped braces and quotes with a regex and fed the result to
+  /// `Uri.splitQueryString`, which breaks on any value containing a comma.
+  static String _extractOrderKey(String raw) {
+    final trimmed = raw.trim();
+    if (!trimmed.startsWith('{')) return trimmed;
+
+    try {
+      final decoded = jsonDecode(trimmed);
+      if (decoded is! Map) return trimmed;
+
+      for (final key in const [
+        'productCode',
+        'orderCode',
+        'ma_qr',
+        'ma_sp',
+        'ma_don_hang',
+      ]) {
+        final value = decoded[key];
+        if (value != null && value.toString().trim().isNotEmpty) {
+          return value.toString().trim();
+        }
+      }
+    } on FormatException {
+      // Not JSON after all — fall through and treat it as a bare code.
+    }
+    return trimmed;
   }
 
   // ─── Assignment Queries ───────────────────────────────────────────
