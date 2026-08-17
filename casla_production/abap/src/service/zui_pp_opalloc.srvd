@@ -1,6 +1,0 @@
-@EndUserText.label: 'Dịch vụ phân bổ sản lượng công đoạn'
-define service ZUI_PP_OPALLOC {
-  expose ZC_PP_OpAlloc as OperationAllocations;
-  expose ZC_PP_EmpAlloc as EmployeeAllocations;
-  expose ZC_PP_AllocTxn as AllocationTransactions;
-}
