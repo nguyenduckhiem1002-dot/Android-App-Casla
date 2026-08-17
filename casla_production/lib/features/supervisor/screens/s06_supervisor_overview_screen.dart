@@ -45,9 +45,6 @@ class _S06SupervisorOverviewScreenState
   String _selectedTeamId = 'ALL'; // 'ALL', 'team-1', 'team-2', 'team-3'
   String _selectedTeamLabel = 'Tổ: Tất cả';
 
-  String _selectedShift = 'ALL'; // 'ALL', 'SHIFT_1', 'SHIFT_2', 'SHIFT_3'
-  String _selectedShiftLabel = 'Ca ngày';
-
   DateTime _selectedDate = DateTime.now();
 
   String _dateStr(DateTime d) => DateFormat('yyyy-MM-dd').format(d);
@@ -128,80 +125,6 @@ class _S06SupervisorOverviewScreenState
                   setState(() {
                     _selectedTeamId = 'team-3';
                     _selectedTeamLabel = 'Tổ Cắt 3';
-                  });
-                  Navigator.pop(context);
-                },
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  void _showShiftFilterSheet() {
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (context) {
-        return Container(
-          padding: const EdgeInsets.all(18),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Lọc theo Ca làm việc',
-                style: TextStyle(
-                  fontFamily: 'Manrope',
-                  fontWeight: FontWeight.w800,
-                  fontSize: 16,
-                  color: CaslaColors.primaryNavy,
-                ),
-              ),
-              const SizedBox(height: 12),
-              ListTile(
-                title: const Text('Tất cả các ca'),
-                selected: _selectedShift == 'ALL',
-                onTap: () {
-                  setState(() {
-                    _selectedShift = 'ALL';
-                    _selectedShiftLabel = 'Tất cả ca';
-                  });
-                  Navigator.pop(context);
-                },
-              ),
-              ListTile(
-                title: const Text('Ca ngày (06:00 – 14:00)'),
-                selected: _selectedShift == 'SHIFT_1',
-                onTap: () {
-                  setState(() {
-                    _selectedShift = 'SHIFT_1';
-                    _selectedShiftLabel = 'Ca ngày';
-                  });
-                  Navigator.pop(context);
-                },
-              ),
-              ListTile(
-                title: const Text('Ca chiều (14:00 – 22:00)'),
-                selected: _selectedShift == 'SHIFT_2',
-                onTap: () {
-                  setState(() {
-                    _selectedShift = 'SHIFT_2';
-                    _selectedShiftLabel = 'Ca chiều';
-                  });
-                  Navigator.pop(context);
-                },
-              ),
-              ListTile(
-                title: const Text('Ca đêm (22:00 – 06:00)'),
-                selected: _selectedShift == 'SHIFT_3',
-                onTap: () {
-                  setState(() {
-                    _selectedShift = 'SHIFT_3';
-                    _selectedShiftLabel = 'Ca đêm';
                   });
                   Navigator.pop(context);
                 },
@@ -370,13 +293,10 @@ class _S06SupervisorOverviewScreenState
           final rawAssignments = snapshot.data ?? const <Assignment>[];
           final selectedDateFormatted = _dateStr(_selectedDate);
 
-          // Filter assignments by team, selected Date and Shift
+          // Filter assignments by team and selected date.
           final assignments = rawAssignments.where((a) {
             if (!effectiveTeamIds.contains(a.teamId)) return false;
             if (a.businessDate != selectedDateFormatted) return false;
-            if (_selectedShift != 'ALL' && a.shiftId != _selectedShift) {
-              return false;
-            }
             return true;
           }).toList();
 
@@ -433,11 +353,6 @@ class _S06SupervisorOverviewScreenState
                                 '$_selectedTeamLabel ▾',
                                 isSelected: true,
                                 onTap: _showTeamFilterSheet,
-                              ),
-                              const SizedBox(width: 8),
-                              _buildFilterChip(
-                                '$_selectedShiftLabel ▾',
-                                onTap: _showShiftFilterSheet,
                               ),
                               const SizedBox(width: 8),
                               _buildFilterChip(

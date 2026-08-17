@@ -27,7 +27,6 @@ class _S07CreateAssignmentWizardScreenState
   );
   final TextEditingController _noteController = TextEditingController();
   DateTime _startDate = DateTime.now();
-  String _shiftId = 'SHIFT_1';
   bool _isSubmitting = false;
 
   @override
@@ -280,7 +279,10 @@ class _S07CreateAssignmentWizardScreenState
         teamId: toId,
         assignedQuantity: qty,
         businessDate: dateFormatted,
-        shiftId: _shiftId,
+        // Legacy field required by the current repository/SAP payload. Shift
+        // selection is no longer part of the assignment workflow; keep the
+        // previously used value until the backend contract makes it optional.
+        shiftId: 'SHIFT_1',
         note: _noteController.text.trim().isEmpty
             ? null
             : _noteController.text.trim(),
@@ -609,43 +611,7 @@ class _S07CreateAssignmentWizardScreenState
 
                   const SizedBox(height: 16),
 
-                  // 5. Ca Field
-                  RichText(
-                    text: const TextSpan(
-                      text: 'Ca ',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: CaslaColors.primaryNavy,
-                      ),
-                      children: [
-                        TextSpan(
-                          text: '*',
-                          style: TextStyle(color: CaslaColors.danger),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(3),
-                    decoration: BoxDecoration(
-                      color: CaslaColors.muted100,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      children: [
-                        _buildShiftOption('Ca ngày', 'SHIFT_1'),
-                        _buildShiftOption('Ca chiều', 'SHIFT_2'),
-                        _buildShiftOption('Ca đêm', 'SHIFT_3'),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // 6. Ghi chú Field
+                  // 5. Ghi chú Field
                   const Text(
                     'Ghi chú',
                     style: TextStyle(
@@ -691,33 +657,4 @@ class _S07CreateAssignmentWizardScreenState
     );
   }
 
-  Widget _buildShiftOption(String label, String value) {
-    final isSelected = _shiftId == value;
-    return Expanded(
-      child: InkWell(
-        onTap: () {
-          setState(() {
-            _shiftId = value;
-          });
-        },
-        borderRadius: BorderRadius.circular(6),
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 9),
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: isSelected ? CaslaColors.primaryNavy : Colors.transparent,
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 12.5,
-              fontWeight: FontWeight.w700,
-              color: isSelected ? Colors.white : CaslaColors.muted,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }

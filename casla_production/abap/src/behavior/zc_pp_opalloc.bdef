@@ -1,0 +1,25 @@
+projection;
+strict ( 2 );
+
+define behavior for ZC_PP_OpAlloc alias OperationAllocation
+{
+  use create;
+  use update;
+  use action initialAssign;
+  use action transfer;
+  use action confirm;
+  use action reverse;
+  use association _Employees;
+  use association _Transactions;
+}
+
+define behavior for ZC_PP_EmpAlloc alias EmployeeAllocation
+{
+  use association _Operation;
+}
+
+define behavior for ZC_PP_AllocTxn alias AllocationTransaction
+{
+  use association _Operation;
+}
+

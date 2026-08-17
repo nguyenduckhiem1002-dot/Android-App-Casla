@@ -1,0 +1,118 @@
+managed implementation in class zbp_r_pp_opalloc unique;
+strict ( 2 );
+
+define behavior for ZR_PP_OpAlloc alias OperationAllocation
+persistent table ztb_pp_op_alloc
+lock master
+authorization master ( global )
+etag master LocalLastChangedAt
+{
+  create;
+  update;
+
+  field ( readonly, numbering : managed ) OperationUUID;
+  field ( mandatory ) ProductionOrder, Operation, Plant, WorkCenter,
+                      OperationQuantity, UnitOfMeasure;
+  field ( readonly ) CreatedBy, CreatedAt, LastChangedBy,
+                     LocalLastChangedAt;
+
+  association _Employees { create; }
+  association _Transactions { create; }
+
+  action initialAssign parameter ZA_PP_InitialAssign result [1] $self;
+  action transfer parameter ZA_PP_Transfer result [1] $self;
+  action confirm parameter ZA_PP_Confirm result [1] $self;
+  action reverse parameter ZA_PP_Reverse result [1] $self;
+
+  validation validateOperation on save { create; update; }
+
+  mapping for ztb_pp_op_alloc
+  {
+    OperationUUID     = operation_uuid;
+    ProductionOrder   = production_order;
+    Operation         = operation_no;
+    Plant             = plant;
+    WorkCenter        = work_center;
+    OperationQuantity = operation_qty;
+    UnitOfMeasure     = uom;
+    OperationStatus   = operation_status;
+    CreatedBy         = created_by;
+    CreatedAt         = created_at;
+    LastChangedBy     = last_changed_by;
+    LocalLastChangedAt = local_last_changed_at;
+  }
+}
+
+define behavior for ZR_PP_EmpAlloc alias EmployeeAllocation
+persistent table ztb_pp_emp_alloc
+lock dependent by _Operation
+authorization dependent by _Operation
+etag master LocalLastChangedAt
+{
+  update;
+
+  field ( readonly, numbering : managed ) EmployeeAllocationUUID;
+  field ( readonly ) OperationUUID, CreatedBy, CreatedAt,
+                     LastChangedBy, LocalLastChangedAt;
+
+  association _Operation;
+
+  mapping for ztb_pp_emp_alloc
+  {
+    EmployeeAllocationUUID = emp_alloc_uuid;
+    OperationUUID          = operation_uuid;
+    WorkerID               = worker_id;
+    InitialAssignedQuantity = initial_assigned_qty;
+    TransferredInQuantity  = transferred_in_qty;
+    TransferredOutQuantity = transferred_out_qty;
+    CompletedQuantity      = completed_qty;
+    RemainingQuantity      = remaining_qty;
+    UnitOfMeasure          = uom;
+    LastExecutionDate      = last_execution_date;
+    LastSyncAt             = last_sync_at;
+    CreatedBy              = created_by;
+    CreatedAt              = created_at;
+    LastChangedBy          = last_changed_by;
+    LocalLastChangedAt     = local_last_changed_at;
+  }
+}
+
+define behavior for ZR_PP_AllocTxn alias AllocationTransaction
+persistent table ztb_pp_alloc_txn
+lock dependent by _Operation
+authorization dependent by _Operation
+{
+  field ( readonly, numbering : managed ) TransactionUUID;
+  field ( readonly ) OperationUUID, OriginalTransactionUUID,
+                     SyncItemUUID, TransactionType, FromWorkerID,
+                     ToWorkerID, WorkerID, Quantity, UnitOfMeasure,
+                     ExecutionDate, TransactionStatus,
+                     SAPConfirmationGroup, SAPConfirmationCount,
+                     SAPErrorCode, SAPErrorText, CreatedBy, CreatedAt,
+                     LocalLastChangedAt;
+
+  association _Operation;
+
+  mapping for ztb_pp_alloc_txn
+  {
+    TransactionUUID        = transaction_uuid;
+    OperationUUID          = operation_uuid;
+    OriginalTransactionUUID = original_transaction_uuid;
+    SyncItemUUID           = sync_item_uuid;
+    TransactionType        = transaction_type;
+    FromWorkerID           = from_worker_id;
+    ToWorkerID             = to_worker_id;
+    WorkerID               = worker_id;
+    Quantity               = quantity;
+    UnitOfMeasure          = uom;
+    ExecutionDate          = execution_date;
+    TransactionStatus      = transaction_status;
+    SAPConfirmationGroup   = sap_confirmation_group;
+    SAPConfirmationCount   = sap_confirmation_count;
+    SAPErrorCode           = sap_error_code;
+    SAPErrorText           = sap_error_text;
+    CreatedBy              = created_by;
+    CreatedAt              = created_at;
+    LocalLastChangedAt     = local_last_changed_at;
+  }
+}

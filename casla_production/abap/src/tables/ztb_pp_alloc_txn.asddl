@@ -1,0 +1,28 @@
+@EndUserText.label : 'Sổ giao dịch phân bổ sản lượng'
+@AbapCatalog.enhancement.category : #NOT_EXTENSIBLE
+@AbapCatalog.tableCategory : #TRANSPARENT
+@AbapCatalog.deliveryClass : #A
+@AbapCatalog.dataMaintenance : #RESTRICTED
+define table ztb_pp_alloc_txn {
+  key client                   : abap.clnt not null;
+  key transaction_uuid         : sysuuid_x16 not null;
+  operation_uuid               : sysuuid_x16 not null;
+  original_transaction_uuid    : sysuuid_x16;
+  sync_item_uuid               : sysuuid_x16;
+  transaction_type             : abap.char(20) not null;
+  from_worker_id               : abap.char(8);
+  to_worker_id                 : abap.char(8);
+  worker_id                    : abap.char(8);
+  @Semantics.quantity.unitOfMeasure : 'ztb_pp_alloc_txn.uom'
+  quantity                     : abap.quan(15,3) not null;
+  uom                          : abap.unit(3) not null;
+  execution_date               : abap.dats;
+  transaction_status           : abap.char(20) not null;
+  sap_confirmation_group       : abap.char(10);
+  sap_confirmation_count       : abap.char(8);
+  sap_error_code               : abap.char(40);
+  sap_error_text               : abap.char(255);
+  created_by                   : abp_creation_user;
+  created_at                   : abp_creation_tstmpl;
+  local_last_changed_at        : abp_locinst_lastchange_tstmpl;
+}

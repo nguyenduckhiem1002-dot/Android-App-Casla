@@ -1,0 +1,24 @@
+@EndUserText.label : 'Thông tin yêu cầu đồng bộ di động'
+@AbapCatalog.enhancement.category : #NOT_EXTENSIBLE
+@AbapCatalog.tableCategory : #TRANSPARENT
+@AbapCatalog.deliveryClass : #A
+@AbapCatalog.dataMaintenance : #RESTRICTED
+define table ztb_pp_sync_h {
+  key client            : abap.clnt not null;
+  key sync_uuid         : sysuuid_x16 not null;
+  external_id           : abap.char(64) not null;
+  device_id             : abap.char(64) not null;
+  sync_status           : abap.char(20) not null;
+  total_items           : abap.int4 not null;
+  success_items         : abap.int4 not null;
+  error_items           : abap.int4 not null;
+  retry_count           : abap.int2 not null;
+  next_retry_at         : abap.utclong;
+  error_text            : abap.char(255);
+  received_at           : abap.utclong;
+  process_started_at    : abap.utclong;
+  processed_at          : abap.utclong;
+  created_by            : abp_creation_user;
+  created_at            : abp_creation_tstmpl;
+  local_last_changed_at : abp_locinst_lastchange_tstmpl;
+}

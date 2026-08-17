@@ -1,0 +1,31 @@
+@EndUserText.label : 'Chi tiết yêu cầu đồng bộ di động'
+@AbapCatalog.enhancement.category : #NOT_EXTENSIBLE
+@AbapCatalog.tableCategory : #TRANSPARENT
+@AbapCatalog.deliveryClass : #A
+@AbapCatalog.dataMaintenance : #RESTRICTED
+define table ztb_pp_sync_i {
+  key client            : abap.clnt not null;
+  key sync_item_uuid    : sysuuid_x16 not null;
+  sync_uuid             : sysuuid_x16 not null;
+  external_item_id      : abap.char(64) not null;
+  transaction_type      : abap.char(20) not null;
+  production_order      : abap.char(12) not null;
+  operation_no          : abap.char(4) not null;
+  from_worker_id        : abap.char(8);
+  to_worker_id          : abap.char(8);
+  worker_id             : abap.char(8);
+  @Semantics.quantity.unitOfMeasure : 'ztb_pp_sync_i.uom'
+  quantity              : abap.quan(15,3) not null;
+  uom                   : abap.unit(3) not null;
+  execution_date        : abap.dats not null;
+  mobile_changed_at     : abap.utclong;
+  item_status           : abap.char(20) not null;
+  error_code            : abap.char(40);
+  error_text            : abap.char(255);
+  retry_count           : abap.int2 not null;
+  next_retry_at         : abap.utclong;
+  processed_at          : abap.utclong;
+  created_by            : abp_creation_user;
+  created_at            : abp_creation_tstmpl;
+  local_last_changed_at : abp_locinst_lastchange_tstmpl;
+}
