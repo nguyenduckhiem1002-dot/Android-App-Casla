@@ -1,6 +1,8 @@
 // Core — Environment & SAP API Configuration
 // Spec: SAP OData / RAP Integration Setup
 
+import 'package:flutter/foundation.dart';
+
 class AppConfig {
   /// Tên ứng dụng hiển thị
   static const String _appName = String.fromEnvironment(
@@ -40,11 +42,26 @@ class AppConfig {
     'ENABLE_SAP_INTEGRATION',
   );
 
-  static bool enableSapIntegration =
-      _sapIntegrationRequested &&
-      sapBaseUrl.isNotEmpty &&
-      sapBasicAuthUser.isNotEmpty &&
-      sapBasicAuthPassword.isNotEmpty;
+  static bool? _sapIntegrationOverride;
+
+  /// Read-only: derived from build-time configuration, not settable at runtime.
+  ///
+  /// NOTE: nothing in `lib/` reads this yet — the sync engine that would consume
+  /// it does not exist. See the SAP phase of the remediation plan.
+  static bool get enableSapIntegration =>
+      _sapIntegrationOverride ??
+      (_sapIntegrationRequested &&
+          sapBaseUrl.isNotEmpty &&
+          sapBasicAuthUser.isNotEmpty &&
+          sapBasicAuthPassword.isNotEmpty);
+
+  @visibleForTesting
+  static void debugOverrideSapIntegration(bool value) =>
+      _sapIntegrationOverride = value;
+
+  @visibleForTesting
+  static void debugClearSapIntegrationOverride() =>
+      _sapIntegrationOverride = null;
 
   static String _normalizeEnvValue(String value) {
     var normalized = value.trim();

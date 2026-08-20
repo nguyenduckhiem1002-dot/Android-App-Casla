@@ -17,6 +17,7 @@ void main() {
         baseUrl:
             'https://mock-sap-odata.caslagroup.test/sap/opu/odata/sap/ZUI_USER_QR_API/',
       );
+      CaslaDatabase.resetForTesting();
       db = CaslaDatabase.instance;
     });
 

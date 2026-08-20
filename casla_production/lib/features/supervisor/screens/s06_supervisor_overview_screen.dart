@@ -3,6 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../../app/theme/casla_colors.dart';
+import '../../../domain/entities/entities.dart';
+import '../../../domain/entities/enums.dart';
+import '../../../domain/policies/production_math.dart';
 import '../../../main.dart';
 import '../../../presentation/widgets/kpi_card.dart';
 import '../../../presentation/widgets/status_chip.dart';
@@ -41,9 +44,6 @@ class _S06SupervisorOverviewScreenState
   // Filter States
   String _selectedTeamId = 'ALL'; // 'ALL', 'team-1', 'team-2', 'team-3'
   String _selectedTeamLabel = 'Tổ: Tất cả';
-
-  String _selectedShift = 'ALL'; // 'ALL', 'SHIFT_1', 'SHIFT_2', 'SHIFT_3'
-  String _selectedShiftLabel = 'Ca ngày';
 
   DateTime _selectedDate = DateTime.now();
 
@@ -125,80 +125,6 @@ class _S06SupervisorOverviewScreenState
                   setState(() {
                     _selectedTeamId = 'team-3';
                     _selectedTeamLabel = 'Tổ Cắt 3';
-                  });
-                  Navigator.pop(context);
-                },
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  void _showShiftFilterSheet() {
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (context) {
-        return Container(
-          padding: const EdgeInsets.all(18),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Lọc theo Ca làm việc',
-                style: TextStyle(
-                  fontFamily: 'Manrope',
-                  fontWeight: FontWeight.w800,
-                  fontSize: 16,
-                  color: CaslaColors.primaryNavy,
-                ),
-              ),
-              const SizedBox(height: 12),
-              ListTile(
-                title: const Text('Tất cả các ca'),
-                selected: _selectedShift == 'ALL',
-                onTap: () {
-                  setState(() {
-                    _selectedShift = 'ALL';
-                    _selectedShiftLabel = 'Tất cả ca';
-                  });
-                  Navigator.pop(context);
-                },
-              ),
-              ListTile(
-                title: const Text('Ca ngày (06:00 – 14:00)'),
-                selected: _selectedShift == 'SHIFT_1',
-                onTap: () {
-                  setState(() {
-                    _selectedShift = 'SHIFT_1';
-                    _selectedShiftLabel = 'Ca ngày';
-                  });
-                  Navigator.pop(context);
-                },
-              ),
-              ListTile(
-                title: const Text('Ca chiều (14:00 – 22:00)'),
-                selected: _selectedShift == 'SHIFT_2',
-                onTap: () {
-                  setState(() {
-                    _selectedShift = 'SHIFT_2';
-                    _selectedShiftLabel = 'Ca chiều';
-                  });
-                  Navigator.pop(context);
-                },
-              ),
-              ListTile(
-                title: const Text('Ca đêm (22:00 – 06:00)'),
-                selected: _selectedShift == 'SHIFT_3',
-                onTap: () {
-                  setState(() {
-                    _selectedShift = 'SHIFT_3';
-                    _selectedShiftLabel = 'Ca đêm';
                   });
                   Navigator.pop(context);
                 },
@@ -358,25 +284,42 @@ class _S06SupervisorOverviewScreenState
                 ),
         ),
       ),
-      body: StreamBuilder<List<Map<String, dynamic>>>(
-        stream: appState.db.watchAssignmentsByTeams(effectiveTeamIds),
+      // Through the repository: Assignment already carries the completed and
+      // recalled totals derived from real records, so nothing on this screen has
+      // to guess them.
+      body: StreamBuilder<List<Assignment>>(
+        stream: appState.assignmentRepo.watchAllAssignments(),
         builder: (context, snapshot) {
-          final rawAssignments = snapshot.data ?? [];
+          final rawAssignments = snapshot.data ?? const <Assignment>[];
           final selectedDateFormatted = _dateStr(_selectedDate);
 
-          // Filter assignments by selected Date and Shift
+          // Filter assignments by team and selected date.
           final assignments = rawAssignments.where((a) {
-            if (a['business_date'] != selectedDateFormatted) return false;
-            if (_selectedShift != 'ALL' && a['shift_id'] != _selectedShift) {
-              return false;
-            }
+            if (!effectiveTeamIds.contains(a.teamId)) return false;
+            if (a.businessDate != selectedDateFormatted) return false;
             return true;
           }).toList();
 
+          // Group once, outside the list builder — filtering the full assignment
+          // list per row made scrolling O(workers × assignments).
+          final byWorker = <String, List<Assignment>>{};
+          for (final a in assignments) {
+            (byWorker[a.workerId] ??= []).add(a);
+          }
+
           final totalEffective = assignments.fold<double>(
             0.0,
-            (sum, a) => sum + (a['assigned_quantity'] as double? ?? 0.0),
+            (sum, a) => sum + a.effectiveAssigned,
           );
+
+          final totalCompleted = assignments.fold<double>(
+            0.0,
+            (sum, a) => sum + a.completedQuantity,
+          );
+
+          final openCount = assignments
+              .where((a) => a.status == AssignmentStatus.open)
+              .length;
 
           return FutureBuilder<List<Map<String, dynamic>>>(
             future: appState.db.getEmployeesByTeamIds(effectiveTeamIds),
@@ -413,11 +356,6 @@ class _S06SupervisorOverviewScreenState
                               ),
                               const SizedBox(width: 8),
                               _buildFilterChip(
-                                '$_selectedShiftLabel ▾',
-                                onTap: _showShiftFilterSheet,
-                              ),
-                              const SizedBox(width: 8),
-                              _buildFilterChip(
                                 '${_formatDisplayDate(_selectedDate)} ▾',
                                 onTap: _showDatePickerDialog,
                               ),
@@ -441,9 +379,9 @@ class _S06SupervisorOverviewScreenState
                               value: totalEffective.toStringAsFixed(0),
                               isAccent: true,
                             ),
-                            const KpiCard(
+                            KpiCard(
                               label: 'Tổng hoàn thành',
-                              value: '851',
+                              value: totalCompleted.toStringAsFixed(0),
                             ),
                             KpiCard(
                               label: 'Đang làm việc',
@@ -452,8 +390,7 @@ class _S06SupervisorOverviewScreenState
                             ),
                             KpiCard(
                               label: 'Phân công OPEN',
-                              value:
-                                  '${assignments.where((a) => a['status'] == 'OPEN').length}',
+                              value: '$openCount',
                             ),
                           ],
                         ),
@@ -501,40 +438,41 @@ class _S06SupervisorOverviewScreenState
                             itemCount: employees.length,
                             itemBuilder: (context, index) {
                               final worker = employees[index];
-                              final workerAssignments = assignments
-                                  .where(
-                                    (a) => a['nhan_vien_id'] == worker['id'],
-                                  )
-                                  .toList();
+                              final workerAssignments =
+                                  byWorker[worker['id']] ?? const <Assignment>[];
 
+                              // Every figure below comes from production and
+                              // recall records via the repository. This block
+                              // used to derive status from hardcoded employee
+                              // codes and apply a fixed 0.67 completion rate.
                               double workerAssigned = 0.0;
+                              double completedQty = 0.0;
+                              double recalledQty = 0.0;
                               for (final a in workerAssignments) {
-                                workerAssigned +=
-                                    (a['assigned_quantity'] as double? ?? 0.0);
+                                workerAssigned += a.assignedQuantity;
+                                completedQty += a.completedQuantity;
+                                recalledQty += a.recalledQuantity;
                               }
 
-                              // Match status according to worker
-                              String status = 'SYNCED';
-                              String statusLabel = 'SYNCED';
-
-                              if (worker['ma_nv'] == 'MNV00147') {
-                                status = 'PENDING';
-                                statusLabel = '2 PENDING';
-                              } else if (worker['ma_nv'] == 'MNV00158') {
-                                status = 'FAILED';
-                                statusLabel = '1 FAILED';
-                              } else if (worker['ma_nv'] == 'MNV00199') {
-                                status = 'OPEN';
-                                statusLabel = 'CHƯA XÁC NHẬN';
-                              }
-
-                              final completionRate = workerAssigned > 0
-                                  ? (status == 'OPEN' ? 0.0 : 0.67)
-                                  : 0.0;
-                              final completedQty =
-                                  workerAssigned * completionRate;
+                              final effectiveQty =
+                                  ProductionMath.calculateEffectiveAssigned(
+                                    workerAssigned,
+                                    recalledQty,
+                                  );
+                              final completionRate =
+                                  ProductionMath.calculateCompletionRate(
+                                    completedQty,
+                                    effectiveQty,
+                                  );
                               final remainingQty =
-                                  workerAssigned - completedQty;
+                                  ProductionMath.calculateRemaining(
+                                    effectiveQty,
+                                    completedQty,
+                                  );
+
+                              final (status, statusLabel) = _workerSyncBadge(
+                                workerAssignments,
+                              );
 
                               return Container(
                                 margin: const EdgeInsets.only(bottom: 10),
@@ -625,7 +563,7 @@ class _S06SupervisorOverviewScreenState
                                             children: [
                                               _buildStatItem(
                                                 'Giao',
-                                                workerAssigned.toStringAsFixed(
+                                                effectiveQty.toStringAsFixed(
                                                   0,
                                                 ),
                                               ),
@@ -698,6 +636,29 @@ class _S06SupervisorOverviewScreenState
         ),
       ),
     );
+  }
+
+  /// Derives the worker's sync badge from their assignments' real sync state.
+  ///
+  /// Returns (chip status, chip label). The failed count leads, because that is
+  /// what a supervisor has to act on.
+  (String, String) _workerSyncBadge(List<Assignment> assignments) {
+    if (assignments.isEmpty) return ('OPEN', 'CHƯA GIAO');
+
+    final failed = assignments
+        .where((a) => a.syncStatus == SyncStatus.failed)
+        .length;
+    if (failed > 0) return ('FAILED', '$failed FAILED');
+
+    final pending = assignments
+        .where((a) => a.syncStatus == SyncStatus.pending)
+        .length;
+    if (pending > 0) return ('PENDING', '$pending PENDING');
+
+    final anyCompleted = assignments.any((a) => a.completedQuantity > 0);
+    if (!anyCompleted) return ('OPEN', 'CHƯA XÁC NHẬN');
+
+    return ('SYNCED', 'SYNCED');
   }
 
   Widget _buildStatItem(String label, String value) {

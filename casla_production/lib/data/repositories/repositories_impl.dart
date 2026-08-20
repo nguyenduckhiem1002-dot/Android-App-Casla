@@ -25,54 +25,6 @@ class AuthRepositoryImpl implements AuthRepository {
   }
 
   @override
-  Future<UserSession> loginByMaNv(String maNv) async {
-    final emp = await db.getEmployeeByCode(maNv);
-    if (emp == null) {
-      throw Exception('Mã nhân viên $maNv không tồn tại');
-    }
-
-    final isSupervisor = emp['vai_tro'] == 'SUPERVISOR';
-    if (!isSupervisor) {
-      throw Exception(
-        'Công nhân không có quyền đăng nhập. Hệ thống chỉ dành cho Supervisor.',
-      );
-    }
-
-    final permissions = {
-      Permission.viewOwnProduction,
-      Permission.assignQuantity,
-      Permission.recallAssignment,
-      Permission.viewTeamProduction,
-      Permission.viewEmployeeHistory,
-      Permission.viewSyncStatus,
-      Permission.switchUser,
-    };
-
-    final session = UserSession(
-      id: emp['id'] as String,
-      maNv: emp['ma_nv'] as String,
-      fullName: emp['ten'] as String,
-      teamName: emp['bo_phan'] as String,
-      role: isSupervisor ? UserRole.supervisor : UserRole.worker,
-      permissions: permissions,
-    );
-
-    // Audit login
-    await db.insertAuditLog({
-      'id': IdGenerator.newId(),
-      'event_type': 'LOGIN',
-      'actor_id': maNv,
-      'target_employee_id': maNv,
-      'entity_type': 'SESSION',
-      'entity_id': session.id,
-      'device_id': DeviceInfoHelper.deviceId,
-      'occurred_at_utc': DateTime.now().millisecondsSinceEpoch,
-    });
-
-    return session;
-  }
-
-  @override
   Future<UserSession> loginByCredentials(
     String username,
     String password,
@@ -275,16 +227,22 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
   }
 
   /// Batch-maps assignment entities to domain models.
-  /// Fetches employees and orders ONCE, builds O(1) lookup maps,
-  /// then maps each assignment without redundant DB queries.
+  ///
+  /// Every lookup table is fetched once up front, so the cost is
+  /// O(E + O + P + R + N) rather than O(N × (P + R)). The per-assignment
+  /// `getCompletedQuantity` / `getRecalledQuantity` calls that used to sit
+  /// inside this loop each scanned the full records table.
   Future<List<Assignment>> _mapToAssignmentsBatch(
     List<Map<String, dynamic>> entities,
   ) async {
     if (entities.isEmpty) return [];
 
-    // Fetch lookup data once — O(E + O) instead of O(N × (E + O))
     final employees = await db.getAllEmployees();
-    final orders = await db.getOpenOrders();
+    // All orders, not just OPEN ones: an assignment whose order has since closed
+    // still has to render its real code and product name.
+    final orders = await db.getAllOrders();
+    final completedByAssignment = await db.getCompletedQuantitiesByAssignment();
+    final recalledByAssignment = await db.getRecalledQuantitiesByAssignment();
 
     final empLookup = <String, Map<String, dynamic>>{};
     for (final e in employees) {
@@ -305,8 +263,8 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
       final emp = empLookup[empId];
       final ord = orderLookup[orderId];
 
-      final completed = await db.getCompletedQuantity(assignmentId);
-      final recalled = await db.getRecalledQuantity(assignmentId);
+      final completed = completedByAssignment[assignmentId] ?? 0.0;
+      final recalled = recalledByAssignment[assignmentId] ?? 0.0;
 
       result.add(Assignment(
         id: assignmentId,
