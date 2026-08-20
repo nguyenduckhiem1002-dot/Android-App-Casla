@@ -24,7 +24,9 @@ dependencies:
   # Utilities
   uuid: 4.6.0
   intl: 0.20.3
-  device_info_plus: 13.2.0
+  # 13.1+ calls NSProcessInfo.isiOSAppOnVision, which requires Xcode 26.1+.
+  # Keep 13.0.0 until the CI macOS image is upgraded to that SDK.
+  device_info_plus: 13.0.0
   logger: 2.7.0
 
   # UI
