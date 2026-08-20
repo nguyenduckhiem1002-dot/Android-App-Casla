@@ -23,7 +23,7 @@ class SapODataClient {
   String? _csrfToken;
   List<String>? _cookies;
   late final Dio dio;
-  final _logger = Logger(filter: ProductionFilter());
+  final _logger = Logger(filter: DebugOnlyLogFilter());
 
   SapODataClient({String? baseUrl, String? authToken})
     : baseUrl = _normalizeBaseUrl(baseUrl ?? AppConfig.sapBaseUrl) {
@@ -66,7 +66,9 @@ class SapODataClient {
         },
         onError: (error, handler) {
           _logger.e(
-            'SAP API Error: ${error.response?.statusCode} ${error.message}',
+            redactSecrets(
+              'SAP API Error: ${error.response?.statusCode} ${error.message}',
+            ),
           );
           handler.next(error);
         },
@@ -119,7 +121,9 @@ class SapODataClient {
         "$key$sep'[^']*'", // password='secret'
         '$key$sep"[^"]*"', // password="secret"
         '$key$sep%27.*?%27', // password=%27secret%27  (what Dio prints)
-        r'' '$key$sep' r"[^&\s,}\]\[]+", // password=secret
+        r''
+            '$key$sep'
+            r"[^&\s,}\]\[]+", // password=secret
       ];
 
       for (final pattern in patterns) {
@@ -155,8 +159,22 @@ class SapODataClient {
       );
     }
 
+    if (kReleaseMode && uri.scheme != 'https') {
+      throw const SapConfigurationException(
+        'Bản phát hành chỉ cho phép kết nối SAP qua HTTPS.',
+      );
+    }
+
+    if (uri.host == 'your-host' || uri.host.endsWith('.example')) {
+      throw const SapConfigurationException(
+        'SAP_BASE_URL vẫn đang dùng giá trị mẫu.',
+      );
+    }
+
     if (AppConfig.sapBasicAuthUser.isEmpty ||
-        AppConfig.sapBasicAuthPassword.isEmpty) {
+        AppConfig.sapBasicAuthPassword.isEmpty ||
+        AppConfig.sapBasicAuthUser == 'replace-me' ||
+        AppConfig.sapBasicAuthPassword == 'replace-me') {
       throw const SapConfigurationException(
         'Thiếu thông tin xác thực SAP trong file .env. Vui lòng kiểm tra '
         'SAP_BASIC_AUTH_USER và SAP_BASIC_AUTH_PASSWORD.',
@@ -218,7 +236,7 @@ class SapODataClient {
     } on SapConfigurationException {
       rethrow;
     } catch (e) {
-      _logger.w('Failed to fetch SAP CSRF token: $e');
+      _logger.w(redactSecrets('Failed to fetch SAP CSRF token: $e'));
       return null;
     }
   }
@@ -248,10 +266,9 @@ class SapODataClient {
   bool get isAuthenticated => _authToken != null && _authToken!.isNotEmpty;
 }
 
-/// Production log filter — disable verbose logging in release
-class ProductionFilter extends LogFilter {
+/// SAP logs are disabled completely outside debug builds. Network exceptions
+/// can contain full URLs, including legacy OData query parameters with tokens.
+class DebugOnlyLogFilter extends LogFilter {
   @override
-  bool shouldLog(LogEvent event) {
-    return kDebugMode || event.level.index >= Level.warning.index;
-  }
+  bool shouldLog(LogEvent event) => kDebugMode;
 }

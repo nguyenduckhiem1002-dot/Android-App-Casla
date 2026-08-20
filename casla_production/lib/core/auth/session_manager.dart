@@ -6,7 +6,6 @@ import '../../data/repositories/repositories_impl.dart';
 import '../../domain/entities/entities.dart';
 import '../../domain/entities/enums.dart';
 import '../../core/database/casla_database.dart';
-import '../../domain/policies/shift_resolver.dart';
 
 /// App-level state holder (simple ChangeNotifier for MVP, upgrade to Riverpod later)
 class AppState extends ChangeNotifier {
@@ -30,8 +29,6 @@ class AppState extends ChangeNotifier {
   bool get isLoggedIn => _currentSession != null;
   UserRole? get currentRole => _currentSession?.role;
 
-  ShiftInfo get currentShift => ShiftResolver.getCurrentShiftInfo();
-
   Future<bool> loginByCredentials(String username, String password) async {
     try {
       _currentSession = await authRepo.loginByCredentials(username, password);
@@ -44,10 +41,14 @@ class AppState extends ChangeNotifier {
 
   Future<void> logout() async {
     final token = _currentSession?.accessToken;
-    if (token != null && token.isNotEmpty) {
-      await authRepo.logout(accessToken: token);
+    try {
+      if (token != null && token.isNotEmpty) {
+        await authRepo.logout(accessToken: token);
+      }
+    } finally {
+      // Local access must end even if SAP is offline or logout times out.
+      _currentSession = null;
+      notifyListeners();
     }
-    _currentSession = null;
-    notifyListeners();
   }
 }

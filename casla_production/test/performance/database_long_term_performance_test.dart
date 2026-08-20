@@ -75,12 +75,9 @@ void main() {
     test(
       '3. Employee Search Benchmark: Lookup by employee code in < 20ms',
       () async {
-        // Seed employee
-        await db.ensureEmployeeExists('PERF001', 'Nguyễn Văn Performance');
-
         final Stopwatch stopwatch = Stopwatch()..start();
 
-        final worker = await db.getEmployeeByCode('PERF001');
+        final worker = await db.getEmployeeByCode('MNV00123');
 
         stopwatch.stop();
         debugPrint(
@@ -88,7 +85,7 @@ void main() {
         );
 
         expect(worker, isNotNull);
-        expect(worker!['ma_nv'], equals('PERF001'));
+        expect(worker!['ma_nv'], equals('MNV00123'));
         expect(stopwatch.elapsedMilliseconds, lessThan(20));
       },
     );

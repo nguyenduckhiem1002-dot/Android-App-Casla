@@ -12,11 +12,12 @@ void main() {
       expect(json.isValid, isTrue);
       expect(json.maNv, 'NV42');
       expect(delimited.isValid, isTrue);
-      expect(delimited.tenNv, 'Trần Thị C');
+      expect(delimited.maNv, 'NV43');
     });
 
     test('rejects unrelated QR payloads', () {
       expect(WorkerQrParser.parse('https://example.com').isValid, isFalse);
+      expect(WorkerQrParser.parse('NV-FAKE').isValid, isFalse);
       expect(WorkerQrParser.parse('').isValid, isFalse);
     });
   });

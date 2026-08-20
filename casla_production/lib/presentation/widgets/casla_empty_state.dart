@@ -38,11 +38,7 @@ class CaslaEmptyState extends StatelessWidget {
                   width: 1,
                 ),
               ),
-              child: Icon(
-                icon,
-                size: 30,
-                color: CaslaColors.primaryNavy,
-              ),
+              child: Icon(icon, size: 30, color: CaslaColors.primaryNavy),
             ),
             const SizedBox(height: 16),
             Text(

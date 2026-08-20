@@ -64,6 +64,9 @@ class _S02bAccountLoginScreenState
         _errorMessage = e.toString().replaceAll('Exception: ', '');
       });
     } finally {
+      // Do not retain credentials in the controller after an authentication
+      // attempt (successful or otherwise).
+      _passwordController.clear();
       if (mounted) {
         setState(() {
           _isLoading = false;
@@ -128,7 +131,9 @@ class _S02bAccountLoginScreenState
                                 color: CaslaColors.dangerBg,
                                 borderRadius: BorderRadius.circular(8),
                                 border: Border.all(
-                                  color: CaslaColors.danger.withValues(alpha: 0.25),
+                                  color: CaslaColors.danger.withValues(
+                                    alpha: 0.25,
+                                  ),
                                   width: 1,
                                 ),
                               ),

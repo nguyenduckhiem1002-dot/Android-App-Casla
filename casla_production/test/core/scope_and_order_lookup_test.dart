@@ -112,9 +112,11 @@ void main() {
       expect(order?['ma_sp'], 'SP-ATN');
     });
 
-    test('falls back to a bare code when the payload is not valid JSON',
-        () async {
-      expect(await db.getOrderByCode('{not json'), isNull);
-    });
+    test(
+      'falls back to a bare code when the payload is not valid JSON',
+      () async {
+        expect(await db.getOrderByCode('{not json'), isNull);
+      },
+    );
   });
 }

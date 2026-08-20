@@ -50,67 +50,63 @@ class _S07CreateAssignmentWizardScreenState
       context,
       MaterialPageRoute(
         builder: (context) => Scaffold(
-          body: Stack(
-            children: [
-              QrScannerView(
-                title: 'Quét mã QR công nhân',
-                subtitle:
-                    'Đưa thẻ nhân viên (mã NV0001 - Nguyễn Văn A) vào khung hình.',
-                onScan: (code) {
-                  final res = WorkerQrParser.parse(code);
-                  if (!res.isValid) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(res.error ?? 'Mã QR không hợp lệ'),
-                        backgroundColor: CaslaColors.danger,
-                      ),
-                    );
-                    return;
-                  }
-                  if (mounted) {
-                    Navigator.pop(context); // Pop camera page
-                    setState(() {
-                      _selectedWorker = {
-                        'id': 'emp-${res.maNv}',
-                        'ma_nv': res.maNv,
-                        'ten': res.tenNv,
-                        'display': res.displayText,
-                        'bo_phan': 'Công nhân sản xuất',
-                      };
-                    });
-                  }
-                },
-              ),
-              Positioned(
-                bottom: 30,
-                left: 20,
-                right: 20,
-                child: ElevatedButton.icon(
-                  onPressed: () {
-                    final parsed = WorkerQrParser.parseWorkerQr('NV0001');
-                    Navigator.pop(context);
-                    setState(() {
-                      _selectedWorker = {
-                        'id': 'emp-${parsed['ma_nv']}',
-                        'ma_nv': parsed['ma_nv'],
-                        'ten': parsed['ten'],
-                        'bo_phan': 'Công nhân sản xuất',
-                      };
-                    });
-                  },
-                  icon: const Icon(Icons.qr_code),
-                  label: const Text('Mô phỏng Quét Mã NV0001 (Nguyễn Văn A)'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: CaslaColors.accentGold,
-                    foregroundColor: CaslaColors.navy900,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
+          body: QrScannerView(
+            title: 'Quét mã QR công nhân',
+            subtitle: 'Đưa thẻ nhân viên vào khung hình.',
+            onScan: (code) async {
+              final res = WorkerQrParser.parse(code);
+              if (!res.isValid) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(res.error ?? 'Mã QR không hợp lệ'),
+                    backgroundColor: CaslaColors.danger,
                   ),
-                ),
-              ),
-            ],
+                );
+                return;
+              }
+              final worker = await ref
+                  .read(appStateProvider)
+                  .db
+                  .getEmployeeByCode(res.maNv);
+              if (!mounted || !context.mounted) return;
+              if (worker == null) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Nhân viên chưa tồn tại trong dữ liệu được phân quyền.',
+                    ),
+                    backgroundColor: CaslaColors.danger,
+                  ),
+                );
+                return;
+              }
+              final session = ref.read(appStateProvider).currentSession;
+              final isInScope = await ref
+                  .read(appStateProvider)
+                  .db
+                  .isEmployeeInScope(
+                    worker['id'] as String,
+                    session?.toIds ?? const [],
+                  );
+              if (!mounted || !context.mounted) return;
+              if (!isInScope) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Nhân viên không thuộc phạm vi tổ được phân quyền.',
+                    ),
+                    backgroundColor: CaslaColors.danger,
+                  ),
+                );
+                return;
+              }
+              if (mounted) {
+                Navigator.pop(context); // Pop camera page
+                setState(() {
+                  _selectedWorker = worker;
+                });
+              }
+            },
           ),
         ),
       ),
@@ -165,56 +161,58 @@ class _S07CreateAssignmentWizardScreenState
 
     // Selection is handled by the onTap callbacks inside the sheet, so the
     // sheet's own result future is intentionally not awaited.
-    unawaited(showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (bottomSheetContext) {
-        return Container(
-          padding: const EdgeInsets.all(18),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Chọn sản phẩm',
-                style: TextStyle(
-                  fontFamily: 'Manrope',
-                  fontWeight: FontWeight.w800,
-                  fontSize: 16,
-                  color: CaslaColors.primaryNavy,
+    unawaited(
+      showModalBottomSheet(
+        context: context,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        builder: (bottomSheetContext) {
+          return Container(
+            padding: const EdgeInsets.all(18),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Chọn sản phẩm',
+                  style: TextStyle(
+                    fontFamily: 'Manrope',
+                    fontWeight: FontWeight.w800,
+                    fontSize: 16,
+                    color: CaslaColors.primaryNavy,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              ListView.builder(
-                shrinkWrap: true,
-                itemCount: openOrders.length,
-                itemBuilder: (context, index) {
-                  final o = openOrders[index];
-                  return ListTile(
-                    title: Text(
-                      o['ten_sp'] ?? '',
-                      style: const TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                    subtitle: Text(o['dac_tinh'] ?? ''),
-                    onTap: () {
-                      Navigator.pop(bottomSheetContext); // Pop bottom sheet
-                      if (isFromCamera && mounted) {
-                        Navigator.pop(context); // Pop camera page
-                      }
-                      setState(() {
-                        _selectedOrder = o;
-                      });
-                    },
-                  );
-                },
-              ),
-            ],
-          ),
-        );
-      },
-    ));
+                const SizedBox(height: 12),
+                ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: openOrders.length,
+                  itemBuilder: (context, index) {
+                    final o = openOrders[index];
+                    return ListTile(
+                      title: Text(
+                        o['ten_sp'] ?? '',
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      subtitle: Text(o['dac_tinh'] ?? ''),
+                      onTap: () {
+                        Navigator.pop(bottomSheetContext); // Pop bottom sheet
+                        if (isFromCamera && mounted) {
+                          Navigator.pop(context); // Pop camera page
+                        }
+                        setState(() {
+                          _selectedOrder = o;
+                        });
+                      },
+                    );
+                  },
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
   }
 
   Future<void> _submitAssignment() async {
@@ -254,19 +252,27 @@ class _S07CreateAssignmentWizardScreenState
     final appState = ref.read(appStateProvider);
     final emp = appState.currentSession;
 
-    final workerMaNv = (_selectedWorker!['ma_nv'] ?? _selectedWorker!['id'])
-        .toString();
-    final workerTen = (_selectedWorker!['ten'] ?? workerMaNv).toString();
-
-    // Ensure worker exists in system DB/API transaction on submission
-    final empRecord = await appState.db.ensureEmployeeExists(
-      workerMaNv,
-      workerTen,
-    );
-
-    final workerId = empRecord['id'] as String;
+    final workerId = _selectedWorker!['id'] as String;
     final orderId = _selectedOrder!['id'] as String;
-    final toId = (empRecord['to_ids'] as List?)?.first as String? ?? 'team-1';
+    final teamIds = (_selectedWorker!['to_ids'] as List?)?.cast<String>() ?? [];
+    final allowedTeams = emp?.toIds.toSet() ?? const <String>{};
+    String? toId;
+    for (final teamId in teamIds) {
+      if (allowedTeams.contains(teamId)) {
+        toId = teamId;
+        break;
+      }
+    }
+    if (toId == null) {
+      setState(() => _isSubmitting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Công nhân không thuộc phạm vi tổ được phân quyền.'),
+          backgroundColor: CaslaColors.danger,
+        ),
+      );
+      return;
+    }
     final createdBy = emp?.maNv ?? '';
 
     final dateFormatted = DateFormat('yyyy-MM-dd').format(_startDate);
@@ -656,5 +662,4 @@ class _S07CreateAssignmentWizardScreenState
       ),
     );
   }
-
 }

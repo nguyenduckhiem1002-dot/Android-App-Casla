@@ -4,22 +4,11 @@
 // Spec: Section 9.1
 
 import '../entities/entities.dart';
-import '../entities/enums.dart';
 
 /// Authentication & session management
 abstract class AuthRepository {
   Future<UserSession> loginByCredentials(String username, String password);
-  Future<List<Permission>> getSessionPermissions(String userId);
   Future<void> logout({String? accessToken});
-}
-
-/// Employee & master data
-abstract class MasterDataRepository {
-  Future<Employee?> findEmployeeByCode(String maNv);
-  Future<List<Employee>> getAllEmployees();
-  Future<List<ProductionOrder>> getOpenOrders();
-  Future<List<Team>> getTeams();
-  Future<List<Team>> getSupervisorScope(String supervisorId);
 }
 
 /// Assignment CRUD & queries
@@ -69,12 +58,4 @@ abstract class RecallRepository {
   });
 
   Future<double> getRecalledQuantity(String assignmentId);
-}
-
-/// Sync queue management
-abstract class SyncRepository {
-  Stream<List<SyncQueueItem>> watchSyncQueue();
-  Stream<int> watchPendingCount();
-  Future<int> processSyncQueue();
-  Future<void> retryItem(String itemId);
 }

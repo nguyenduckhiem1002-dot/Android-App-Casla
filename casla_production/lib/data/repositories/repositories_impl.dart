@@ -5,6 +5,7 @@
 import '../../core/database/casla_database.dart';
 import '../../core/utils/id_generator.dart';
 import '../../core/utils/device_info.dart';
+import 'package:flutter/foundation.dart';
 import '../../domain/entities/entities.dart';
 import '../../domain/entities/enums.dart';
 import '../../domain/policies/production_math.dart';
@@ -35,10 +36,13 @@ class AuthRepositoryImpl implements AuthRepository {
       final fullName =
           (userDetail?['FullName'] ?? userDetail?['Username'] ?? username)
               .toString();
-      final email =
-          (userDetail?['Email'] ??
-                  userDetail?['email'] ??
-                  '$username@caslastone.com')
+      final email = (userDetail?['Email'] ?? userDetail?['email'] ?? '')
+          .toString();
+      final teamName =
+          (userDetail?['TeamName'] ??
+                  userDetail?['team_name'] ??
+                  userDetail?['TenTo'] ??
+                  '')
               .toString();
       final pwdReqVal =
           userDetail?['PasswordChangeRequired'] ??
@@ -49,15 +53,7 @@ class AuthRepositoryImpl implements AuthRepository {
           pwdReqVal == 1;
       final userUuid = sapResult.userUuid;
 
-      final permissions = {
-        Permission.viewOwnProduction,
-        Permission.assignQuantity,
-        Permission.recallAssignment,
-        Permission.viewTeamProduction,
-        Permission.viewEmployeeHistory,
-        Permission.viewSyncStatus,
-        Permission.switchUser,
-      };
+      final authorization = parseAuthorization(userDetail);
 
       final session = UserSession(
         id: userUuid.isNotEmpty ? userUuid : 'sap-$username',
@@ -66,9 +62,10 @@ class AuthRepositoryImpl implements AuthRepository {
         email: email,
         accessToken: sapResult.accessToken,
         passwordChangeRequired: passwordChangeRequired,
-        teamName: 'Supervisor (SAP)',
-        role: UserRole.supervisor,
-        permissions: permissions,
+        teamName: teamName,
+        role: authorization.role,
+        permissions: authorization.permissions,
+        toIds: authorization.teamIds,
       );
 
       await db.insertAuditLog({
@@ -91,47 +88,108 @@ class AuthRepositoryImpl implements AuthRepository {
   }
 
   @override
-  Future<List<Permission>> getSessionPermissions(String userId) async {
-    return []; // From SAP in production
-  }
-
-  @override
   Future<void> logout({String? accessToken}) async {
     if (accessToken != null && accessToken.isNotEmpty) {
       await _sapAuth.logout(accessToken);
     }
   }
 
-  Future<List<Employee>> getAllEmployees() async {
-    final list = await db.getAllEmployees();
-    return list
-        .map(
-          (e) => Employee(
-            id: e['id'] as String,
-            maNv: e['ma_nv'] as String,
-            fullName: e['ten'] as String,
-            department: e['bo_phan'] as String,
-            status: e['trang_thai'] as String? ?? 'ACTIVE',
-          ),
-        )
-        .toList();
+  /// Converts authorization claims returned by SAP into the app session.
+  /// Missing claims fail closed; a successful login must never silently become
+  /// a fully privileged supervisor session.
+  @visibleForTesting
+  static ({UserRole role, Set<Permission> permissions, List<String> teamIds})
+  parseAuthorization(Map<String, dynamic>? detail) {
+    if (detail == null) {
+      throw Exception('Tài khoản SAP chưa có thông tin phân quyền.');
+    }
+
+    final rawRole = _firstClaim(detail, const [
+      'Role',
+      'role',
+      'UserRole',
+      'user_role',
+      'VaiTro',
+      'vai_tro',
+    ]);
+    final normalizedRole = rawRole?.toString().trim().toUpperCase();
+    final role = switch (normalizedRole) {
+      'SUPERVISOR' => UserRole.supervisor,
+      'SAP_ADMIN' => UserRole.sapAdmin,
+      _ => throw Exception(
+        'Tài khoản không có vai trò Supervisor được phép sử dụng ứng dụng.',
+      ),
+    };
+
+    final permissionCodes = _claimCodes(
+      _firstClaim(detail, const [
+        'Permissions',
+        'permissions',
+        'PermissionCodes',
+        'permission_codes',
+        'QuyenHan',
+        'quyen_han',
+      ]),
+    );
+    final permissions = Permission.values
+        .where((permission) => permissionCodes.contains(permission.code))
+        .toSet();
+    if (!permissions.contains(Permission.viewTeamProduction)) {
+      throw Exception('Tài khoản chưa được cấp quyền VIEW_TEAM_PRODUCTION.');
+    }
+
+    final teamIds = _claimCodes(
+      _firstClaim(detail, const [
+        'TeamIds',
+        'team_ids',
+        'ToIds',
+        'to_ids',
+        'SupervisorScope',
+        'supervisor_scope',
+      ]),
+      normalizeUpperCase: false,
+    ).toList(growable: false);
+    if (teamIds.isEmpty) {
+      throw Exception('Tài khoản chưa được phân phạm vi tổ sản xuất.');
+    }
+
+    return (role: role, permissions: permissions, teamIds: teamIds);
   }
 
-  Future<List<ProductionOrder>> getOpenOrders() async {
-    final list = await db.getOpenOrders();
-    return list
-        .map(
-          (o) => ProductionOrder(
-            id: o['id'] as String,
-            orderCode: o['ma_don_hang'] as String,
-            productCode: o['ma_sp'] as String,
-            productName: o['ten_sp'] as String,
-            uom: o['uom'] as String,
-            totalQuantity: o['so_luong_don'] as double,
-            status: o['trang_thai'] as String? ?? 'OPEN',
-          ),
-        )
-        .toList();
+  static dynamic _firstClaim(Map<String, dynamic> detail, List<String> keys) {
+    for (final key in keys) {
+      final value = detail[key];
+      if (value != null) return value;
+    }
+    return null;
+  }
+
+  static Set<String> _claimCodes(
+    dynamic claim, {
+    bool normalizeUpperCase = true,
+  }) {
+    if (claim == null) return const {};
+    final values = claim is Iterable
+        ? claim
+        : claim.toString().split(RegExp(r'[,;]'));
+    return values
+        .map((value) {
+          if (value is Map) {
+            return (value['Code'] ??
+                    value['code'] ??
+                    value['Id'] ??
+                    value['id'])
+                ?.toString();
+          }
+          return value.toString();
+        })
+        .whereType<String>()
+        .map((value) {
+          final trimmed = value.trim();
+          return normalizeUpperCase ? trimmed.toUpperCase() : trimmed;
+        })
+        .where((value) => value.isNotEmpty)
+        .toSet();
   }
 }
 
@@ -266,37 +324,40 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
       final completed = completedByAssignment[assignmentId] ?? 0.0;
       final recalled = recalledByAssignment[assignmentId] ?? 0.0;
 
-      result.add(Assignment(
-        id: assignmentId,
-        workerId: empId,
-        workerMaNv: emp?['ma_nv'] as String? ?? empId,
-        workerName: emp?['ten'] as String? ?? 'Công nhân',
-        teamId: entity['to_id'] as String,
-        orderId: orderId,
-        orderCode: ord?['ma_don_hang'] as String? ?? orderId,
-        productCode: ord?['ma_sp'] as String? ?? 'SP',
-        productName: ord?['ten_sp'] as String? ?? 'Sản phẩm',
-        uom: ord?['uom'] as String? ?? 'cái',
-        assignedQuantity: entity['assigned_quantity'] as double,
-        completedQuantity: completed,
-        recalledQuantity: recalled,
-        businessDate: entity['business_date'] as String,
-        shiftId: entity['shift_id'] as String,
-        status: AssignmentStatus.values.firstWhere(
-          (s) =>
-              s.name.toUpperCase() == (entity['status'] as String).toUpperCase(),
-          orElse: () => AssignmentStatus.open,
+      result.add(
+        Assignment(
+          id: assignmentId,
+          workerId: empId,
+          workerMaNv: emp?['ma_nv'] as String? ?? empId,
+          workerName: emp?['ten'] as String? ?? 'Công nhân',
+          teamId: entity['to_id'] as String,
+          orderId: orderId,
+          orderCode: ord?['ma_don_hang'] as String? ?? orderId,
+          productCode: ord?['ma_sp'] as String? ?? 'SP',
+          productName: ord?['ten_sp'] as String? ?? 'Sản phẩm',
+          uom: ord?['uom'] as String? ?? 'cái',
+          assignedQuantity: entity['assigned_quantity'] as double,
+          completedQuantity: completed,
+          recalledQuantity: recalled,
+          businessDate: entity['business_date'] as String,
+          shiftId: entity['shift_id'] as String,
+          status: AssignmentStatus.values.firstWhere(
+            (s) =>
+                s.name.toUpperCase() ==
+                (entity['status'] as String).toUpperCase(),
+            orElse: () => AssignmentStatus.open,
+          ),
+          note: entity['note'] as String?,
+          createdBy: entity['created_by'] as String,
+          idempotencyKey: entity['idempotency_key'] as String,
+          syncStatus: SyncStatus.values.firstWhere(
+            (s) =>
+                s.name.toUpperCase() ==
+                (entity['sync_status'] as String).toUpperCase(),
+            orElse: () => SyncStatus.pending,
+          ),
         ),
-        note: entity['note'] as String?,
-        createdBy: entity['created_by'] as String,
-        idempotencyKey: entity['idempotency_key'] as String,
-        syncStatus: SyncStatus.values.firstWhere(
-          (s) =>
-              s.name.toUpperCase() ==
-              (entity['sync_status'] as String).toUpperCase(),
-          orElse: () => SyncStatus.pending,
-        ),
-      ));
+      );
     }
     return result;
   }

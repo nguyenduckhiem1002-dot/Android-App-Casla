@@ -114,17 +114,3 @@ enum RecallReason {
   final String code;
   final String title;
 }
-
-/// Loại sự kiện audit (Spec 10)
-enum AuditEventType {
-  login,
-  switchUser,
-  viewEmployee,
-  createAssignment,
-  recordProduction,
-  recallAssignment,
-  manualRetry,
-  logout;
-
-  String get code => name.toUpperCase();
-}

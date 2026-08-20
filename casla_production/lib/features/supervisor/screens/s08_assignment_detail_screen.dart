@@ -249,8 +249,7 @@ class _S08AssignmentDetailScreenState
           final remaining = snapshot.data![2] as double;
           final recalled = snapshot.data![3] as double;
 
-          final initialAssigned =
-              widget.assignment.assignedQuantity;
+          final initialAssigned = widget.assignment.assignedQuantity;
           final pct = effective > 0 ? (completed / effective) : 0.0;
 
           return Column(

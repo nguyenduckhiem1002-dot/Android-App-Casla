@@ -44,29 +44,14 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
       }
 
       final db = ref.read(appStateProvider).db;
-      var worker = await db.getEmployeeByCode(code);
-
-      if (worker == null) {
-        // Fallback: search by partial match or ensure employee exists
-        final all = await db.getAllEmployees();
-        try {
-          worker = all.firstWhere(
-            (e) =>
-                (e['ma_nv'] ?? '').toString().toLowerCase() ==
-                    code.toLowerCase() ||
-                (e['ten'] ?? '').toString().toLowerCase().contains(
-                  code.toLowerCase(),
-                ) ||
-                (e['tai_khoan'] ?? '').toString().toLowerCase() ==
-                    code.toLowerCase(),
-          );
-        } catch (_) {
-          worker = await db.ensureEmployeeExists(
-            code.toUpperCase(),
-            'Công nhân $code',
-          );
-        }
-      }
+      final worker = await db.getEmployeeByCode(code);
+      if (worker == null) throw Exception('Unknown employee');
+      final session = ref.read(appStateProvider).currentSession;
+      final isInScope = await db.isEmployeeInScope(
+        worker['id'] as String,
+        session?.toIds ?? const [],
+      );
+      if (!isInScope) throw Exception('Employee outside supervisor scope');
 
       if (!mounted) return;
 
@@ -151,8 +136,8 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
                 controller: _manualController,
                 autofocus: true,
                 decoration: InputDecoration(
-                  labelText: 'Mã số NV / Tài khoản (ví dụ: MNV00123)',
-                  hintText: 'MNV00123 hoặc MNV00147',
+                  labelText: 'Mã số nhân viên / tài khoản',
+                  hintText: 'Nhập chính xác mã nhân viên',
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
@@ -162,46 +147,6 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
                   Navigator.pop(context);
                   _handleWorkerCodeScanned(val);
                 },
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                'Gợi ý quét nhanh cho quản lý:',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: CaslaColors.muted,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  ActionChip(
-                    avatar: const Icon(Icons.person, size: 16),
-                    label: const Text('MNV00123 (Nguyễn Văn A)'),
-                    onPressed: () {
-                      Navigator.pop(context);
-                      _handleWorkerCodeScanned('MNV00123');
-                    },
-                  ),
-                  ActionChip(
-                    avatar: const Icon(Icons.person, size: 16),
-                    label: const Text('MNV00147 (Lê Thị C)'),
-                    onPressed: () {
-                      Navigator.pop(context);
-                      _handleWorkerCodeScanned('MNV00147');
-                    },
-                  ),
-                  ActionChip(
-                    avatar: const Icon(Icons.person, size: 16),
-                    label: const Text('MNV00158 (Phạm Văn D)'),
-                    onPressed: () {
-                      Navigator.pop(context);
-                      _handleWorkerCodeScanned('MNV00158');
-                    },
-                  ),
-                ],
               ),
               const SizedBox(height: 16),
               SizedBox(

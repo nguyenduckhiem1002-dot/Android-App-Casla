@@ -11,6 +11,11 @@ import '../utils/id_generator.dart';
 
 /// In-memory mock database for MVP development.
 class CaslaDatabase {
+  static const bool _seedDemoData = bool.fromEnvironment(
+    'ENABLE_DEMO_DATA',
+    defaultValue: kDebugMode,
+  );
+
   // ─── In-memory storage ────────────────────────────────────────────
   final List<Map<String, dynamic>> _employees = [];
   final List<Map<String, dynamic>> _teams = [];
@@ -47,7 +52,7 @@ class CaslaDatabase {
   }
 
   CaslaDatabase._() {
-    _seedData();
+    if (_seedDemoData) _seedData();
   }
 
   String _uuid() => IdGenerator.newId();
@@ -421,28 +426,6 @@ class CaslaDatabase {
     }
   }
 
-  Future<Map<String, dynamic>> ensureEmployeeExists(
-    String maNv,
-    String ten,
-  ) async {
-    final existing = await getEmployeeByCode(maNv);
-    if (existing != null) {
-      return existing;
-    }
-    final newEmp = {
-      'id': 'emp-$maNv',
-      'ma_nv': maNv,
-      'ten': ten,
-      'bo_phan': 'Công nhân sản xuất',
-      'trang_thai': 'ACTIVE',
-      'vai_tro': 'CONG_NHAN',
-      'quyen_han': ['VIEW_OWN_PRODUCTION'],
-      'to_ids': ['team-1', 'team-2', 'team-3'],
-    };
-    _employees.add(newEmp);
-    return newEmp;
-  }
-
   Future<List<Map<String, dynamic>>> getAllEmployees() async =>
       List.from(_employees);
 
@@ -564,8 +547,7 @@ class CaslaDatabase {
   }
 
   Stream<List<Map<String, dynamic>>> watchAssignmentsByWorker(String workerId) {
-    Future.microtask(() => _notifyAssignments());
-    return _assignmentController.stream.map(
+    return _withInitial(_assignmentController, _assignments).map(
       (all) => all.where((a) => a['nhan_vien_id'] == workerId).toList()
         ..sort(
           (a, b) => (b['created_at_utc'] as int).compareTo(
@@ -576,8 +558,7 @@ class CaslaDatabase {
   }
 
   Stream<List<Map<String, dynamic>>> watchAllAssignments() {
-    Future.microtask(() => _notifyAssignments());
-    return _assignmentController.stream.map(
+    return _withInitial(_assignmentController, _assignments).map(
       (all) => List.from(all)
         ..sort(
           (a, b) => (b['created_at_utc'] as int).compareTo(
@@ -590,9 +571,9 @@ class CaslaDatabase {
   Stream<List<Map<String, dynamic>>> watchAssignmentsByTeams(
     List<String> teamIds,
   ) {
-    Future.microtask(() => _notifyAssignments());
-    return _assignmentController.stream.map(
-      (all) => all.where((a) => teamIds.contains(a['to_id'])).toList()
+    final scope = teamIds.toSet();
+    return _withInitial(_assignmentController, _assignments).map(
+      (all) => all.where((a) => scope.contains(a['to_id'])).toList()
         ..sort(
           (a, b) => (b['created_at_utc'] as int).compareTo(
             a['created_at_utc'] as int,
@@ -724,8 +705,7 @@ class CaslaDatabase {
   Stream<List<Map<String, dynamic>>> watchRecordsByAssignment(
     String assignmentId,
   ) {
-    Future.microtask(() => _notifyProduction());
-    return _productionController.stream.map(
+    return _withInitial(_productionController, _productionRecords).map(
       (all) =>
           all.where((r) => r['phan_cong_id'] == assignmentId).toList()..sort(
             (a, b) => (b['occurred_at_utc'] as int).compareTo(
@@ -762,21 +742,26 @@ class CaslaDatabase {
       return true;
     }).toList();
 
+    final assignmentById = {
+      for (final assignment in _assignments)
+        assignment['id'] as String: assignment,
+    };
+    final orderById = {
+      for (final order in _orders) order['id'] as String: order,
+    };
+    final employeeByCode = {
+      for (final employee in _employees) employee['ma_nv'] as String: employee,
+    };
+
     return records.map((r) {
-      final asg = _assignments.firstWhere((a) => a['id'] == r['phan_cong_id']);
-      final order = _orders.firstWhere(
-        (o) => o['id'] == asg['don_hang_id'],
-        orElse: () => {'ten_sp': 'Không rõ sản phẩm'},
-      );
-      final confirmer = _employees.firstWhere(
-        (e) => e['ma_nv'] == r['created_by'],
-        orElse: () => {'ten': r['created_by']},
-      );
+      final asg = assignmentById[r['phan_cong_id']]!;
+      final order = orderById[asg['don_hang_id']];
+      final confirmer = employeeByCode[r['created_by']];
       return {
         ...r,
-        'ten_sp': order['ten_sp'],
+        'ten_sp': order?['ten_sp'] ?? 'Không rõ sản phẩm',
         'ma_don_hang': asg['don_hang_id'],
-        'nguoi_xac_nhan': confirmer['ten'],
+        'nguoi_xac_nhan': confirmer?['ten'] ?? r['created_by'],
       };
     }).toList()..sort(
       (a, b) =>
@@ -812,8 +797,7 @@ class CaslaDatabase {
   Stream<List<Map<String, dynamic>>> watchRecallsByAssignment(
     String assignmentId,
   ) {
-    Future.microtask(() => _notifyRecalls());
-    return _recallController.stream.map(
+    return _withInitial(_recallController, _recallRecords).map(
       (all) =>
           all.where((r) => r['phan_cong_id'] == assignmentId).toList()..sort(
             (a, b) => (b['occurred_at_utc'] as int).compareTo(
@@ -832,13 +816,11 @@ class CaslaDatabase {
   }
 
   Stream<List<Map<String, dynamic>>> watchSyncQueue() {
-    Future.microtask(() => _notifySyncQueue());
-    return _syncQueueController.stream;
+    return _withInitial(_syncQueueController, _syncQueue);
   }
 
   Stream<List<Map<String, dynamic>>> watchSyncFeed() {
-    Future.microtask(() => _notifySyncQueue());
-    return _syncQueueController.stream.map(
+    return _withInitial(_syncQueueController, _syncQueue).map(
       (items) =>
           items.map((i) {
             final status = i['last_error_code'] != null ? 'FAILED' : 'PENDING';
@@ -880,11 +862,27 @@ class CaslaDatabase {
   Future<bool> retrySyncItem(String id) async {
     final idx = _syncQueue.indexWhere((i) => i['id'] == id);
     if (idx == -1) return false;
-    await deleteSyncQueueItem(id);
+    // Requeue without deleting the source transaction. The actual sync worker
+    // is responsible for removing the item only after SAP acknowledges it.
+    _syncQueue[idx]['last_error_code'] = null;
+    _syncQueue[idx]['last_error_message'] = null;
+    _syncQueue[idx]['next_retry_at_utc'] = null;
+    _notifySyncQueue();
     return true;
   }
 
   void _notifySyncQueue() => _syncQueueController.add(List.from(_syncQueue));
+
+  /// Emits the current snapshot only to the new subscriber, then forwards
+  /// updates. Broadcasting the initial value through the shared controller made
+  /// every existing screen rebuild whenever another screen subscribed.
+  Stream<List<Map<String, dynamic>>> _withInitial(
+    StreamController<List<Map<String, dynamic>>> controller,
+    List<Map<String, dynamic>> source,
+  ) async* {
+    yield List.from(source);
+    yield* controller.stream;
+  }
 
   // ─── Audit Log ────────────────────────────────────────────────────
   Future<void> insertAuditLog(Map<String, dynamic> log) async {

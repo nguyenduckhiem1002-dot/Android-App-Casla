@@ -7,7 +7,6 @@ import 'package:dio/dio.dart';
 import '../../core/utils/device_info.dart';
 import 'odata_sanitizer.dart';
 import 'sap_odata_client.dart';
-import 'sap_endpoints.dart';
 
 /// Result DTO for SAP Login Response
 class SapLoginResult {
@@ -44,11 +43,8 @@ class SapLoginResult {
 /// Handles SAP authentication flow against ZUI_USER_QR_API endpoint
 class SapAuthController {
   final SapODataClient client;
-  late final SapEndpoints endpoints;
 
-  SapAuthController(this.client) {
-    endpoints = SapEndpoints(client);
-  }
+  SapAuthController(this.client);
 
   /// Reads the OData `d` envelope from a response body of unknown shape.
   ///
@@ -69,13 +65,7 @@ class SapAuthController {
     try {
       return await _loginWithCredentials(username, password);
     } on DioException catch (error) {
-      if (error.response?.statusCode == 401) {
-        throw Exception(
-          'SAP từ chối xác thực Basic Auth. Vui lòng kiểm tra '
-          'SAP_BASIC_AUTH_USER và SAP_BASIC_AUTH_PASSWORD trong file .env.',
-        );
-      }
-      rethrow;
+      throw Exception(_safeNetworkMessage(error));
     }
   }
 
@@ -275,9 +265,22 @@ class SapAuthController {
       }
 
       return response.statusCode == 200;
+    } on DioException catch (error) {
+      throw Exception(_safeNetworkMessage(error));
     } catch (e) {
       if (e is Exception) rethrow;
       throw Exception('Không thể kết nối đến hệ thống SAP để đổi mật khẩu');
     }
+  }
+
+  static String _safeNetworkMessage(DioException error) {
+    final statusCode = error.response?.statusCode;
+    if (statusCode == 401 || statusCode == 403) {
+      return 'Không có quyền truy cập SAP. Vui lòng liên hệ quản trị viên.';
+    }
+    if (statusCode != null) {
+      return 'SAP tạm thời không xử lý được yêu cầu (HTTP $statusCode).';
+    }
+    return 'Không thể kết nối đến hệ thống SAP. Vui lòng thử lại.';
   }
 }

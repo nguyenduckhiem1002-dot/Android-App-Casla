@@ -206,7 +206,7 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       const SnackBar(
                                         content: Text(
-                                          'Đã đồng bộ lại thành công!',
+                                          'Đã đưa giao dịch vào hàng đợi đồng bộ.',
                                         ),
                                         backgroundColor: CaslaColors.success,
                                       ),

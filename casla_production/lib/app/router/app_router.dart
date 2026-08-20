@@ -2,6 +2,7 @@ import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/entities/entities.dart';
+import '../../domain/entities/enums.dart';
 import '../../main.dart';
 import 'app_route_observer.dart';
 
@@ -34,6 +35,23 @@ final routerProvider = Provider<GoRouter>((ref) {
 
       if (isLoggedIn && isGoingToLogin) {
         return '/supervisor';
+      }
+
+      if (isLoggedIn) {
+        final session = appState.currentSession!;
+        final location = state.matchedLocation;
+        final requiredPermission = switch (location) {
+          '/supervisor/create_assignment' => Permission.assignQuantity,
+          '/supervisor/recall_assignment' => Permission.recallAssignment,
+          '/supervisor/employee_detail' => Permission.viewEmployeeHistory,
+          '/supervisor/confirm_scan' => Permission.switchUser,
+          '/sync' => Permission.viewSyncStatus,
+          _ => Permission.viewTeamProduction,
+        };
+        if (!session.hasPermission(requiredPermission) &&
+            location != '/supervisor') {
+          return '/supervisor';
+        }
       }
 
       return null;

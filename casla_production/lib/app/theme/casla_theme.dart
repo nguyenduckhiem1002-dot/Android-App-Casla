@@ -81,7 +81,10 @@ class CaslaTheme {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
-          borderSide: const BorderSide(color: CaslaColors.primaryNavy, width: 1.8),
+          borderSide: const BorderSide(
+            color: CaslaColors.primaryNavy,
+            width: 1.8,
+          ),
         ),
         errorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),

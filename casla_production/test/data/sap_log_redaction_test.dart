@@ -28,7 +28,8 @@ void main() {
     });
 
     test('masks an unquoted query password', () {
-      const line = 'uri: https://sap.example/login?password=hunter2&device_id=x';
+      const line =
+          'uri: https://sap.example/login?password=hunter2&device_id=x';
 
       final out = SapODataClient.redactSecrets(line);
 

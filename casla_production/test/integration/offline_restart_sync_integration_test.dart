@@ -1,21 +1,16 @@
-// Integration Test — Offline Creation → App Restart → Online Transition → Background Sync
-// Spec Section 10 (System Verification & Resilience)
+// Integration tests for the current in-memory queue implementation.
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:casla_production/core/database/casla_database.dart';
-import 'package:casla_production/core/config/app_config.dart';
 
 void main() {
-  group('Integration Test: Offline → Restart → Online → Sync Flow', () {
+  group('In-memory pending queue flow', () {
     late CaslaDatabase db;
 
     setUp(() {
       CaslaDatabase.resetForTesting();
       db = CaslaDatabase.instance;
-      AppConfig.debugOverrideSapIntegration(false); // Start in Offline mode
     });
-
-    tearDown(AppConfig.debugClearSapIntegrationOverride);
 
     test(
       '1. Create production records while Offline & verify queue items',
@@ -45,37 +40,30 @@ void main() {
       },
     );
 
-    test(
-      '2. Restart simulation: Database state persists across restart',
-      () async {
-        // Record item before restart
-        await db.recordProductionOffline(
-          assignmentId: 'asg-005',
-          quantity: 80.0,
-          businessDate: '2026-08-08',
-          shiftId: 'SHIFT_1',
-          createdBy: 'MNV00199',
-          deviceId: 'PDA-TEST-002',
-        );
+    test('2. Singleton retains state during the current process', () async {
+      // Record item before restart
+      await db.recordProductionOffline(
+        assignmentId: 'asg-005',
+        quantity: 80.0,
+        businessDate: '2026-08-08',
+        shiftId: 'SHIFT_1',
+        createdBy: 'MNV00199',
+        deviceId: 'PDA-TEST-002',
+      );
 
-        // Simulate App Restart by retrieving instance & checking persistent lists
-        final restartedDb = CaslaDatabase.instance;
-        final pendingCountAfterRestart = await restartedDb
-            .watchPendingCount()
-            .first;
+      final sameProcessDb = CaslaDatabase.instance;
+      final pendingCountAfterRestart = await sameProcessDb
+          .watchPendingCount()
+          .first;
 
-        expect(pendingCountAfterRestart, greaterThanOrEqualTo(2));
+      expect(pendingCountAfterRestart, greaterThanOrEqualTo(2));
 
-        final history = await restartedDb.getProductionHistory('emp-5');
-        final offlineRecord = history.firstWhere((r) => r['quantity'] == 80.0);
-        expect(offlineRecord['sync_status'], equals('PENDING'));
-      },
-    );
+      final history = await sameProcessDb.getProductionHistory('emp-5');
+      final offlineRecord = history.firstWhere((r) => r['quantity'] == 80.0);
+      expect(offlineRecord['sync_status'], equals('PENDING'));
+    });
 
-    test('3. Online transition & Sync Queue draining', () async {
-      // Turn Online mode on
-      AppConfig.debugOverrideSapIntegration(true);
-
+    test('3. Queue items can be removed after a simulated sync', () async {
       // Retrieve all pending queue items
       final pendingQueue = await db.watchSyncFeed().first;
       final pendingItems = pendingQueue

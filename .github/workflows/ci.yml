@@ -24,7 +24,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: 3.44.8
           cache: true
           cache-key: flutter-${{ runner.os }}-${{ hashFiles('casla_production/pubspec.lock') }}
 
@@ -35,9 +35,7 @@ jobs:
         run: flutter pub get
 
       - name: Check formatting
-        # Keep this informational for now: the repository has pre-existing
-        # formatting drift, and formatting should not block builds.
-        run: dart format --output=none lib test
+        run: dart format --output=none --set-exit-if-changed lib test
 
       - name: Analyze
         run: flutter analyze --no-pub
@@ -58,7 +56,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: 3.44.8
           cache: true
           cache-key: flutter-${{ runner.os }}-${{ hashFiles('casla_production/pubspec.lock') }}
 

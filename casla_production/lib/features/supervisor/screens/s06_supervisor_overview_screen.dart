@@ -41,6 +41,12 @@ class _S06SupervisorOverviewScreenState
     });
   }
 
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
   // Filter States
   String _selectedTeamId = 'ALL'; // 'ALL', 'team-1', 'team-2', 'team-3'
   String _selectedTeamLabel = 'Tổ: Tất cả';
@@ -431,7 +437,8 @@ class _S06SupervisorOverviewScreenState
                         ? CaslaEmptyState(
                             icon: Icons.people_outline_rounded,
                             title: 'Không có nhân viên phù hợp',
-                            message: 'Không tìm thấy nhân viên nào phù hợp với bộ lọc hiện tại. Thử thay đổi ngày, ca hoặc tổ sản xuất.',
+                            message:
+                                'Không tìm thấy nhân viên nào phù hợp với bộ lọc hiện tại. Thử thay đổi ngày, ca hoặc tổ sản xuất.',
                           )
                         : ListView.builder(
                             padding: const EdgeInsets.fromLTRB(18, 0, 18, 80),
@@ -439,7 +446,8 @@ class _S06SupervisorOverviewScreenState
                             itemBuilder: (context, index) {
                               final worker = employees[index];
                               final workerAssignments =
-                                  byWorker[worker['id']] ?? const <Assignment>[];
+                                  byWorker[worker['id']] ??
+                                  const <Assignment>[];
 
                               // Every figure below comes from production and
                               // recall records via the repository. This block
@@ -563,9 +571,7 @@ class _S06SupervisorOverviewScreenState
                                             children: [
                                               _buildStatItem(
                                                 'Giao',
-                                                effectiveQty.toStringAsFixed(
-                                                  0,
-                                                ),
+                                                effectiveQty.toStringAsFixed(0),
                                               ),
                                               _buildStatItem(
                                                 'H.thành',
