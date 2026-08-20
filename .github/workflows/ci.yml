@@ -14,6 +14,9 @@ jobs:
   dart:
     name: Dart analyze and tests
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: casla_production
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,7 +26,7 @@ jobs:
         with:
           channel: stable
           cache: true
-          cache-key: flutter-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
+          cache-key: flutter-${{ runner.os }}-${{ hashFiles('casla_production/pubspec.lock') }}
 
       - name: Verify Flutter and Dart versions
         run: flutter --version
@@ -43,6 +46,9 @@ jobs:
   ios:
     name: iOS / Xcode build
     runs-on: macos-14
+    defaults:
+      run:
+        working-directory: casla_production
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -52,7 +58,7 @@ jobs:
         with:
           channel: stable
           cache: true
-          cache-key: flutter-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
+          cache-key: flutter-${{ runner.os }}-${{ hashFiles('casla_production/pubspec.lock') }}
 
       - name: Show toolchain
         run: |
@@ -66,7 +72,7 @@ jobs:
         run: flutter build ios --release --no-codesign
 
       - name: Validate Xcode archive settings
-        working-directory: ios
+        working-directory: casla_production/ios
         run: >-
           xcodebuild -workspace Runner.xcworkspace
           -scheme Runner
