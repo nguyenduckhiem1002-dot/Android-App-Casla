@@ -1,45 +1,71 @@
 // Core Database — Casla Production
-// Spec: Section 8 (Data model & database)
-// In-memory storage for MVP (Drift requires code generation setup)
+// Spec: Section 8 (Data model & database), Section 4.7 (Đồng bộ offline)
+//
+// SQLite-backed store. Everything a worker records survives an app restart, a
+// crash, and a dead battery — the sync queue is the app's durability guarantee,
+// not a convenience cache, so it must not live in RAM.
+//
+// The public API is deliberately Map-based and unchanged from the in-memory
+// version that preceded it: repositories and screens were already written
+// against it, and sqflite returns rows in exactly that shape.
 
 import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
+import 'package:sqflite/sqflite.dart';
 
 import '../utils/id_generator.dart';
+import 'casla_schema.dart';
 
-/// In-memory mock database for MVP development.
+/// Maps a `sync_queue.entity_type` onto the table holding the source row.
+///
+/// Both `PRODUCTION` and `PRODUCTION_RECORD` appear in the wild:
+/// `ProductionRepositoryImpl` writes the former, `recordProductionOffline` and
+/// the chaos tests write the latter. Accepting both here keeps the sync engine
+/// from silently skipping half the queue.
+const Map<String, String> _entitySourceTables = {
+  'ASSIGNMENT': 'assignments',
+  'PRODUCTION': 'production_records',
+  'PRODUCTION_RECORD': 'production_records',
+  'RECALL': 'recall_records',
+  'RECALL_RECORD': 'recall_records',
+};
+
 class CaslaDatabase {
   static const bool _seedDemoData = bool.fromEnvironment(
     'ENABLE_DEMO_DATA',
     defaultValue: kDebugMode,
   );
 
-  // ─── In-memory storage ────────────────────────────────────────────
-  final List<Map<String, dynamic>> _employees = [];
-  final List<Map<String, dynamic>> _teams = [];
-  final List<Map<String, dynamic>> _orders = [];
-  final List<Map<String, dynamic>> _assignments = [];
-  final List<Map<String, dynamic>> _productionRecords = [];
-  final List<Map<String, dynamic>> _recallRecords = [];
-  final List<Map<String, dynamic>> _syncQueue = [];
-  final List<Map<String, dynamic>> _auditLog = [];
+  /// Overrides the on-disk location. Tests point this at
+  /// `inMemoryDatabasePath` so each case starts from a freshly created schema.
+  @visibleForTesting
+  static String? databasePathOverride;
 
-  final _assignmentController =
-      StreamController<List<Map<String, dynamic>>>.broadcast();
-  final _syncQueueController =
-      StreamController<List<Map<String, dynamic>>>.broadcast();
-  final _productionController =
-      StreamController<List<Map<String, dynamic>>>.broadcast();
-  final _recallController =
-      StreamController<List<Map<String, dynamic>>>.broadcast();
+  final Future<Database> _database;
+
+  // Change tickers. Each `watch*` re-runs its query whenever the table it reads
+  // is written, which keeps the query in SQL instead of re-filtering in Dart.
+  final _assignmentController = StreamController<void>.broadcast();
+  final _syncQueueController = StreamController<void>.broadcast();
+  final _productionController = StreamController<void>.broadcast();
+  final _recallController = StreamController<void>.broadcast();
 
   static CaslaDatabase? _instance;
   static CaslaDatabase get instance {
-    _instance ??= CaslaDatabase._();
-    return _instance!;
+    return _instance ??= CaslaDatabase._(_open());
   }
+
+  CaslaDatabase._(this._database);
+
+  /// Completes once the schema is open and seeded.
+  ///
+  /// Call sites do not have to await this — every method below awaits the same
+  /// future — but `main()` does, so the first screen never renders against a
+  /// database that is still opening.
+  Future<void> get ready async => _database;
 
   /// Drops the singleton so the next `instance` access builds a fresh store.
   ///
@@ -51,13 +77,40 @@ class CaslaDatabase {
     _instance = null;
   }
 
-  CaslaDatabase._() {
-    if (_seedDemoData) _seedData();
+  static Future<Database> _open() async {
+    final path =
+        databasePathOverride ?? p.join(await getDatabasesPath(), 'casla.db');
+
+    return databaseFactory.openDatabase(
+      path,
+      options: OpenDatabaseOptions(
+        version: schemaVersion,
+        onConfigure: (db) async {
+          // Orphaned production against a deleted assignment would corrupt every
+          // remaining/recall calculation, so the references in the schema are
+          // enforced rather than decorative.
+          await db.execute('PRAGMA foreign_keys = ON');
+        },
+        onCreate: (db, version) async {
+          await createSchema(db);
+          if (_seedDemoData) await _seedData(db);
+        },
+        onUpgrade: migrate,
+        // sqflite caches open databases by path. Tests all point the override at
+        // `:memory:`, so the cache would hand every CaslaDatabase the same
+        // handle and one test's teardown would close the database the next test
+        // had just opened. The app, on a single real path, still wants the cache.
+        singleInstance: databasePathOverride == null,
+      ),
+    );
   }
 
-  String _uuid() => IdGenerator.newId();
+  static String _uuid() => IdGenerator.newId();
 
   // ─── Seed Data ──────────────────────────────────────────────────────
+  // Runs once, inside onCreate — a persistent database must not re-seed on
+  // every launch or demo rows would pile up.
+  //
   // Auth: Handled entirely by SAP (ZUI_USER_QR_API). No local credentials.
   // 6 Employee Demo:
   //   1. Supervisor: MNV00100 — Trần Thị B (Supervisor Tổ Cắt 1-3)
@@ -66,8 +119,13 @@ class CaslaDatabase {
   //   4. Worker FAILED:  MNV00158 — Phạm Văn D (Tổ Cắt 3)
   //   5. Worker OPEN:    MNV00199 — Hoàng Văn E (Tổ Cắt 2)
   //   6. Worker QR:      NV0001   — Nguyễn Văn A (Công nhân sản xuất)
-  void _seedData() {
-    _employees.addAll([
+  static Future<void> _seedData(Database db) async {
+    final batch = db.batch();
+
+    void insert(String table, Map<String, Object?> values) =>
+        batch.insert(table, values);
+
+    for (final e in <Map<String, Object?>>[
       {
         'id': 'emp-4',
         'ma_nv': 'MNV00100',
@@ -75,14 +133,14 @@ class CaslaDatabase {
         'bo_phan': 'Supervisor Tổ Cắt 1–3',
         'trang_thai': 'ACTIVE',
         'vai_tro': 'SUPERVISOR',
-        'quyen_han': [
+        'quyen_han': jsonEncode([
           'ASSIGN_QUANTITY',
           'CONFIRM_COMPLETION',
           'RECALL_ASSIGNMENT',
           'VIEW_TEAM_PRODUCTION',
           'VIEW_SYNC_STATUS',
-        ],
-        'to_ids': ['team-1', 'team-2', 'team-3'],
+        ]),
+        'to_ids': jsonEncode(['team-1', 'team-2', 'team-3']),
       },
       {
         'id': 'emp-1',
@@ -91,8 +149,8 @@ class CaslaDatabase {
         'bo_phan': 'Tổ Cắt 2',
         'trang_thai': 'ACTIVE',
         'vai_tro': 'CONG_NHAN',
-        'quyen_han': ['VIEW_OWN_PRODUCTION'],
-        'to_ids': ['team-2'],
+        'quyen_han': jsonEncode(['VIEW_OWN_PRODUCTION']),
+        'to_ids': jsonEncode(['team-2']),
       },
       {
         'id': 'emp-2',
@@ -101,8 +159,8 @@ class CaslaDatabase {
         'bo_phan': 'Tổ Cắt 1',
         'trang_thai': 'ACTIVE',
         'vai_tro': 'CONG_NHAN',
-        'quyen_han': ['VIEW_OWN_PRODUCTION'],
-        'to_ids': ['team-1'],
+        'quyen_han': jsonEncode(['VIEW_OWN_PRODUCTION']),
+        'to_ids': jsonEncode(['team-1']),
       },
       {
         'id': 'emp-3',
@@ -111,8 +169,8 @@ class CaslaDatabase {
         'bo_phan': 'Tổ Cắt 3',
         'trang_thai': 'ACTIVE',
         'vai_tro': 'CONG_NHAN',
-        'quyen_han': ['VIEW_OWN_PRODUCTION'],
-        'to_ids': ['team-3'],
+        'quyen_han': jsonEncode(['VIEW_OWN_PRODUCTION']),
+        'to_ids': jsonEncode(['team-3']),
       },
       {
         'id': 'emp-5',
@@ -121,8 +179,8 @@ class CaslaDatabase {
         'bo_phan': 'Tổ Cắt 2',
         'trang_thai': 'ACTIVE',
         'vai_tro': 'CONG_NHAN',
-        'quyen_han': ['VIEW_OWN_PRODUCTION'],
-        'to_ids': ['team-2'],
+        'quyen_han': jsonEncode(['VIEW_OWN_PRODUCTION']),
+        'to_ids': jsonEncode(['team-2']),
       },
       {
         'id': 'emp-6',
@@ -131,12 +189,14 @@ class CaslaDatabase {
         'bo_phan': 'Công nhân sản xuất',
         'trang_thai': 'ACTIVE',
         'vai_tro': 'CONG_NHAN',
-        'quyen_han': ['VIEW_OWN_PRODUCTION'],
-        'to_ids': ['team-2'],
+        'quyen_han': jsonEncode(['VIEW_OWN_PRODUCTION']),
+        'to_ids': jsonEncode(['team-2']),
       },
-    ]);
+    ]) {
+      insert('employees', e);
+    }
 
-    _teams.addAll([
+    for (final t in <Map<String, Object?>>[
       {
         'id': 'team-1',
         'ma_to': 'TC01',
@@ -158,9 +218,11 @@ class CaslaDatabase {
         'bo_phan': 'Xưởng May',
         'trang_thai': 'ACTIVE',
       },
-    ]);
+    ]) {
+      insert('teams', t);
+    }
 
-    _orders.addAll([
+    for (final o in <Map<String, Object?>>[
       {
         'id': 'ord-1',
         'ma_don_hang': 'DH-2026-00417',
@@ -194,11 +256,13 @@ class CaslaDatabase {
         'so_luong_don': 800.0,
         'trang_thai': 'OPEN',
       },
-    ]);
+    ]) {
+      insert('orders', o);
+    }
 
     final now = DateTime.now().millisecondsSinceEpoch;
 
-    _assignments.addAll([
+    for (final a in <Map<String, Object?>>[
       // emp-1: Nguyễn Văn A (Status: SYNCED)
       {
         'id': 'asg-001',
@@ -289,9 +353,11 @@ class CaslaDatabase {
         'idempotency_key': 'demo-key-002',
         'created_at_utc': now - 86400000,
       },
-    ]);
+    ]) {
+      insert('assignments', a);
+    }
 
-    _productionRecords.addAll([
+    for (final r in <Map<String, Object?>>[
       {
         'id': 'prod-001',
         'phan_cong_id': 'asg-001',
@@ -358,9 +424,11 @@ class CaslaDatabase {
         'idempotency_key': 'demo-prod-004',
         'created_at_utc': now - 90000000,
       },
-    ]);
+    ]) {
+      insert('production_records', r);
+    }
 
-    _syncQueue.addAll([
+    for (final s in <Map<String, Object?>>[
       {
         'id': 'sync-001',
         'entity_type': 'PRODUCTION_RECORD',
@@ -368,9 +436,11 @@ class CaslaDatabase {
         'action': 'CREATE',
         'payload_summary': 'Xác nhận hoàn thành · +201 · DH-2026-00417',
         'created_at_utc': now - 1800000,
+        'status': 'FAILED',
         'retry_count': 1,
         'last_error_code': 'ERR_VALIDATION',
         'last_error_message': 'Lỗi xác thực số lượng',
+        'failure_kind': 'permanent',
         'device_id': 'PDA-CT03-A09',
       },
       {
@@ -380,71 +450,112 @@ class CaslaDatabase {
         'action': 'CREATE',
         'payload_summary': 'Xác nhận hoàn thành · +214 · DH-2026-00502',
         'created_at_utc': now - 5400000,
+        'status': 'PENDING',
         'retry_count': 0,
-        'last_error_code': null,
-        'last_error_message': null,
         'device_id': 'PDA-CT01-A03',
       },
-    ]);
+    ]) {
+      insert('sync_queue', s);
+    }
 
-    _auditLog.add({
+    insert('audit_log', {
       'id': 'audit-001',
       'action': 'ASSIGNMENT_CREATED',
       'entity_id': 'asg-001',
       'performed_by': 'MNV00100',
       'occurred_at_utc': now,
     });
+
+    await batch.commit(noResult: true);
   }
 
-  String _todayStr() {
+  static String _todayStr() {
     final n = DateTime.now();
     return '${n.year}-${n.month.toString().padLeft(2, '0')}-${n.day.toString().padLeft(2, '0')}';
   }
 
-  String _yesterdayStr() {
+  static String _yesterdayStr() {
     final n = DateTime.now().subtract(const Duration(days: 1));
     return '${n.year}-${n.month.toString().padLeft(2, '0')}-${n.day.toString().padLeft(2, '0')}';
   }
 
+  // ─── Row helpers ───────────────────────────────────────────────────
+  // sqflite hands back read-only maps; callers mutate and augment rows, so every
+  // row is copied out before it leaves this class.
+  static List<Map<String, dynamic>> _rows(List<Map<String, Object?>> raw) =>
+      raw.map(Map<String, dynamic>.from).toList();
+
+  /// Employees carry two JSON-encoded list columns; every read path expects
+  /// them as real `List`s.
+  static Map<String, dynamic> _employeeRow(Map<String, Object?> raw) {
+    final row = Map<String, dynamic>.from(raw);
+    row['quyen_han'] = _decodeList(raw['quyen_han']);
+    row['to_ids'] = _decodeList(raw['to_ids']);
+    return row;
+  }
+
+  static List<String> _decodeList(Object? value) {
+    if (value is! String || value.isEmpty) return const [];
+    final decoded = jsonDecode(value);
+    if (decoded is! List) return const [];
+    return decoded.map((e) => e.toString()).toList();
+  }
+
+  static double _toDouble(Object? value) =>
+      value is num ? value.toDouble() : 0.0;
+
   // ─── Auth / Employee Queries ──────────────────────────────────────
 
   Future<Map<String, dynamic>?> getEmployeeByCode(String code) async {
-    try {
-      return _employees.firstWhere(
-        (e) => e['ma_nv'] == code || e['id'] == code,
-      );
-    } catch (_) {
-      return null;
-    }
+    final db = await _database;
+    final rows = await db.query(
+      'employees',
+      where: 'ma_nv = ? OR id = ?',
+      whereArgs: [code, code],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : _employeeRow(rows.first);
   }
 
   Future<Map<String, dynamic>?> getEmployeeById(String id) async {
-    try {
-      return _employees.firstWhere((e) => e['id'] == id);
-    } catch (_) {
-      return null;
-    }
+    final db = await _database;
+    final rows = await db.query(
+      'employees',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : _employeeRow(rows.first);
   }
 
-  Future<List<Map<String, dynamic>>> getAllEmployees() async =>
-      List.from(_employees);
+  Future<List<Map<String, dynamic>>> getAllEmployees() async {
+    final db = await _database;
+    return (await db.query('employees')).map(_employeeRow).toList();
+  }
 
   /// Workers belonging to any of [teamIds].
   ///
   /// This used to ignore its argument and return every worker, which made the
   /// team filter on the overview screen change nothing but the chip label.
   /// An empty [teamIds] means "no scope", not "everything".
+  ///
+  /// `to_ids` is a JSON array rather than a junction table, so membership is
+  /// filtered in Dart. Master data is a few hundred rows at most and is about to
+  /// be served straight from SAP; a join table would buy nothing here.
   Future<List<Map<String, dynamic>>> getEmployeesByTeamIds(
     List<String> teamIds,
   ) async {
     if (teamIds.isEmpty) return const [];
     final scope = teamIds.toSet();
-    return _employees
-        .where(
-          (e) =>
-              e['vai_tro'] == 'CONG_NHAN' &&
-              (e['to_ids'] as List?)?.any(scope.contains) == true,
-        )
+    final db = await _database;
+    final rows = await db.query(
+      'employees',
+      where: 'vai_tro = ?',
+      whereArgs: ['CONG_NHAN'],
+    );
+    return rows
+        .map(_employeeRow)
+        .where((e) => (e['to_ids'] as List).any(scope.contains))
         .toList();
   }
 
@@ -459,15 +570,21 @@ class CaslaDatabase {
     final employee = await getEmployeeById(employeeId);
     if (employee == null) return false;
     final scope = supervisorToIds.toSet();
-    return (employee['to_ids'] as List?)?.any(scope.contains) == true;
+    return (employee['to_ids'] as List).any(scope.contains);
   }
 
   // ─── Team Queries ─────────────────────────────────────────────────
-  Future<List<Map<String, dynamic>>> getAllTeams() async => List.from(_teams);
+  Future<List<Map<String, dynamic>>> getAllTeams() async {
+    final db = await _database;
+    return _rows(await db.query('teams'));
+  }
 
   // ─── Order / Material Queries ─────────────────────────────────────
   Future<List<Map<String, dynamic>>> getOpenOrders() async {
-    return _orders.where((o) => o['trang_thai'] == 'OPEN').toList();
+    final db = await _database;
+    return _rows(
+      await db.query('orders', where: 'trang_thai = ?', whereArgs: ['OPEN']),
+    );
   }
 
   /// Every order regardless of status.
@@ -475,7 +592,10 @@ class CaslaDatabase {
   /// Display paths must use this, not [getOpenOrders]: an assignment against an
   /// order that has since closed still needs to render its code and product
   /// name, and filtering by OPEN silently drops it into a fallback label.
-  Future<List<Map<String, dynamic>>> getAllOrders() async => List.from(_orders);
+  Future<List<Map<String, dynamic>>> getAllOrders() async {
+    final db = await _database;
+    return _rows(await db.query('orders'));
+  }
 
   /// Resolves a scanned or typed code to exactly one order.
   ///
@@ -487,18 +607,16 @@ class CaslaDatabase {
     if (searchKey.isEmpty) return null;
 
     final keyLower = searchKey.toLowerCase();
-    for (final o in _orders) {
-      bool matches(String field) =>
-          (o[field] ?? '').toString().toLowerCase() == keyLower;
-
-      if (matches('ma_qr') ||
-          matches('ma_don_hang') ||
-          matches('ma_sp') ||
-          matches('id')) {
-        return o;
-      }
-    }
-    return null;
+    final db = await _database;
+    final rows = await db.query(
+      'orders',
+      where:
+          'LOWER(ma_qr) = ? OR LOWER(ma_don_hang) = ? '
+          'OR LOWER(ma_sp) = ? OR LOWER(id) = ?',
+      whereArgs: [keyLower, keyLower, keyLower, keyLower],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : Map<String, dynamic>.from(rows.first);
   }
 
   /// Pulls the order identifier out of a QR payload.
@@ -534,52 +652,61 @@ class CaslaDatabase {
 
   // ─── Assignment Queries ───────────────────────────────────────────
   Future<void> insertAssignment(Map<String, dynamic> assignment) async {
-    _assignments.add(assignment);
+    final db = await _database;
+    await db.insert('assignments', assignment);
     _notifyAssignments();
   }
 
   Future<Map<String, dynamic>?> getAssignmentById(String id) async {
-    try {
-      return _assignments.firstWhere((a) => a['id'] == id);
-    } catch (_) {
-      return null;
-    }
+    final db = await _database;
+    final rows = await db.query(
+      'assignments',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : Map<String, dynamic>.from(rows.first);
   }
 
   Stream<List<Map<String, dynamic>>> watchAssignmentsByWorker(String workerId) {
-    return _withInitial(_assignmentController, _assignments).map(
-      (all) => all.where((a) => a['nhan_vien_id'] == workerId).toList()
-        ..sort(
-          (a, b) => (b['created_at_utc'] as int).compareTo(
-            a['created_at_utc'] as int,
-          ),
+    return _watch(_assignmentController, () async {
+      final db = await _database;
+      return _rows(
+        await db.query(
+          'assignments',
+          where: 'nhan_vien_id = ?',
+          whereArgs: [workerId],
+          orderBy: 'created_at_utc DESC',
         ),
-    );
+      );
+    });
   }
 
   Stream<List<Map<String, dynamic>>> watchAllAssignments() {
-    return _withInitial(_assignmentController, _assignments).map(
-      (all) => List.from(all)
-        ..sort(
-          (a, b) => (b['created_at_utc'] as int).compareTo(
-            a['created_at_utc'] as int,
-          ),
-        ),
-    );
+    return _watch(_assignmentController, () async {
+      final db = await _database;
+      return _rows(
+        await db.query('assignments', orderBy: 'created_at_utc DESC'),
+      );
+    });
   }
 
   Stream<List<Map<String, dynamic>>> watchAssignmentsByTeams(
     List<String> teamIds,
   ) {
-    final scope = teamIds.toSet();
-    return _withInitial(_assignmentController, _assignments).map(
-      (all) => all.where((a) => scope.contains(a['to_id'])).toList()
-        ..sort(
-          (a, b) => (b['created_at_utc'] as int).compareTo(
-            a['created_at_utc'] as int,
-          ),
+    return _watch(_assignmentController, () async {
+      if (teamIds.isEmpty) return const <Map<String, dynamic>>[];
+      final db = await _database;
+      final placeholders = List.filled(teamIds.length, '?').join(', ');
+      return _rows(
+        await db.query(
+          'assignments',
+          where: 'to_id IN ($placeholders)',
+          whereArgs: teamIds,
+          orderBy: 'created_at_utc DESC',
         ),
-    );
+      );
+    });
   }
 
   Future<void> updateAssignmentStatus(
@@ -587,23 +714,22 @@ class CaslaDatabase {
     String status,
     String syncStatus,
   ) async {
-    final idx = _assignments.indexWhere((a) => a['id'] == id);
-    if (idx != -1) {
-      _assignments[idx]['status'] = status;
-      _assignments[idx]['sync_status'] = syncStatus;
-      _notifyAssignments();
-    }
+    final db = await _database;
+    await db.update(
+      'assignments',
+      {'status': status, 'sync_status': syncStatus},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    _notifyAssignments();
   }
 
-  void _notifyAssignments() =>
-      _assignmentController.add(List.from(_assignments));
+  void _notifyAssignments() => _emit(_assignmentController);
 
   // ─── Computed helpers ──────────────────────────────────────────────
   Future<double> getEffectiveAssigned(String assignmentId) async {
-    final assigned =
-        (await getAssignmentById(assignmentId))?['assigned_quantity']
-            as double? ??
-        0.0;
+    final assignment = await getAssignmentById(assignmentId);
+    final assigned = _toDouble(assignment?['assigned_quantity']);
     final recalled = await getRecalledQuantity(assignmentId);
     return assigned - recalled;
   }
@@ -617,7 +743,8 @@ class CaslaDatabase {
 
   // ─── Production Record Queries ────────────────────────────────────
   Future<void> insertProductionRecord(Map<String, dynamic> record) async {
-    _productionRecords.add(record);
+    final db = await _database;
+    await db.insert('production_records', record);
     _notifyProduction();
     _notifyAssignments();
   }
@@ -639,7 +766,7 @@ class CaslaDatabase {
   }) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     final id = 'prod-${_uuid()}';
-    final record = {
+    await insertProductionRecord({
       'id': id,
       'phan_cong_id': assignmentId,
       'quantity': quantity,
@@ -651,8 +778,7 @@ class CaslaDatabase {
       'sync_status': 'PENDING',
       'idempotency_key': 'idem-${_uuid()}',
       'created_at_utc': now,
-    };
-    await insertProductionRecord(record);
+    });
     await insertSyncQueueItem({
       'id': 'sync-${_uuid()}',
       'entity_type': 'PRODUCTION_RECORD',
@@ -669,236 +795,394 @@ class CaslaDatabase {
   }
 
   Future<double> getCompletedQuantity(String assignmentId) async {
-    return _productionRecords
-        .where((r) => r['phan_cong_id'] == assignmentId)
-        .fold<double>(0.0, (sum, r) => sum + (r['quantity'] as double));
+    final db = await _database;
+    final rows = await db.rawQuery(
+      'SELECT COALESCE(SUM(quantity), 0) AS total '
+      'FROM production_records WHERE phan_cong_id = ?',
+      [assignmentId],
+    );
+    return _toDouble(rows.first['total']);
   }
 
   /// Completed totals for every assignment, in one pass.
   ///
   /// Callers that need totals for a list of assignments must use this rather
-  /// than calling [getCompletedQuantity] per assignment — that turns an O(P)
-  /// scan into O(N × P).
+  /// than calling [getCompletedQuantity] per assignment — that turns one
+  /// aggregate query into N of them.
   Future<Map<String, double>> getCompletedQuantitiesByAssignment() async {
-    final totals = <String, double>{};
-    for (final r in _productionRecords) {
-      final id = r['phan_cong_id'] as String;
-      totals[id] = (totals[id] ?? 0.0) + (r['quantity'] as double);
-    }
-    return totals;
+    return _totalsByAssignment('production_records');
+  }
+
+  Future<Map<String, double>> _totalsByAssignment(String table) async {
+    final db = await _database;
+    final rows = await db.rawQuery(
+      'SELECT phan_cong_id, SUM(quantity) AS total '
+      'FROM $table GROUP BY phan_cong_id',
+    );
+    return {
+      for (final row in rows)
+        row['phan_cong_id'].toString(): _toDouble(row['total']),
+    };
   }
 
   Future<double> getTodayCompleted(String workerId, String businessDate) async {
-    final workerAssignmentIds = _assignments
-        .where((a) => a['nhan_vien_id'] == workerId)
-        .map((a) => a['id'] as String)
-        .toSet();
-    return _productionRecords
-        .where(
-          (r) =>
-              workerAssignmentIds.contains(r['phan_cong_id']) &&
-              r['business_date'] == businessDate,
-        )
-        .fold<double>(0.0, (sum, r) => sum + (r['quantity'] as double));
+    final db = await _database;
+    final rows = await db.rawQuery(
+      'SELECT COALESCE(SUM(p.quantity), 0) AS total '
+      'FROM production_records p '
+      'JOIN assignments a ON a.id = p.phan_cong_id '
+      'WHERE a.nhan_vien_id = ? AND p.business_date = ?',
+      [workerId, businessDate],
+    );
+    return _toDouble(rows.first['total']);
   }
 
   Stream<List<Map<String, dynamic>>> watchRecordsByAssignment(
     String assignmentId,
   ) {
-    return _withInitial(_productionController, _productionRecords).map(
-      (all) =>
-          all.where((r) => r['phan_cong_id'] == assignmentId).toList()..sort(
-            (a, b) => (b['occurred_at_utc'] as int).compareTo(
-              a['occurred_at_utc'] as int,
-            ),
-          ),
-    );
+    return _watch(_productionController, () async {
+      final db = await _database;
+      return _rows(
+        await db.query(
+          'production_records',
+          where: 'phan_cong_id = ?',
+          whereArgs: [assignmentId],
+          orderBy: 'occurred_at_utc DESC',
+        ),
+      );
+    });
   }
 
-  void _notifyProduction() =>
-      _productionController.add(List.from(_productionRecords));
+  void _notifyProduction() => _emit(_productionController);
 
   Future<List<Map<String, dynamic>>> getProductionHistory(
     String employeeId, {
     String? fromBusinessDate,
     String? toBusinessDate,
   }) async {
-    final assignmentIds = _assignments
-        .where((a) => a['nhan_vien_id'] == employeeId)
-        .map((a) => a['id'] as String)
-        .toSet();
+    final db = await _database;
+    final where = StringBuffer('a.nhan_vien_id = ?');
+    final args = <Object?>[employeeId];
 
-    final records = _productionRecords.where((r) {
-      if (!assignmentIds.contains(r['phan_cong_id'])) {
-        return false;
-      }
-      final d = r['business_date'] as String;
-      if (fromBusinessDate != null && d.compareTo(fromBusinessDate) < 0) {
-        return false;
-      }
-      if (toBusinessDate != null && d.compareTo(toBusinessDate) > 0) {
-        return false;
-      }
-      return true;
-    }).toList();
+    if (fromBusinessDate != null) {
+      where.write(' AND p.business_date >= ?');
+      args.add(fromBusinessDate);
+    }
+    if (toBusinessDate != null) {
+      where.write(' AND p.business_date <= ?');
+      args.add(toBusinessDate);
+    }
 
-    final assignmentById = {
-      for (final assignment in _assignments)
-        assignment['id'] as String: assignment,
-    };
-    final orderById = {
-      for (final order in _orders) order['id'] as String: order,
-    };
-    final employeeByCode = {
-      for (final employee in _employees) employee['ma_nv'] as String: employee,
-    };
-
-    return records.map((r) {
-      final asg = assignmentById[r['phan_cong_id']]!;
-      final order = orderById[asg['don_hang_id']];
-      final confirmer = employeeByCode[r['created_by']];
-      return {
-        ...r,
-        'ten_sp': order?['ten_sp'] ?? 'Không rõ sản phẩm',
-        'ma_don_hang': asg['don_hang_id'],
-        'nguoi_xac_nhan': confirmer?['ten'] ?? r['created_by'],
-      };
-    }).toList()..sort(
-      (a, b) =>
-          (b['occurred_at_utc'] as int).compareTo(a['occurred_at_utc'] as int),
+    return _rows(
+      await db.rawQuery('''
+        SELECT p.*,
+               COALESCE(o.ten_sp, 'Không rõ sản phẩm') AS ten_sp,
+               a.don_hang_id AS ma_don_hang,
+               COALESCE(e.ten, p.created_by) AS nguoi_xac_nhan
+        FROM production_records p
+        JOIN assignments a ON a.id = p.phan_cong_id
+        LEFT JOIN orders o ON o.id = a.don_hang_id
+        LEFT JOIN employees e ON e.ma_nv = p.created_by
+        WHERE $where
+        ORDER BY p.occurred_at_utc DESC
+      ''', args),
     );
   }
 
   // ─── Recall Record Queries ────────────────────────────────────────
   Future<void> insertRecallRecord(Map<String, dynamic> record) async {
-    _recallRecords.add(record);
+    final db = await _database;
+    await db.insert('recall_records', record);
     _notifyRecalls();
     _notifyAssignments();
   }
 
   Future<double> getRecalledQuantity(String assignmentId) async {
-    return _recallRecords
-        .where((r) => r['phan_cong_id'] == assignmentId)
-        .fold<double>(0.0, (sum, r) => sum + (r['quantity'] as double));
+    final db = await _database;
+    final rows = await db.rawQuery(
+      'SELECT COALESCE(SUM(quantity), 0) AS total '
+      'FROM recall_records WHERE phan_cong_id = ?',
+      [assignmentId],
+    );
+    return _toDouble(rows.first['total']);
   }
 
   /// Recalled totals for every assignment, in one pass. See
   /// [getCompletedQuantitiesByAssignment] for why the per-id variant is unsafe
   /// in a loop.
   Future<Map<String, double>> getRecalledQuantitiesByAssignment() async {
-    final totals = <String, double>{};
-    for (final r in _recallRecords) {
-      final id = r['phan_cong_id'] as String;
-      totals[id] = (totals[id] ?? 0.0) + (r['quantity'] as double);
-    }
-    return totals;
+    return _totalsByAssignment('recall_records');
   }
 
   Stream<List<Map<String, dynamic>>> watchRecallsByAssignment(
     String assignmentId,
   ) {
-    return _withInitial(_recallController, _recallRecords).map(
-      (all) =>
-          all.where((r) => r['phan_cong_id'] == assignmentId).toList()..sort(
-            (a, b) => (b['occurred_at_utc'] as int).compareTo(
-              a['occurred_at_utc'] as int,
-            ),
-          ),
-    );
+    return _watch(_recallController, () async {
+      final db = await _database;
+      return _rows(
+        await db.query(
+          'recall_records',
+          where: 'phan_cong_id = ?',
+          whereArgs: [assignmentId],
+          orderBy: 'occurred_at_utc DESC',
+        ),
+      );
+    });
   }
 
-  void _notifyRecalls() => _recallController.add(List.from(_recallRecords));
+  void _notifyRecalls() => _emit(_recallController);
 
   // ─── Sync Queue Queries ───────────────────────────────────────────
   Future<void> insertSyncQueueItem(Map<String, dynamic> item) async {
-    _syncQueue.add(item);
+    final db = await _database;
+    await db.insert('sync_queue', item);
     _notifySyncQueue();
   }
 
   Stream<List<Map<String, dynamic>>> watchSyncQueue() {
-    return _withInitial(_syncQueueController, _syncQueue);
+    return _watch(_syncQueueController, () async {
+      final db = await _database;
+      return _rows(await db.query('sync_queue'));
+    });
   }
 
   Stream<List<Map<String, dynamic>>> watchSyncFeed() {
-    return _withInitial(_syncQueueController, _syncQueue).map(
-      (items) =>
-          items.map((i) {
-            final status = i['last_error_code'] != null ? 'FAILED' : 'PENDING';
-            return {...i, 'status': status};
-          }).toList()..sort(
-            (a, b) => (b['created_at_utc'] as int).compareTo(
-              a['created_at_utc'] as int,
-            ),
-          ),
-    );
+    return _watch(_syncQueueController, () async {
+      final db = await _database;
+      return _rows(
+        await db.query('sync_queue', orderBy: 'created_at_utc DESC'),
+      );
+    });
   }
 
   Stream<int> watchPendingCount() {
-    return watchSyncQueue().map(
-      (items) => items.where((i) => i['last_error_code'] == null).length,
+    return _watch(_syncQueueController, () async {
+      final db = await _database;
+      return _rows(
+        await db.rawQuery(
+          "SELECT COUNT(*) AS c FROM sync_queue WHERE status = 'PENDING'",
+        ),
+      );
+    }).map((rows) => rows.first['c'] as int);
+  }
+
+  /// Pending items older than [olderThan], which Spec 4.7 requires be surfaced
+  /// to the supervisor rather than dropped.
+  Stream<int> watchStalePendingCount({
+    Duration olderThan = const Duration(hours: 24),
+  }) {
+    return _watch(_syncQueueController, () async {
+      final db = await _database;
+      final cutoff = DateTime.now().subtract(olderThan).millisecondsSinceEpoch;
+      return _rows(
+        await db.rawQuery(
+          "SELECT COUNT(*) AS c FROM sync_queue "
+          "WHERE status = 'PENDING' AND created_at_utc < ?",
+          [cutoff],
+        ),
+      );
+    }).map((rows) => rows.first['c'] as int);
+  }
+
+  /// Queue items whose backoff has elapsed, in the order SAP must receive them.
+  ///
+  /// Ordering by `created_at_utc` is a business requirement, not a nicety: a
+  /// recall pushed before the assignment it recalls is rejected by SAP.
+  Future<List<Map<String, dynamic>>> getDueSyncItems({
+    int? nowUtc,
+    int limit = 50,
+  }) async {
+    final db = await _database;
+    final now = nowUtc ?? DateTime.now().millisecondsSinceEpoch;
+    return _rows(
+      await db.query(
+        'sync_queue',
+        where:
+            "status = 'PENDING' "
+            'AND (next_retry_at_utc IS NULL OR next_retry_at_utc <= ?)',
+        whereArgs: [now],
+        orderBy: 'priority ASC, created_at_utc ASC',
+        limit: limit,
+      ),
     );
   }
 
+  /// Source row behind a queue item, or null if the entity type is unknown.
+  Future<Map<String, dynamic>?> getSyncSourceRow(
+    String entityType,
+    String entityId,
+  ) async {
+    final table = _entitySourceTables[entityType];
+    if (table == null) return null;
+    final db = await _database;
+    final rows = await db.query(
+      table,
+      where: 'id = ?',
+      whereArgs: [entityId],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : Map<String, dynamic>.from(rows.first);
+  }
+
   Future<void> deleteSyncQueueItem(String id) async {
-    _syncQueue.removeWhere((i) => i['id'] == id);
+    final db = await _database;
+    await db.delete('sync_queue', where: 'id = ?', whereArgs: [id]);
     _notifySyncQueue();
   }
 
+  /// Marks a queue item's push attempt as failed.
+  ///
+  /// [status] decides whether the engine will pick the item up again: a
+  /// transient failure stays `PENDING` with a `next_retry_at_utc`, a business
+  /// rejection becomes `FAILED` and waits for a supervisor. Retrying a rejected
+  /// record forever is what Spec 4.7 calls out as "retry vô hạn".
   Future<void> updateSyncQueueError(
     String id,
     String errorCode,
-    String errorMessage,
-  ) async {
-    final idx = _syncQueue.indexWhere((i) => i['id'] == id);
-    if (idx != -1) {
-      _syncQueue[idx]['retry_count'] =
-          (_syncQueue[idx]['retry_count'] as int) + 1;
-      _syncQueue[idx]['last_error_code'] = errorCode;
-      _syncQueue[idx]['last_error_message'] = errorMessage;
-      _notifySyncQueue();
-    }
+    String errorMessage, {
+    String status = 'FAILED',
+    String? failureKind,
+    int? nextRetryAtUtc,
+  }) async {
+    final db = await _database;
+    await db.rawUpdate(
+      'UPDATE sync_queue SET '
+      'retry_count = retry_count + 1, '
+      'last_error_code = ?, last_error_message = ?, '
+      'status = ?, failure_kind = ?, next_retry_at_utc = ?, updated_at_utc = ? '
+      'WHERE id = ?',
+      [
+        errorCode,
+        errorMessage,
+        status,
+        failureKind,
+        nextRetryAtUtc,
+        DateTime.now().millisecondsSinceEpoch,
+        id,
+      ],
+    );
+    _notifySyncQueue();
+  }
+
+  /// Removes a confirmed queue item and stamps its source row as SYNCED.
+  ///
+  /// Both halves run in one transaction: a crash between them would either
+  /// re-push a record SAP already holds or leave a synced row looking pending
+  /// forever.
+  Future<void> markSyncItemSynced(
+    String queueItemId, {
+    required String entityType,
+    required String entityId,
+    String? sapId,
+  }) async {
+    final db = await _database;
+    final table = _entitySourceTables[entityType];
+    final syncedAt = DateTime.now().millisecondsSinceEpoch;
+
+    await db.transaction((txn) async {
+      await txn.delete('sync_queue', where: 'id = ?', whereArgs: [queueItemId]);
+      if (table != null) {
+        await txn.update(
+          table,
+          {'sync_status': 'SYNCED', 'synced_at_utc': syncedAt, 'sap_id': sapId},
+          where: 'id = ?',
+          whereArgs: [entityId],
+        );
+      }
+    });
+
+    _notifySyncQueue();
+    _notifyAssignments();
+    _notifyProduction();
+    _notifyRecalls();
   }
 
   Future<bool> retrySyncItem(String id) async {
-    final idx = _syncQueue.indexWhere((i) => i['id'] == id);
-    if (idx == -1) return false;
-    // Requeue without deleting the source transaction. The actual sync worker
-    // is responsible for removing the item only after SAP acknowledges it.
-    _syncQueue[idx]['last_error_code'] = null;
-    _syncQueue[idx]['last_error_message'] = null;
-    _syncQueue[idx]['next_retry_at_utc'] = null;
+    final db = await _database;
+    // Requeue without deleting the source transaction. The sync engine is
+    // responsible for removing the item only after SAP acknowledges it.
+    final changed = await db.update(
+      'sync_queue',
+      {
+        'status': 'PENDING',
+        'last_error_code': null,
+        'last_error_message': null,
+        'failure_kind': null,
+        'next_retry_at_utc': null,
+        'updated_at_utc': DateTime.now().millisecondsSinceEpoch,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    if (changed == 0) return false;
     _notifySyncQueue();
     return true;
   }
 
-  void _notifySyncQueue() => _syncQueueController.add(List.from(_syncQueue));
+  void _notifySyncQueue() => _emit(_syncQueueController);
 
-  /// Emits the current snapshot only to the new subscriber, then forwards
-  /// updates. Broadcasting the initial value through the shared controller made
-  /// every existing screen rebuild whenever another screen subscribed.
-  Stream<List<Map<String, dynamic>>> _withInitial(
-    StreamController<List<Map<String, dynamic>>> controller,
-    List<Map<String, dynamic>> source,
-  ) async* {
-    yield List.from(source);
+  void _emit(StreamController<void> controller) {
+    if (!controller.isClosed) controller.add(null);
+  }
+
+  /// Emits the current snapshot only to the new subscriber, then re-runs [query]
+  /// on every write to the table it reads.
+  ///
+  /// Broadcasting the initial value through the shared controller made every
+  /// existing screen rebuild whenever another screen subscribed.
+  ///
+  /// `asyncMap` also serialises the queries, so two writes landing back to back
+  /// cannot emit their snapshots out of order.
+  Stream<List<Map<String, dynamic>>> _watch(
+    StreamController<void> controller,
+    Future<List<Map<String, dynamic>>> Function() query,
+  ) {
+    return _ticks(controller).asyncMap((_) => query());
+  }
+
+  /// One tick now, then one per write.
+  ///
+  /// Delegating with `yield*` rather than looping with `await for` is load
+  /// bearing: an `await for` suspended on a stream that has not emitted yet only
+  /// notices cancellation when it next reaches a `yield`, so `cancel()` never
+  /// completes and the generator leaks — one per screen the user navigates away
+  /// from. `yield*` hands the cancellation straight to the delegated stream.
+  Stream<void> _ticks(StreamController<void> controller) async* {
+    yield null;
     yield* controller.stream;
   }
 
   // ─── Audit Log ────────────────────────────────────────────────────
   Future<void> insertAuditLog(Map<String, dynamic> log) async {
-    _auditLog.add(log);
+    final db = await _database;
+    await db.insert('audit_log', log);
   }
 
   // ─── Cleanup ──────────────────────────────────────────────────────
-  void dispose() {
-    _assignmentController.close();
-    _syncQueueController.close();
-    _productionController.close();
-    _recallController.close();
-    // Clear the static handle too — otherwise `instance` keeps returning this
+
+  /// Releases the tickers and the underlying SQLite handle.
+  ///
+  /// Await this when something is going to reopen the same path straight after
+  /// — a close still in flight would slam shut the handle its replacement just
+  /// took out.
+  Future<void> close() async {
+    // Clear the static handle first — otherwise `instance` keeps returning this
     // object with all four controllers already closed.
     if (identical(_instance, this)) {
       _instance = null;
     }
+    await _assignmentController.close();
+    await _syncQueueController.close();
+    await _productionController.close();
+    await _recallController.close();
+    try {
+      await (await _database).close();
+    } catch (_) {
+      // Opening failed, or it is already shut. Either way there is nothing left
+      // to release, and teardown must not throw over it.
+    }
   }
+
+  /// Fire-and-forget [close], for call sites with no async context.
+  void dispose() => unawaited(close());
 }

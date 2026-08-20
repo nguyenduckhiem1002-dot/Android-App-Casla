@@ -39,8 +39,10 @@ Future<void> main() async {
   // getter returns a real identifier to every write path from the first record on.
   await DeviceInfoHelper.getDeviceId();
 
-  // Initialize the local data store before widgets request it.
-  CaslaDatabase.instance;
+  // Open (and on first launch, create) the SQLite store before any widget
+  // queries it, so the first frame renders against real data rather than an
+  // empty snapshot that fills in a tick later.
+  await CaslaDatabase.instance.ready;
 
   runApp(const ProviderScope(child: CaslaApp()));
 }
