@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../../../presentation/widgets/casla_logo_white.dart';
+import '../../../presentation/widgets/casla_logo.dart';
 import '../../../app/theme/casla_colors.dart';
 import '../../../main.dart';
 

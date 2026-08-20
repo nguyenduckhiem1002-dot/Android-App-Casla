@@ -50,6 +50,17 @@ class SapAuthController {
     endpoints = SapEndpoints(client);
   }
 
+  /// Reads the OData `d` envelope from a response body of unknown shape.
+  ///
+  /// SAP can answer with a JSON array, an HTML error page, or a plain string on
+  /// gateway failures; indexing those directly throws NoSuchMethodError instead
+  /// of a diagnosable error.
+  static Map<String, dynamic>? _envelope(dynamic data) {
+    if (data is! Map) return null;
+    final d = data['d'];
+    return d is Map ? Map<String, dynamic>.from(d) : null;
+  }
+
   /// Login with Username / Password against SAP ZUI_USER_QR_API/login
   Future<SapLoginResult?> loginWithCredentials(
     String username,
@@ -114,10 +125,11 @@ class SapAuthController {
     }
 
     // 3. Inspect Body Data & validate access_token
-    if (response.statusCode == 200 && response.data != null) {
-      final d = response.data['d'];
-      if (d != null && d['login'] != null) {
-        final loginData = d['login'] as Map<String, dynamic>;
+    if (response.statusCode == 200) {
+      final d = _envelope(response.data);
+      final login = d?['login'];
+      if (login is Map) {
+        final loginData = Map<String, dynamic>.from(login);
         final result = SapLoginResult.fromJson(loginData);
 
         // Validation: access_token MUST NOT BE EMPTY and status MUST NOT BE 'e'/'E'
@@ -169,11 +181,8 @@ class SapAuthController {
       }
 
       final response = await client.dio.get(path);
-      if (response.statusCode == 200 && response.data != null) {
-        final d = response.data['d'];
-        if (d != null) {
-          return Map<String, dynamic>.from(d as Map);
-        }
+      if (response.statusCode == 200) {
+        return _envelope(response.data);
       }
       return null;
     } catch (e) {
@@ -210,11 +219,10 @@ class SapAuthController {
           "refresh?user_uuid=guid'$cleanUuid'&refresh_token='$safeRefreshToken'";
 
       final response = await client.dio.post(path);
-      if (response.statusCode == 200 && response.data != null) {
-        final d = response.data['d'];
-        if (d != null && d['refresh'] != null) {
-          final result = SapLoginResult.fromJson(d['refresh']);
-          return result;
+      if (response.statusCode == 200) {
+        final refresh = _envelope(response.data)?['refresh'];
+        if (refresh is Map) {
+          return SapLoginResult.fromJson(Map<String, dynamic>.from(refresh));
         }
       }
       return null;

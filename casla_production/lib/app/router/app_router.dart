@@ -1,11 +1,11 @@
 import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../domain/entities/entities.dart';
 import '../../main.dart';
 import 'app_route_observer.dart';
 
 import '../../features/authentication/screens/s02b_account_login_screen.dart';
-import '../../features/shared/screens/worker_shell.dart';
 import '../../features/shared/screens/supervisor_shell.dart';
 import '../../features/supervisor/screens/s06b_employee_daily_detail_screen.dart';
 import '../../features/supervisor/screens/s07_create_assignment_wizard_screen.dart';
@@ -15,7 +15,10 @@ import '../../features/supervisor/screens/s10_confirm_scan_screen.dart';
 import '../../features/sync/screens/s12_sync_screen.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
-  final appState = ref.watch(appStateProvider);
+  // `refreshListenable` below re-evaluates redirects on session changes, so the
+  // router itself must not be rebuilt when AppState notifies — `watch` here would
+  // construct a brand-new GoRouter on every login/logout.
+  final appState = ref.read(appStateProvider);
 
   return GoRouter(
     initialLocation: '/login',
@@ -44,10 +47,6 @@ final routerProvider = Provider<GoRouter>((ref) {
         },
       ),
       GoRoute(
-        path: '/worker',
-        builder: (context, state) => const WorkerShell(),
-      ),
-      GoRoute(
         path: '/supervisor',
         builder: (context, state) => const SupervisorShell(),
         routes: [
@@ -66,14 +65,14 @@ final routerProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: 'assignment_detail',
             builder: (context, state) {
-              final assignment = state.extra as Map<String, dynamic>;
+              final assignment = state.extra as Assignment;
               return S08AssignmentDetailScreen(assignment: assignment);
             },
           ),
           GoRoute(
             path: 'recall_assignment',
             builder: (context, state) {
-              final assignment = state.extra as Map<String, dynamic>;
+              final assignment = state.extra as Assignment;
               return S09RecallScreen(assignment: assignment);
             },
           ),

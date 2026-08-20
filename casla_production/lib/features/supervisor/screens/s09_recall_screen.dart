@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 import '../../../app/theme/casla_colors.dart';
+import '../../../domain/entities/entities.dart';
+import '../../../domain/entities/enums.dart';
 import '../../../main.dart';
 
 class S09RecallScreen extends ConsumerStatefulWidget {
-  final Map<String, dynamic> assignment;
+  final Assignment assignment;
 
   const S09RecallScreen({super.key, required this.assignment});
 
@@ -18,16 +21,16 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
     text: '80',
   );
   final TextEditingController _noteController = TextEditingController();
-  String _selectedReason = 'KHONG_LAM_HET';
-  bool _isSubmitting = false;
 
-  final Map<String, String> _reasons = {
-    'KHONG_LAM_HET': 'Không làm hết',
-    'DIEU_CHUYEN': 'Điều chuyển công nhân',
-    'DOI_KE_HOACH': 'Đổi kế hoạch sản xuất',
-    'KET_THUC_DON': 'Kết thúc đơn hàng',
-    'KHAC': 'Khác',
-  };
+  /// Single source of truth for reason codes.
+  ///
+  /// This screen used to carry its own Vietnamese code map ('KHONG_LAM_HET',
+  /// 'KHAC') while the domain layer validates against RecallReason's English
+  /// codes ('NOT_FINISHED', 'OTHER'). Once writes go through RecallRepository
+  /// that mismatch would silently disable the mandatory-note rule for "Khác" —
+  /// no crash, no error, just a business rule that stops firing.
+  RecallReason _selectedReason = RecallReason.notFinished;
+  bool _isSubmitting = false;
 
   @override
   void dispose() {
@@ -50,7 +53,8 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
       return;
     }
 
-    if (_selectedReason == 'KHAC' && _noteController.text.trim().isEmpty) {
+    if (_selectedReason == RecallReason.other &&
+        _noteController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Vui lòng nhập ghi chú khi chọn lý do Khác'),
@@ -64,18 +68,35 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
 
     final appState = ref.read(appStateProvider);
     final emp = appState.currentSession;
-    final supervisorMaNv = emp?.maNv ?? 'MNV00100';
+    final supervisorMaNv = emp?.maNv ?? '';
 
-    await appState.db.recordRecallOffline(
-      assignmentId: widget.assignment['id'],
-      quantity: qty,
-      reason: _selectedReason,
-      note: _noteController.text.trim().isEmpty
-          ? null
-          : _noteController.text.trim(),
-      createdBy: supervisorMaNv,
-      deviceId: 'PDA-CT02-A17',
-    );
+    // Through the repository so ProductionMath.validateRecallEntry runs — the
+    // max-recall ceiling and the mandatory note for "Khác" live there.
+    try {
+      await appState.recallRepo.recallAssignment(
+        assignmentId: widget.assignment.id,
+        quantity: qty,
+        reasonCode: _selectedReason.code,
+        note: _noteController.text.trim().isEmpty
+            ? null
+            : _noteController.text.trim(),
+        businessDate: DateFormat('yyyy-MM-dd').format(DateTime.now()),
+        shiftId: widget.assignment.shiftId,
+        createdBy: supervisorMaNv,
+      );
+    } on Exception catch (e) {
+      if (!mounted) return;
+      setState(() => _isSubmitting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            e.toString().replaceFirst(RegExp(r'^Exception:\s*'), ''),
+          ),
+          backgroundColor: CaslaColors.danger,
+        ),
+      );
+      return;
+    }
 
     if (!mounted) return;
 
@@ -92,7 +113,7 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
   @override
   Widget build(BuildContext context) {
     final appState = ref.watch(appStateProvider);
-    final asgId = widget.assignment['id'];
+    final asgId = widget.assignment.id;
 
     return Scaffold(
       backgroundColor: CaslaColors.background,
@@ -116,7 +137,7 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
             ),
             const SizedBox(height: 2),
             Text(
-              '${widget.assignment['don_hang_id']} · Nguyễn Văn A',
+              '${widget.assignment.orderCode} · ${widget.assignment.workerName}',
               style: const TextStyle(
                 fontFamily: 'Inter',
                 fontSize: 12.5,
@@ -219,7 +240,7 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
                       ),
                       const SizedBox(height: 8),
 
-                      RadioGroup<String>(
+                      RadioGroup<RecallReason>(
                         groupValue: _selectedReason,
                         onChanged: (value) {
                           if (value != null) {
@@ -227,8 +248,8 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
                           }
                         },
                         child: Column(
-                          children: _reasons.entries.map((entry) {
-                            final isSelected = _selectedReason == entry.key;
+                          children: RecallReason.values.map((reason) {
+                            final isSelected = _selectedReason == reason;
                             return Container(
                               margin: const EdgeInsets.only(bottom: 8),
                               decoration: BoxDecoration(
@@ -243,11 +264,11 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
                                 ),
                                 borderRadius: BorderRadius.circular(8),
                               ),
-                              child: RadioListTile<String>(
-                                value: entry.key,
+                              child: RadioListTile<RecallReason>(
+                                value: reason,
                                 activeColor: CaslaColors.gold700,
                                 title: Text(
-                                  entry.value,
+                                  reason.title,
                                   style: const TextStyle(
                                     fontSize: 13,
                                     fontWeight: FontWeight.w600,
@@ -260,7 +281,7 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
                         ),
                       ),
 
-                      if (_selectedReason == 'KHAC') ...[
+                      if (_selectedReason == RecallReason.other) ...[
                         const SizedBox(height: 10),
                         TextField(
                           controller: _noteController,

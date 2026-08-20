@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../../app/theme/casla_colors.dart';
+import '../../../domain/entities/entities.dart';
 import '../../../main.dart';
 import '../../../presentation/widgets/kpi_card.dart';
 import '../../../presentation/widgets/num_pad.dart';
@@ -10,7 +11,7 @@ import '../../../presentation/widgets/ring_progress_card.dart';
 import '../../../presentation/widgets/status_chip.dart';
 
 class S08AssignmentDetailScreen extends ConsumerStatefulWidget {
-  final Map<String, dynamic> assignment;
+  final Assignment assignment;
 
   const S08AssignmentDetailScreen({super.key, required this.assignment});
 
@@ -150,19 +151,33 @@ class _S08AssignmentDetailScreenState
   Future<void> _confirmProduction(double qty) async {
     final appState = ref.read(appStateProvider);
     final emp = appState.currentSession;
-    final supervisorMaNv = emp?.maNv ?? 'MNV00100';
+    final supervisorMaNv = emp?.maNv ?? '';
 
-    final asgId = widget.assignment['id'];
+    final asgId = widget.assignment.id;
     final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
 
-    await appState.db.recordProductionOffline(
-      assignmentId: asgId,
-      quantity: qty,
-      businessDate: today,
-      shiftId: widget.assignment['shift_id'] ?? 'SHIFT_1',
-      createdBy: supervisorMaNv,
-      deviceId: 'PDA-CT02-A17',
-    );
+    // Goes through the repository, not the raw store: this is where the
+    // assignment-status check and ProductionMath.validateProductionEntry run.
+    // The repository throws on a business-rule violation, so the supervisor has
+    // to see that as a message rather than an unhandled crash.
+    try {
+      await appState.productionRepo.recordProduction(
+        assignmentId: asgId,
+        quantity: qty,
+        businessDate: today,
+        shiftId: widget.assignment.shiftId,
+        createdBy: supervisorMaNv,
+      );
+    } on Exception catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_errorText(e)),
+          backgroundColor: CaslaColors.danger,
+        ),
+      );
+      return;
+    }
 
     if (!mounted) return;
 
@@ -174,10 +189,15 @@ class _S08AssignmentDetailScreenState
     );
   }
 
+  /// Strips Dart's "Exception: " prefix so the supervisor reads the business
+  /// message, not the wrapper.
+  String _errorText(Exception e) =>
+      e.toString().replaceFirst(RegExp(r'^Exception:\s*'), '');
+
   @override
   Widget build(BuildContext context) {
     final appState = ref.watch(appStateProvider);
-    final asgId = widget.assignment['id'];
+    final asgId = widget.assignment.id;
 
     return Scaffold(
       backgroundColor: CaslaColors.background,
@@ -192,7 +212,7 @@ class _S08AssignmentDetailScreenState
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              widget.assignment['don_hang_id'] ?? 'Chi tiết phân công',
+              widget.assignment.orderCode,
               style: const TextStyle(
                 fontFamily: 'Manrope',
                 fontWeight: FontWeight.w800,
@@ -230,7 +250,7 @@ class _S08AssignmentDetailScreenState
           final recalled = snapshot.data![3] as double;
 
           final initialAssigned =
-              widget.assignment['assigned_quantity'] as double? ?? 0.0;
+              widget.assignment.assignedQuantity;
           final pct = effective > 0 ? (completed / effective) : 0.0;
 
           return Column(

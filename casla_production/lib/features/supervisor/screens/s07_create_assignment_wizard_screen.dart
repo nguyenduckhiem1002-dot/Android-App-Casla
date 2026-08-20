@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -25,13 +27,11 @@ class _S07CreateAssignmentWizardScreenState
   );
   final TextEditingController _noteController = TextEditingController();
   DateTime _startDate = DateTime.now();
-  String _shiftId = 'SHIFT_1';
   bool _isSubmitting = false;
 
   @override
   void initState() {
     super.initState();
-    _loadDefaultWorker();
   }
 
   @override
@@ -39,18 +39,6 @@ class _S07CreateAssignmentWizardScreenState
     _qtyController.dispose();
     _noteController.dispose();
     super.dispose();
-  }
-
-  Future<void> _loadDefaultWorker() async {
-    // Default to sample badge NV0001 (Nguyễn Văn A) for demo convenience
-    setState(() {
-      _selectedWorker = {
-        'id': 'emp-NV0001',
-        'ma_nv': 'NV0001',
-        'ten': 'Nguyễn Văn A',
-        'bo_phan': 'Công nhân sản xuất',
-      };
-    });
   }
 
   void _openWorkerPicker() {
@@ -175,7 +163,9 @@ class _S07CreateAssignmentWizardScreenState
 
     if (!mounted) return;
 
-    showModalBottomSheet(
+    // Selection is handled by the onTap callbacks inside the sheet, so the
+    // sheet's own result future is intentionally not awaited.
+    unawaited(showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
@@ -224,7 +214,7 @@ class _S07CreateAssignmentWizardScreenState
           ),
         );
       },
-    );
+    ));
   }
 
   Future<void> _submitAssignment() async {
@@ -266,7 +256,7 @@ class _S07CreateAssignmentWizardScreenState
 
     final workerMaNv = (_selectedWorker!['ma_nv'] ?? _selectedWorker!['id'])
         .toString();
-    final workerTen = (_selectedWorker!['ten'] ?? 'Nguyễn Văn A').toString();
+    final workerTen = (_selectedWorker!['ten'] ?? workerMaNv).toString();
 
     // Ensure worker exists in system DB/API transaction on submission
     final empRecord = await appState.db.ensureEmployeeExists(
@@ -274,26 +264,43 @@ class _S07CreateAssignmentWizardScreenState
       workerTen,
     );
 
-    final workerId = empRecord['id'];
-    final orderId = _selectedOrder!['id'];
-    final toId = (empRecord['to_ids'] as List?)?.first ?? 'team-1';
-    final createdBy = emp?.maNv ?? 'MNV00100';
+    final workerId = empRecord['id'] as String;
+    final orderId = _selectedOrder!['id'] as String;
+    final toId = (empRecord['to_ids'] as List?)?.first as String? ?? 'team-1';
+    final createdBy = emp?.maNv ?? '';
 
     final dateFormatted = DateFormat('yyyy-MM-dd').format(_startDate);
 
-    await appState.db.createAssignmentFromScan(
-      employeeId: workerId,
-      orderId: orderId,
-      quantity: qty,
-      toId: toId,
-      shiftId: _shiftId,
-      businessDate: dateFormatted,
-      createdBy: createdBy,
-      deviceId: 'PDA-CT02-A17',
-      note: _noteController.text.trim().isEmpty
-          ? null
-          : _noteController.text.trim(),
-    );
+    // Through the repository so the quantity check and the audit-log entry run.
+    try {
+      await appState.assignmentRepo.createAssignment(
+        workerId: workerId,
+        orderId: orderId,
+        teamId: toId,
+        assignedQuantity: qty,
+        businessDate: dateFormatted,
+        // Legacy field required by the current repository/SAP payload. Shift
+        // selection is no longer part of the assignment workflow; keep the
+        // previously used value until the backend contract makes it optional.
+        shiftId: 'SHIFT_1',
+        note: _noteController.text.trim().isEmpty
+            ? null
+            : _noteController.text.trim(),
+        createdBy: createdBy,
+      );
+    } on Exception catch (e) {
+      if (!mounted) return;
+      setState(() => _isSubmitting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            e.toString().replaceFirst(RegExp(r'^Exception:\s*'), ''),
+          ),
+          backgroundColor: CaslaColors.danger,
+        ),
+      );
+      return;
+    }
 
     if (!mounted) return;
 
@@ -604,43 +611,7 @@ class _S07CreateAssignmentWizardScreenState
 
                   const SizedBox(height: 16),
 
-                  // 5. Ca Field
-                  RichText(
-                    text: const TextSpan(
-                      text: 'Ca ',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: CaslaColors.primaryNavy,
-                      ),
-                      children: [
-                        TextSpan(
-                          text: '*',
-                          style: TextStyle(color: CaslaColors.danger),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(3),
-                    decoration: BoxDecoration(
-                      color: CaslaColors.muted100,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      children: [
-                        _buildShiftOption('Ca ngày', 'SHIFT_1'),
-                        _buildShiftOption('Ca chiều', 'SHIFT_2'),
-                        _buildShiftOption('Ca đêm', 'SHIFT_3'),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // 6. Ghi chú Field
+                  // 5. Ghi chú Field
                   const Text(
                     'Ghi chú',
                     style: TextStyle(
@@ -686,33 +657,4 @@ class _S07CreateAssignmentWizardScreenState
     );
   }
 
-  Widget _buildShiftOption(String label, String value) {
-    final isSelected = _shiftId == value;
-    return Expanded(
-      child: InkWell(
-        onTap: () {
-          setState(() {
-            _shiftId = value;
-          });
-        },
-        borderRadius: BorderRadius.circular(6),
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 9),
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: isSelected ? CaslaColors.primaryNavy : Colors.transparent,
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 12.5,
-              fontWeight: FontWeight.w700,
-              color: isSelected ? Colors.white : CaslaColors.muted,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }

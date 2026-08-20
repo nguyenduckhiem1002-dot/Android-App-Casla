@@ -73,38 +73,64 @@ class SapODataClient {
       ),
     );
 
-    // Logging interceptor (with token redaction per Spec Section 10)
-    dio.interceptors.add(
-      LogInterceptor(
-        requestHeader: true,
-        responseHeader: true,
-        requestBody: true,
-        responseBody: true,
-        logPrint: (obj) {
-          // Redact sensitive credentials in logs (Basic Auth, Passwords, Tokens)
-          final redacted = obj
-              .toString()
-              .replaceAll(RegExp(r'Basic\s+\S+'), 'Basic [REDACTED]')
-              .replaceAll(
-                RegExp(r"password='[^']*'", caseSensitive: false),
-                "password='[REDACTED]'",
-              )
-              .replaceAll(
-                RegExp(r'password="[^"]*"', caseSensitive: false),
-                'password="[REDACTED]"',
-              )
-              .replaceAll(
-                RegExp(r"access_token='[^']*'", caseSensitive: false),
-                "access_token='[REDACTED]'",
-              )
-              .replaceAll(
-                RegExp(r"refresh_token='[^']*'", caseSensitive: false),
-                "refresh_token='[REDACTED]'",
-              );
-          _logger.d(redacted);
-        },
-      ),
-    );
+    // Logging interceptor (with token redaction per Spec Section 10).
+    //
+    // Debug builds only: request and response bodies carry credentials, and
+    // attaching the interceptor in release relied on a downstream level filter
+    // to keep them out of the log. Not attaching it at all is the guarantee, and
+    // it also drops the per-request redaction cost from production.
+    if (kDebugMode) {
+      dio.interceptors.add(
+        LogInterceptor(
+          requestHeader: true,
+          responseHeader: true,
+          requestBody: true,
+          responseBody: true,
+          logPrint: (obj) => _logger.d(redactSecrets(obj.toString())),
+        ),
+      );
+    }
+  }
+
+  /// Masks credentials in a line destined for the log.
+  ///
+  /// Dio logs the *encoded* URI, where the single quotes SAP's OData function
+  /// imports require appear as `%27`. The original patterns only matched the raw
+  /// `password='...'` form, so they silently missed every real request and the
+  /// password was printed verbatim. Both forms are covered here.
+  @visibleForTesting
+  static String redactSecrets(String input) {
+    const secretKeys = [
+      'password',
+      'old_password',
+      'new_password',
+      'access_token',
+      'refresh_token',
+    ];
+
+    var out = input.replaceAll(RegExp(r'Basic\s+\S+'), 'Basic [REDACTED]');
+
+    // The separator varies by what is being logged: `password=` in a URI,
+    // `password: ` in Dio's map rendering of queryParameters.
+    const sep = r'\s*[:=]\s*';
+
+    for (final key in secretKeys) {
+      final patterns = <String>[
+        "$key$sep'[^']*'", // password='secret'
+        '$key$sep"[^"]*"', // password="secret"
+        '$key$sep%27.*?%27', // password=%27secret%27  (what Dio prints)
+        r'' '$key$sep' r"[^&\s,}\]\[]+", // password=secret
+      ];
+
+      for (final pattern in patterns) {
+        out = out.replaceAll(
+          RegExp(pattern, caseSensitive: false),
+          '$key=[REDACTED]',
+        );
+      }
+    }
+
+    return out;
   }
 
   static String _normalizeBaseUrl(String value) {
@@ -197,7 +223,17 @@ class SapODataClient {
     }
   }
 
-  /// Update auth token (after login/refresh)
+  /// Update auth token (after login/refresh).
+  ///
+  /// WARNING: this token is *not* sent on requests. The request interceptor
+  /// unconditionally sets `Authorization` to the shared Basic service account,
+  /// and SAP receives the per-user token only where a caller passes it
+  /// explicitly as an `access_token` query parameter. So every call reaches SAP
+  /// as the service account, and SAP cannot attribute an action to a person.
+  ///
+  /// Resolving this is task P4-04 in the remediation plan: either send this
+  /// token per request instead of Basic, or drop the field as dead. It is left
+  /// in place for now because changing it alters what SAP sees.
   void setAuthToken(String? token) {
     _authToken = token;
   }

@@ -32,7 +32,7 @@ class SapApiError {
     return SapApiError(
       code: json['code'] as String? ?? 'UNKNOWN',
       message: json['message'] is Map
-          ? json['message']['value'] as String? ?? 'Unknown error'
+          ? (json['message'] as Map)['value'] as String? ?? 'Unknown error'
           : json['message'] as String? ?? 'Unknown error',
     );
   }
