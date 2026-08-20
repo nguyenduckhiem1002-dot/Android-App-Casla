@@ -2,8 +2,11 @@ import 'dart:async';
 
 import 'package:casla_production/core/database/casla_database.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../support/database_test_harness.dart';
 
 void main() {
+  useInMemoryDatabase();
+
   late CaslaDatabase db;
 
   setUp(() {

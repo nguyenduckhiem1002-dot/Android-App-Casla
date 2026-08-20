@@ -10,8 +10,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:casla_production/core/database/casla_database.dart';
 import 'package:casla_production/data/repositories/repositories_impl.dart';
 import 'package:casla_production/domain/entities/enums.dart';
+import '../support/database_test_harness.dart';
 
 void main() {
+  useInMemoryDatabase();
+
   late CaslaDatabase db;
   late AssignmentRepositoryImpl assignmentRepo;
   late ProductionRepositoryImpl productionRepo;

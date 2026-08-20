@@ -5,6 +5,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/foundation.dart';
 import 'package:casla_production/core/database/casla_database.dart';
+import '../support/database_test_harness.dart';
 
 /// Fills the sync queue with [count] historical items.
 ///
@@ -29,6 +30,8 @@ Future<void> seedSyncQueue(CaslaDatabase db, int count) async {
 }
 
 void main() {
+  useInMemoryDatabase();
+
   group('Performance Test Suite: Long-term Database & Sync Queue Benchmark', () {
     late CaslaDatabase db;
 
