@@ -16,6 +16,7 @@ import '../../core/database/casla_database.dart';
 import '../../core/sync/sap_write_gateway.dart';
 import '../../core/sync/sync_failure.dart';
 import '../../core/utils/device_info.dart';
+import '../../domain/entities/work_history.dart';
 import 'odata_error.dart';
 import 'sap_odata_client.dart';
 import 'sap_session_provider.dart';
@@ -296,6 +297,98 @@ class SapPpOpAllocGateway implements SapWriteGateway {
       // classify *that* failure instead of the original ambiguous one.
       rethrowAsBusinessError(error);
     }
+  }
+
+  /// `getWorkHistory` — a live read, not a queued mutation. Scope
+  /// (self/team) is decided entirely server-side from the account's RBAC
+  /// functions (`zcl_pp_work_history`); a worker-only account always gets its
+  /// own rows back no matter what, so there is no worker id to pass here.
+  Future<WorkHistoryResult> getWorkHistory({
+    required HistoryRange range,
+  }) async {
+    final accessToken = session.accessToken;
+    if (accessToken == null || accessToken.isEmpty) {
+      throw const SapBusinessError('TOKEN_INVALID_OR_EXPIRED');
+    }
+    final deviceId = DeviceInfoHelper.deviceId;
+
+    try {
+      await client.fetchCsrfToken();
+      final response = await client.dio.post(
+        '$_kEntitySet/$_kNamespace.getWorkHistory',
+        data: {
+          'AccessToken': accessToken,
+          'DeviceID': deviceId,
+          'RangeCode': range.code,
+          'WorkerID': '',
+          'SummaryOnly': false,
+        },
+      );
+      return _parseHistoryResult(odataActionResult(response));
+    } on DioException catch (error) {
+      rethrowAsBusinessError(error);
+    }
+  }
+
+  static WorkHistoryResult _parseHistoryResult(Map<String, dynamic> body) {
+    final entries = (body['_Entries'] as List? ?? const [])
+        .map((e) => _entryFromJson(Map<String, dynamic>.from(e as Map)))
+        .toList();
+    final workers = (body['_Workers'] as List? ?? const [])
+        .map((w) => _summaryFromJson(Map<String, dynamic>.from(w as Map)))
+        .toList();
+
+    return WorkHistoryResult(
+      scopeCode: (body['ScopeCode'] ?? '').toString(),
+      dateFrom: _parseDate(body['DateFrom']) ?? DateTime.now(),
+      dateTo: _parseDate(body['DateTo']) ?? DateTime.now(),
+      isTruncated: body['IsTruncated'] == true,
+      entries: entries,
+      workers: workers,
+    );
+  }
+
+  static WorkHistoryEntry _entryFromJson(Map<String, dynamic> json) {
+    return WorkHistoryEntry(
+      transactionUuid: (json['TransactionUUID'] ?? '').toString(),
+      executionDate: _parseDate(json['ExecutionDate']) ?? DateTime.now(),
+      workerId: (json['WorkerID'] ?? '').toString(),
+      workerName: (json['WorkerName'] ?? '').toString(),
+      productionOrder: (json['ProductionOrder'] ?? '').toString(),
+      operation: (json['Operation'] ?? '').toString(),
+      plant: (json['Plant'] ?? '').toString(),
+      workCenter: (json['WorkCenter'] ?? '').toString(),
+      transactionType: (json['TransactionType'] ?? '').toString(),
+      quantity: _parseQuantity(json['Quantity']),
+      unitOfMeasure: (json['UnitOfMeasure'] ?? '').toString(),
+      transactionStatus: (json['TransactionStatus'] ?? '').toString(),
+    );
+  }
+
+  static WorkHistorySummary _summaryFromJson(Map<String, dynamic> json) {
+    return WorkHistorySummary(
+      workerId: (json['WorkerID'] ?? '').toString(),
+      workerName: (json['WorkerName'] ?? '').toString(),
+      assignedQuantity: _parseQuantity(json['AssignedQuantity']),
+      completedQuantity: _parseQuantity(json['CompletedQuantity']),
+      remainingQuantity: _parseQuantity(json['RemainingQuantity']),
+      unitOfMeasure: (json['UnitOfMeasure'] ?? '').toString(),
+      transactionCount: (json['TransactionCount'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  /// `Edm.Date` comes back as an ISO date string; `Edm.Decimal` (IEEE754
+  /// Compatible, same as the write side) comes back as a numeric string —
+  /// both need parsing rather than a direct cast.
+  static DateTime? _parseDate(Object? value) {
+    if (value == null) return null;
+    return DateTime.tryParse(value.toString());
+  }
+
+  static double _parseQuantity(Object? value) {
+    if (value == null) return 0.0;
+    if (value is num) return value.toDouble();
+    return double.tryParse(value.toString()) ?? 0.0;
   }
 
   static String? _requireWorkerPassword(SyncPushRequest request) {

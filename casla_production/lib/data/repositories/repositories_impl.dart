@@ -12,11 +12,13 @@ import '../../core/utils/device_info.dart';
 import 'package:flutter/foundation.dart';
 import '../../domain/entities/entities.dart';
 import '../../domain/entities/enums.dart';
+import '../../domain/entities/work_history.dart';
 import '../../domain/policies/production_math.dart';
 import '../../domain/repositories/repositories.dart';
 
 import '../sap/sap_odata_client.dart';
 import '../sap/sap_auth_controller.dart';
+import '../sap/sap_pp_opalloc_gateway.dart';
 
 // ─── Auth Repository ────────────────────────────────────────────────
 class AuthRepositoryImpl implements AuthRepository {
@@ -119,10 +121,18 @@ class AuthRepositoryImpl implements AuthRepository {
   /// Converts the permissions/work-contexts SAP returned into the app
   /// session's role/permission/scope claims.
   ///
-  /// Fails closed: this app has no worker- or inspector-facing screens yet
-  /// (Spec 5.1 describes them, but only the Supervisor surface is built), so
-  /// an account without the full supervisor permission set is rejected here
-  /// rather than silently landing on a broken/empty UI.
+  /// The app now serves two roles:
+  /// - the full supervisor set above → [UserRole.supervisor], which also
+  ///   needs at least one Work Context (Plant/WorkCenter) since the
+  ///   supervisor screens scope by team;
+  /// - `PP_HIST_SELF` (see `zcl_pp_work_history`) alone, with no supervisor
+  ///   permissions and no Work Context required → [UserRole.worker], who can
+  ///   only reach the read-only history screen. `getWorkHistory` derives the
+  ///   worker's own id server-side from the authenticated account, so no
+  ///   local Work Context is needed for this.
+  ///
+  /// Still fails closed: an account with neither is rejected rather than
+  /// silently landing on a broken/empty UI.
   @visibleForTesting
   static ({
     UserRole role,
@@ -134,26 +144,31 @@ class AuthRepositoryImpl implements AuthRepository {
     required List<SapWorkContext> workContexts,
   }) {
     final funcIds = permissions.map((p) => p.funcId).toSet();
-
-    if (!funcIds.containsAll(_supervisorFuncIds)) {
-      throw Exception(
-        'Tài khoản không có vai trò Supervisor được phép sử dụng ứng dụng.',
-      );
-    }
-
     final appPermissions = Permission.values
         .where((permission) => funcIds.contains(permission.code))
         .toSet();
 
-    if (workContexts.isEmpty) {
-      throw Exception('Tài khoản chưa được phân phạm vi tổ sản xuất.');
+    if (funcIds.containsAll(_supervisorFuncIds)) {
+      if (workContexts.isEmpty) {
+        throw Exception('Tài khoản chưa được phân phạm vi tổ sản xuất.');
+      }
+      return (
+        role: UserRole.supervisor,
+        permissions: appPermissions,
+        workContexts: workContexts,
+      );
     }
 
-    return (
-      role: UserRole.supervisor,
-      permissions: appPermissions,
-      workContexts: workContexts,
-    );
+    if (funcIds.contains(Permission.viewOwnProductionHistory.code) ||
+        funcIds.contains(Permission.viewTeamProductionHistory.code)) {
+      return (
+        role: UserRole.worker,
+        permissions: appPermissions,
+        workContexts: workContexts,
+      );
+    }
+
+    throw Exception('Tài khoản chưa được cấp quyền sử dụng ứng dụng.');
   }
 }
 
@@ -596,4 +611,15 @@ class RecallRepositoryImpl implements RecallRepository {
   @override
   Future<double> getRecalledQuantity(String assignmentId) =>
       db.getRecalledQuantity(assignmentId);
+}
+
+// ─── Work History Repository ─────────────────────────────────────────
+class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
+  final SapPpOpAllocGateway gateway;
+
+  WorkHistoryRepositoryImpl(this.gateway);
+
+  @override
+  Future<WorkHistoryResult> getWorkHistory({required HistoryRange range}) =>
+      gateway.getWorkHistory(range: range);
 }

@@ -14,6 +14,7 @@ import '../../features/supervisor/screens/s08_assignment_detail_screen.dart';
 import '../../features/supervisor/screens/s09_recall_screen.dart';
 import '../../features/supervisor/screens/s10_confirm_scan_screen.dart';
 import '../../features/sync/screens/s12_sync_screen.dart';
+import '../../features/worker/screens/w01_history_screen.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
   // `refreshListenable` below re-evaluates redirects on session changes, so the
@@ -33,13 +34,24 @@ final routerProvider = Provider<GoRouter>((ref) {
         return '/login';
       }
 
-      if (isLoggedIn && isGoingToLogin) {
-        return '/supervisor';
-      }
-
       if (isLoggedIn) {
         final session = appState.currentSession!;
         final location = state.matchedLocation;
+        final homeRoute = session.role == UserRole.worker
+            ? '/history'
+            : '/supervisor';
+
+        if (isGoingToLogin) {
+          return homeRoute;
+        }
+
+        // A worker account only ever has the read-only history screen —
+        // getWorkHistory decides self-vs-team scope server-side, so there is
+        // nothing else on this role to permission-gate below.
+        if (session.role == UserRole.worker) {
+          return location == '/history' ? null : '/history';
+        }
+
         final requiredPermission = switch (location) {
           '/supervisor/create_assignment' => Permission.assignQuantity,
           '/supervisor/recall_assignment' => Permission.recallAssignment,
@@ -49,8 +61,8 @@ final routerProvider = Provider<GoRouter>((ref) {
           _ => Permission.viewTeamProduction,
         };
         if (!session.hasPermission(requiredPermission) &&
-            location != '/supervisor') {
-          return '/supervisor';
+            location != homeRoute) {
+          return homeRoute;
         }
       }
 
@@ -103,6 +115,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/sync',
         builder: (context, state) => const S12SyncScreen(),
+      ),
+      GoRoute(
+        path: '/history',
+        builder: (context, state) => const W01HistoryScreen(),
       ),
     ],
   );

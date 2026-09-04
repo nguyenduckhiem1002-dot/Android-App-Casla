@@ -15,6 +15,8 @@ void main() {
     await tester.pump();
 
     expect(find.byType(CaslaApp), findsOneWidget);
-    expect(find.textContaining('Supervisor'), findsWidgets);
+    // Login is now shared by every role (supervisor and worker), so the
+    // screen no longer names a role — just its own heading.
+    expect(find.text('Đăng nhập'), findsWidgets);
   });
 }

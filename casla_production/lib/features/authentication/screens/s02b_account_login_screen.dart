@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../presentation/widgets/casla_logo.dart';
 import '../../../app/theme/casla_colors.dart';
+import '../../../domain/entities/enums.dart';
 import '../../../main.dart';
 
 class S02bAccountLoginScreen extends ConsumerStatefulWidget {
@@ -55,9 +56,11 @@ class _S02bAccountLoginScreenState
     });
 
     try {
-      await ref.read(appStateProvider).loginByCredentials(username, password);
+      final appState = ref.read(appStateProvider);
+      await appState.loginByCredentials(username, password);
       if (!mounted) return;
-      context.go('/supervisor');
+      final role = appState.currentSession?.role;
+      context.go(role == UserRole.worker ? '/history' : '/supervisor');
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -92,7 +95,7 @@ class _S02bAccountLoginScreenState
                   const CaslaLogo(height: 72, isDarkBackground: false),
                   const SizedBox(height: 16),
                   const Text(
-                    'Đăng nhập Supervisor',
+                    'Đăng nhập',
                     style: TextStyle(
                       fontFamily: 'Manrope',
                       fontWeight: FontWeight.w800,
