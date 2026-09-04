@@ -1,106 +1,183 @@
-# Kế hoạch đưa Casla Production lên môi trường thật
+# Casla Production — trạng thái sẵn sàng production
 
-## Trạng thái hiện tại
+Tài liệu này phản ánh trạng thái source hiện tại sau các phase hardening. CI xanh là điều kiện cần nhưng **không đồng nghĩa đã được phép go-live**: một số hạng mục cần credential/identity chính thức, thay đổi kiến trúc SAP hoặc kiểm thử ngoài thiết bị thật.
 
-Ứng dụng đã có kiểm tra format, analyze, test và build iOS không ký trên CI. Tuy
-nhiên dữ liệu nghiệp vụ vẫn là bộ nhớ tạm (`CaslaDatabase`), chưa có sync worker
-thật và cơ chế xác thực hiện vẫn cần tài khoản Basic SAP đóng gói qua
-`dart-define`. Vì vậy bản hiện tại chưa đủ điều kiện phát hành production.
+## 1. Những phần đã hoàn thành trong source
 
-## P0 — Điều kiện bắt buộc trước pilot
+### Persistence và offline/sync
 
-### 1. Chốt hợp đồng bảo mật SAP/API
+- `CaslaDatabase` dùng SQLite persistent, schema version và migration; không còn là in-memory store.
+- `SyncQueue` và `AuditLog` được lưu bền vững; queue tồn tại qua app/process restart.
+- Luồng ghi dùng verified sync coordinator, phân loại lỗi, retry/terminal state và đối soát kết quả SAP.
+- Có integration test cho offline → restart → sync, test migration/persistence/stream, chaos test mạng SAP và performance test database.
+- WorkHistory có SQLite cache, namespace theo account/permission/date, stale-while-revalidate và in-flight request deduplication.
+- WorkHistory UI chỉ render 50 giao dịch mỗi lượt rồi cho phép tải thêm, giảm chi phí build widget trên PDA.
 
-- Không đóng gói `SAP_BASIC_AUTH_USER` hoặc `SAP_BASIC_AUTH_PASSWORD` trong
-  APK/IPA. Đặt service credential tại SAP API Management/BTP/gateway backend.
-- Mobile đăng nhập qua gateway và chỉ nhận access token ngắn hạn; refresh token
-  phải được xoay vòng và có khả năng thu hồi.
-- Truyền token bằng `Authorization: Bearer`, không truyền token/mật khẩu trong
-  query string. Query string có thể xuất hiện trong proxy, gateway và crash log.
-- Response hồ sơ người dùng phải có các claim: `Role`, `Permissions`, `TeamIds`.
-  App hiện fail-closed nếu thiếu các claim này.
-- SAP/backend phải kiểm tra quyền và phạm vi tổ ở mọi API ghi dữ liệu. Kiểm tra
-  phía Flutter chỉ phục vụ UX, không phải ranh giới bảo mật.
-- Bật HTTPS với certificate hợp lệ; xác nhận chính sách certificate rotation và
-  không dùng bypass TLS.
+### Auth, scope và dữ liệu nhạy cảm
 
-### 2. Thay in-memory store bằng SQLite
+- Session refresh/logout có guard chống concurrent refresh làm sống lại session đã logout.
+- App fail-closed với permission/team scope thiếu hoặc không hợp lệ; SAP/backend vẫn là security boundary cho mọi write.
+- Android manifest tắt backup và cleartext traffic.
+- Network logging chỉ bật ở debug; test redaction bảo vệ token/password/header nhạy cảm.
+- Field telemetry chỉ dùng enum đóng và số aggregate in-memory; không nhận barcode, WorkerID, token, credential, SAP payload hoặc error text.
 
-- Dùng Drift/SQLite, có schema version và migration tự động.
-- Các giao dịch `entity + sync_queue + audit_log` phải nằm trong một transaction.
-- Tạo index tối thiểu cho `assignmentId`, `workerId`, `teamId`, `businessDate`,
-  `syncStatus`, `createdAtUtc` và `idempotencyKey` unique.
-- Lưu access/refresh token trong Android Keystore/iOS Keychain; không lưu trong
-  SQLite hoặc log.
-- Viết test thật cho quy trình: offline → tắt process → mở lại → sync → SAP ACK.
-- Chỉ xóa queue item sau khi SAP xác nhận thành công; retry dùng exponential
-  backoff, jitter và giới hạn số lần thử.
+### RS38/PDA
 
-### 3. Master data và quyền truy cập
+- Có native CipherLab scanner bridge, hardware-first scanner và camera/manual fallback.
+- Có scan deduplication, phản hồi haptic/trạng thái, lỗi worker persistent/accessibility và touch target phù hợp PDA.
+- CI compile Android production flavor cùng native scanner bridge.
 
-- Cung cấp API đồng bộ nhân viên, tổ, đơn hàng và phạm vi supervisor.
-- QR chỉ mang mã định danh. Tên, vai trò và phạm vi phải lấy từ master data đã
-  xác thực.
-- Chốt mapping permission: `VIEW_TEAM_PRODUCTION`, `ASSIGN_QUANTITY`,
-  `RECALL_ASSIGNMENT`, `VIEW_EMPLOYEE_HISTORY`, `VIEW_SYNC_STATUS`, `SWITCH_USER`.
-- Chốt chính sách session timeout, khóa tài khoản, rate limit và đổi mật khẩu.
+### Android release hardening
 
-## P1 — Build, signing và phân phối
+- Có flavor `dev`, `staging`, `production`.
+- Production Application ID và signing input lấy từ secret/env hoặc `key.properties` đã gitignore.
+- Production release không fallback sang debug signing.
+- `verifyCaslaSigning` fail-closed khi Application ID còn placeholder, thiếu keystore/password/alias hoặc `ENABLE_DEMO_DATA=true`.
+- CI kiểm tra độc lập cả signing guard và demo-data guard.
+- Xem `android/PRODUCTION_SIGNING.md`.
+
+### iOS build hardening
+
+- CI compile Flutter iOS release không ký và chạy Xcode build validation.
+- Có `ios/verify_production_identity.sh` để fail-closed khi Bundle ID vẫn placeholder hoặc thiếu Apple Team ID.
+- Xem `ios/PRODUCTION_SIGNING.md`.
+
+### CI hiện tại
+
+CI ghim Flutter `3.44.8` và bắt buộc chạy:
+
+1. `dart format`.
+2. `flutter analyze`.
+3. toàn bộ `flutter test`.
+4. Android `productionDebug` build + native RS38 bridge.
+5. Android release signing/identity guard.
+6. Android production demo-data guard.
+7. iOS release compile không ký.
+8. Xcode archive-setting build validation.
+9. iOS production identity guard.
+
+Không nâng dependency/toolchain hàng loạt chỉ vì có version mới; mỗi lần nâng phải là PR riêng có full gate tương ứng.
+
+## 2. P0 — Blocker trước production go-live
+
+### P0.1 — Loại shared SAP Basic credential khỏi mobile binary
+
+Đây là blocker kiến trúc quan trọng nhất còn lại.
+
+Client hiện vẫn nhận `SAP_BASIC_AUTH_USER` / `SAP_BASIC_AUTH_PASSWORD` qua compile-time configuration và `SapODataClient` dùng Basic Authorization để gọi SAP. User access token lại được truyền trong RAP contract riêng. Dù secret không nằm trong source control, **shared Basic credential đóng gói trong APK/IPA vẫn có thể bị trích xuất khỏi binary**.
+
+Trước go-live cần:
+
+- Đưa service credential về SAP API Management/BTP/gateway hoặc backend tin cậy; không phân phối shared SAP credential cho mobile.
+- Chốt mobile auth contract dùng token ngắn hạn và cơ chế refresh/revoke phù hợp.
+- Không đưa access token/password vào query string nếu gateway/backend cho phép chuyển sang header/secure contract.
+- Giữ backend authorization cho role, permission, team scope và idempotency ở mọi write API.
+- Chỉ đổi client protocol sau khi backend contract đã được thống nhất; không tự thay Basic/Bearer một phía.
+
+### P0.2 — Cung cấp production identity và signing thật
+
+Android còn cần:
+
+- `CASLA_ANDROID_APPLICATION_ID` chính thức.
+- upload keystore, store password, key alias và key password trong secret store/GitHub Environment.
+- quyết định Play App Signing hoặc MDM/private distribution.
+
+Các guard hiện tại sẽ chặn production release khi các giá trị này chưa có.
+
+iOS còn cần:
+
+- `CASLA_IOS_BUNDLE_ID` chính thức.
+- `CASLA_IOS_TEAM_ID`.
+- distribution certificate/profile hoặc managed signing setup.
+- App Store Connect API credential nếu deploy TestFlight/App Store.
+
+Compile-only CI hiện tại **không phải** signed distribution pipeline.
+
+### P0.3 — Kiểm thử hệ thống thật
+
+Trước go-live phải có:
+
+- smoke test với SAP/gateway production-like environment.
+- pilot trên CipherLab RS38 thật, gồm trigger scan liên tục, sleep/resume, mất mạng, app kill/restart và camera fallback.
+- test quyền/scope bằng nhiều account thật.
+- offline → restart → reconnect → SAP ACK trên thiết bị thật.
+- rollback plan và quy trình hỗ trợ vận hành.
+
+## 3. P1 — Security và vận hành nên hoàn tất trước rollout rộng
+
+### CipherLab broadcast trust boundary
+
+Native bridge phải nhận broadcast từ ReaderConfig bên ngoài app; trên Android 13+ receiver hiện cần exported behavior để vendor app có thể gửi scan. Vì vậy vẫn còn trust-boundary risk nếu một app khác có thể spoof broadcast.
+
+Không đổi sang `RECEIVER_NOT_EXPORTED` một cách mù vì có thể làm hỏng RS38. Cần xác minh tài liệu/vendor xem có permission, package restriction hoặc signed broadcast contract hay không. Dù vậy barcode vẫn phải qua parser/scope/backend validation; broadcast không được coi là authorization.
+
+### GitHub/repository controls
+
+Cần kiểm tra/bật bằng quyền admin repository nếu chưa có:
+
+- branch protection/ruleset yêu cầu CI + review trước merge.
+- secret scanning/push protection.
+- Dependabot/dependency review hoặc giải pháp tương đương.
+- CodeQL/SAST phù hợp với Dart/Kotlin/Swift nếu tổ chức sử dụng.
+- GitHub Environments `staging`/`production` với approval cho release secrets.
+
+Các setting này không thể được xác nhận chỉ bằng source tree.
+
+### Observability
+
+Telemetry source hiện chỉ là privacy-safe aggregate in-memory, chưa tự gửi ra ngoài. Nếu cần remote observability:
+
+- chỉ export metric allowlist, không cho free-form label.
+- không gửi QR/barcode, WorkerID, token, password, SAP payload/body hoặc raw error.
+- định nghĩa retention, access control và sampling trước khi bật.
+
+## 4. P2 — QA/release validation
+
+- Pen-test APK/IPA: binary secret extraction, cleartext/TLS, backup, log/screenshot leakage, route authorization và tampered QR.
+- Retry/error matrix: 401/403/409/429/5xx, timeout, network flap, token expiry giữa transaction.
+- Load test SAP/gateway theo concurrency thiết bị và tần suất ghi thực tế.
+- Kiểm thử clock skew, duplicate/idempotency và long-running queue.
+- Pilot một tổ trước rollout rộng; theo dõi crash-free rate, sync success, queue age và latency.
+- Kiểm thử upgrade/migration từ version đang phát hành sang schema hiện tại.
+
+## 5. Release checklist
 
 ### Android
 
-- Chọn Application ID chính thức, ví dụ `com.casla.production`; đổi cả namespace
-  và package của `MainActivity`.
-- Tạo upload keystore riêng, lưu file/password/alias trong GitHub Environment
-  secrets; không commit keystore hoặc `key.properties`.
-- Cấu hình Play App Signing và build `appbundle` cho Play Console.
-- Tạo flavor `dev`, `staging`, `production` với Application ID và API URL riêng.
+- [ ] Application ID chính thức đã cấu hình.
+- [ ] Keystore/alias/password nằm trong secret store, không nằm trong repo.
+- [ ] `ENABLE_DEMO_DATA` không được bật.
+- [ ] Endpoint SAP/gateway là HTTPS production endpoint.
+- [ ] `verifyCaslaSigning` pass trong authorized release environment.
+- [ ] Signed AAB/APK được xác minh certificate/package trước phân phối.
+- [ ] RS38 physical-device smoke pass.
 
 ### iOS
 
-- Chọn Bundle ID chính thức, ví dụ `com.casla.production`.
-- Cần Apple Developer Team ID, Apple Distribution certificate `.p12`, mật khẩu
-  `.p12`, App Store provisioning profile và App Store Connect API key.
-- Lưu các giá trị trên trong GitHub Environment `production`; cấu hình
-  `flutter build ipa` và upload TestFlight.
-- Không dùng `--no-codesign` cho job phân phối; job đó chỉ dùng kiểm tra compile.
+- [ ] Bundle ID chính thức đã cấu hình.
+- [ ] Apple Team ID và distribution signing material đã cấu hình.
+- [ ] `ios/verify_production_identity.sh` pass trong authorized release environment.
+- [ ] Signed archive/IPA được export bằng production pipeline, không dùng `--no-codesign`.
+- [ ] TestFlight/MDM smoke pass.
 
-## P1 — CI/CD và vận hành
+### Backend/SAP
 
-- Flutter CI được ghim ở `3.44.8`; chỉ nâng qua PR có analyze/test/build đầy đủ.
-- Bật branch protection: CI bắt buộc, review bắt buộc, cấm push thẳng production.
-- Thêm secret scanning, dependency review và kiểm tra Android/iOS release build.
-- Tách GitHub Environments `staging` và `production`, yêu cầu approval khi deploy.
-- Tích hợp crash reporting có lọc PII; tuyệt đối không gửi mật khẩu, token, QR thô
-  hoặc response body SAP.
-- Thiết lập dashboard: tỷ lệ login lỗi, queue pending/failed, sync latency, HTTP
-  error rate và app crash-free sessions.
+- [ ] Shared Basic service credential không còn nằm trong mobile binary.
+- [ ] Role/permission/team scope được kiểm tra server-side cho mọi write.
+- [ ] Idempotency được SAP/backend enforce.
+- [ ] Token/session revoke và expiry đã test.
+- [ ] Production monitoring và rollback procedure sẵn sàng.
 
-## P2 — QA trước phát hành
+## 6. Tiêu chí Go-live
 
-- Test thiết bị thật Android/iOS: camera permission, QR, offline, mất mạng giữa
-  transaction, token hết hạn, logout khi SAP offline và app bị kill.
-- Kiểm tra dữ liệu trùng với idempotency, clock lệch, retry 401/409/429/5xx.
-- Pen-test APK/IPA: secret extraction, cleartext traffic, backup, screenshot/log
-  leakage, deep-link/route authorization và tampered QR.
-- Load test SAP/gateway theo số thiết bị và tần suất ghi sản lượng thực tế.
-- Pilot một tổ sản xuất, có rollback và hướng dẫn hỗ trợ vận hành.
+Go-live chỉ đạt khi đồng thời:
 
-## Thông tin cần cung cấp để triển khai
+- CI source hiện tại xanh trên commit phát hành.
+- Không có shared service credential có thể trích xuất từ mobile binary.
+- Android/iOS có identity và signing chính thức.
+- Demo data bị tắt và endpoint production được xác nhận.
+- Pending transaction sống qua restart và sync/ACK đúng với SAP.
+- Backend enforce authorization/scope/idempotency.
+- Pilot RS38 + security/load/rollback validation đạt ngưỡng đã thống nhất.
 
-1. Application ID Android và Bundle ID iOS chính thức.
-2. URL gateway/SAP cho dev, staging và production.
-3. JSON mẫu của login/profile, đặc biệt `Role`, `Permissions`, `TeamIds`.
-4. Đặc tả API master data và API sync/ACK cho assignment, production, recall.
-5. Quyết định phân phối: Google Play Internal Testing và TestFlight hay MDM.
-6. Android upload keystore; Apple Team ID/certificate/profile/API key.
-7. Chính sách lưu offline, thời hạn session, retention audit và yêu cầu PII.
-
-## Tiêu chí Go-live
-
-- Không còn service credential trong binary hoặc source control.
-- Không có token/mật khẩu trong URL hay log.
-- Dữ liệu pending tồn tại sau khi process/app/device restart.
-- Mọi API ghi được backend kiểm tra role, permission, team scope và idempotency.
-- Android/iOS production được ký hợp lệ, CI tái lập được và có rollback.
-- Pilot đạt các ngưỡng crash, sync success và latency đã thống nhất.
+Nếu P0.1 chưa giải quyết, trạng thái đúng là **codebase hardened / pilot-capable**, chưa phải production go-live ready.
