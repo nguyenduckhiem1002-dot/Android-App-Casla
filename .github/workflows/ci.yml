@@ -63,8 +63,25 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Compile Android APK including native scanner bridge
-        run: flutter build apk --debug --no-pub
+      - name: Compile production flavor APK including native scanner bridge
+        run: flutter build apk --debug --flavor production --no-pub
+
+      - name: Verify production release fails closed without secrets
+        working-directory: casla_production/android
+        run: |
+          ./gradlew :app:tasks --all | grep -q assembleProductionRelease
+
+          set +e
+          output=$(./gradlew :app:verifyCaslaSigning 2>&1)
+          status=$?
+          set -e
+
+          if [ "$status" -eq 0 ]; then
+            echo "::error::Production signing guard unexpectedly passed in secret-free CI."
+            exit 1
+          fi
+
+          echo "$output" | grep -q "Production Android release is not configured"
 
   ios:
     name: iOS / Xcode build
