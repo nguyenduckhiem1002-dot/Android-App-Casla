@@ -53,7 +53,11 @@ class AppState extends ChangeNotifier {
       gateway: sapGateway,
       verifiedSync: verifiedSync,
     );
-    workHistoryRepo = WorkHistoryRepositoryImpl(sapGateway);
+    workHistoryRepo = WorkHistoryRepositoryImpl(
+      db,
+      loadRemote: sapGateway.getWorkHistory,
+      cacheSubject: () => _workHistoryCacheSubject,
+    );
 
     // Drains anything a write's immediate push left queued — offline at the
     // moment of write, a transient SAP error, or a token that needed a
@@ -66,6 +70,26 @@ class AppState extends ChangeNotifier {
       gateway: sapGateway,
       connectivity: PlatformConnectivityMonitor(),
     )..start();
+  }
+
+  String? get _workHistoryCacheSubject {
+    final session = _currentSession;
+    if (session == null) return null;
+
+    // SAP can change history permissions between logins. Include the effective
+    // history scope in the namespace so a reduced-permission login never sees
+    // a team-level snapshot cached by an earlier session.
+    final scopes =
+        session.permissions
+            .where(
+              (permission) =>
+                  permission == Permission.viewOwnProductionHistory ||
+                  permission == Permission.viewTeamProductionHistory,
+            )
+            .map((permission) => permission.name)
+            .toList()
+          ..sort();
+    return '${session.id}:${scopes.join(',')}';
   }
 
   // ─── Session ──────────────────────────────────────────────────────

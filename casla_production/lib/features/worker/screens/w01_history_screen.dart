@@ -34,7 +34,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
     _future = _load();
   }
 
-  Future<WorkHistoryResult> _load() {
+  Future<WorkHistoryResult> _load({bool forceRefresh = false}) {
     return ref
         .read(appStateProvider)
         .workHistoryRepo
@@ -42,6 +42,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
           range: _range,
           dateFrom: _range == HistoryRange.custom ? _customDateFrom : null,
           dateTo: _range == HistoryRange.custom ? _customDateTo : null,
+          forceRefresh: forceRefresh,
         );
   }
 
@@ -58,9 +59,27 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
   }
 
   Future<void> _refresh() async {
-    final next = _load();
-    setState(() => _future = next);
-    await next;
+    try {
+      final result = await _load(forceRefresh: true);
+      if (!mounted) return;
+      setState(() => _future = Future.value(result));
+    } catch (_) {
+      if (!mounted) return;
+      final cached = _load();
+      setState(() => _future = cached);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Không thể làm mới từ SAP. Đang hiển thị dữ liệu gần nhất trên máy.',
+          ),
+        ),
+      );
+      try {
+        await cached;
+      } catch (_) {
+        // No cached snapshot exists; FutureBuilder will render its normal error.
+      }
+    }
   }
 
   Future<void> _pickSingleDate() async {

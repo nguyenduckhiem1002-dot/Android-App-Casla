@@ -565,6 +565,135 @@ class CaslaDatabase {
     }, conflictAlgorithm: ConflictAlgorithm.ignore);
   }
 
+  /// Upserts worker identities learned from SAP in one SQLite batch.
+  ///
+  /// Existing rows keep their role, permissions and team scope. WorkHistory
+  /// only tells us WorkerID + name, so replacing a row here would erase
+  /// authoritative `to_ids` and could accidentally broaden or narrow scope.
+  Future<void> upsertEmployeesBatch(List<Map<String, String>> workers) async {
+    if (workers.isEmpty) return;
+
+    final deduplicated = <String, String>{};
+    for (final worker in workers) {
+      final workerId = worker['worker_id']?.trim() ?? '';
+      if (workerId.isEmpty) continue;
+      final workerName = worker['worker_name']?.trim();
+      deduplicated[workerId] = workerName == null || workerName.isEmpty
+          ? workerId
+          : workerName;
+    }
+    if (deduplicated.isEmpty) return;
+
+    final db = await _database;
+    final batch = db.batch();
+    for (final entry in deduplicated.entries) {
+      batch.rawInsert(
+        '''
+        INSERT INTO employees (
+          id, ma_nv, ten, bo_phan, trang_thai, vai_tro, quyen_han, to_ids
+        ) VALUES (?, ?, ?, ?, 'ACTIVE', 'CONG_NHAN', ?, ?)
+        ON CONFLICT(ma_nv) DO UPDATE SET
+          ten = excluded.ten,
+          trang_thai = 'ACTIVE'
+        ''',
+        [
+          'sap-worker:${entry.key}',
+          entry.key,
+          entry.value,
+          'Công nhân sản xuất',
+          jsonEncode(['VIEW_OWN_PRODUCTION']),
+          jsonEncode(<String>[]),
+        ],
+      );
+    }
+    await batch.commit(noResult: true);
+  }
+
+  /// Reads one fully materialized WorkHistory result from the local cache.
+  Future<Map<String, dynamic>?> getWorkHistoryCache(String cacheKey) async {
+    final db = await _database;
+    final metaRows = await db.query(
+      'work_history_cache_meta',
+      where: 'cache_key = ?',
+      whereArgs: [cacheKey],
+      limit: 1,
+    );
+    if (metaRows.isEmpty) return null;
+
+    final entryRows = await db.query(
+      'work_history_cache_entries',
+      where: 'cache_key = ?',
+      whereArgs: [cacheKey],
+      orderBy: 'sequence_no ASC',
+    );
+    final workerRows = await db.query(
+      'work_history_cache_workers',
+      where: 'cache_key = ?',
+      whereArgs: [cacheKey],
+      orderBy: 'sequence_no ASC',
+    );
+
+    return {
+      'meta': Map<String, dynamic>.from(metaRows.single),
+      'entries': _rows(entryRows),
+      'workers': _rows(workerRows),
+    };
+  }
+
+  /// Atomically replaces one WorkHistory cache window.
+  Future<void> replaceWorkHistoryCache({
+    required String cacheKey,
+    required String subjectId,
+    required String rangeCode,
+    String? requestDateFrom,
+    String? requestDateTo,
+    required String scopeCode,
+    required String resultDateFrom,
+    required String resultDateTo,
+    required bool isTruncated,
+    required int fetchedAtUtc,
+    required List<Map<String, Object?>> entries,
+    required List<Map<String, Object?>> workers,
+  }) async {
+    final db = await _database;
+    await db.transaction((txn) async {
+      await txn.delete(
+        'work_history_cache_meta',
+        where: 'cache_key = ?',
+        whereArgs: [cacheKey],
+      );
+      await txn.insert('work_history_cache_meta', {
+        'cache_key': cacheKey,
+        'subject_id': subjectId,
+        'range_code': rangeCode,
+        'request_date_from': requestDateFrom,
+        'request_date_to': requestDateTo,
+        'scope_code': scopeCode,
+        'result_date_from': resultDateFrom,
+        'result_date_to': resultDateTo,
+        'is_truncated': isTruncated ? 1 : 0,
+        'fetched_at_utc': fetchedAtUtc,
+      });
+
+      final batch = txn.batch();
+      for (var index = 0; index < entries.length; index++) {
+        batch.insert('work_history_cache_entries', {
+          'cache_key': cacheKey,
+          'sequence_no': index,
+          ...entries[index],
+        });
+      }
+      for (var index = 0; index < workers.length; index++) {
+        batch.insert('work_history_cache_workers', {
+          'cache_key': cacheKey,
+          'sequence_no': index,
+          ...workers[index],
+        });
+      }
+      await batch.commit(noResult: true);
+    });
+  }
+
   /// Workers belonging to any of [teamIds].
   ///
   /// This used to ignore its argument and return every worker, which made the

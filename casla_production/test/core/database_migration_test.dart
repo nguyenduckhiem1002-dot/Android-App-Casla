@@ -89,6 +89,29 @@ void main() {
     },
   );
 
+  test('v2 -> v3 creates the WorkHistory cache tables', () async {
+    final db = await openDatabase(inMemoryDatabasePath, version: 2);
+
+    await migrate(db, 2, 3);
+
+    final tables = await db.query(
+      'sqlite_master',
+      columns: ['name'],
+      where: "type = 'table' AND name LIKE 'work_history_cache_%'",
+      orderBy: 'name',
+    );
+    expect(
+      tables.map((row) => row['name']),
+      containsAll(<String>[
+        'work_history_cache_meta',
+        'work_history_cache_entries',
+        'work_history_cache_workers',
+      ]),
+    );
+
+    await db.close();
+  });
+
   test('a fresh install already has the v2 columns', () async {
     final db = await openDatabase(
       inMemoryDatabasePath,

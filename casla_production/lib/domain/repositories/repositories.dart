@@ -84,5 +84,6 @@ abstract class WorkHistoryRepository {
     required HistoryRange range,
     DateTime? dateFrom,
     DateTime? dateTo,
+    bool forceRefresh = false,
   });
 }

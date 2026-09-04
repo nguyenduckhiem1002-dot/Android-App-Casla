@@ -1,4 +1,6 @@
 // Data Layer — Repository Implementations
+
+import 'dart:async';
 // Spec: Section 9.1 (Business contracts)
 // Each transaction: Entity + SyncQueue + AuditLog atomic
 
@@ -20,7 +22,6 @@ import '../../domain/repositories/repositories.dart';
 
 import '../sap/sap_odata_client.dart';
 import '../sap/sap_auth_controller.dart';
-import '../sap/sap_pp_opalloc_gateway.dart';
 
 // ─── Auth Repository ────────────────────────────────────────────────
 class AuthRepositoryImpl implements AuthRepository {
@@ -683,18 +684,291 @@ class RecallRepositoryImpl implements RecallRepository {
 }
 
 // ─── Work History Repository ─────────────────────────────────────────
-class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
-  final SapPpOpAllocGateway gateway;
 
-  WorkHistoryRepositoryImpl(this.gateway);
+typedef WorkHistoryLoader =
+    Future<WorkHistoryResult> Function({
+      required HistoryRange range,
+      DateTime? dateFrom,
+      DateTime? dateTo,
+    });
+
+class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
+  final CaslaDatabase db;
+  final WorkHistoryLoader loadRemote;
+  final String? Function() cacheSubject;
+  final Duration freshFor;
+  final DateTime Function() _now;
+
+  final Map<String, Future<WorkHistoryResult>> _inFlight = {};
+
+  WorkHistoryRepositoryImpl(
+    this.db, {
+    required this.loadRemote,
+    required this.cacheSubject,
+    this.freshFor = const Duration(minutes: 2),
+    DateTime Function()? now,
+  }) : _now = now ?? DateTime.now;
 
   @override
   Future<WorkHistoryResult> getWorkHistory({
     required HistoryRange range,
     DateTime? dateFrom,
     DateTime? dateTo,
-  }) =>
-      gateway.getWorkHistory(range: range, dateFrom: dateFrom, dateTo: dateTo);
+    bool forceRefresh = false,
+  }) async {
+    final subject = cacheSubject()?.trim();
+    if (subject == null || subject.isEmpty) {
+      return loadRemote(range: range, dateFrom: dateFrom, dateTo: dateTo);
+    }
+
+    final cacheKey = _cacheKey(
+      subject: subject,
+      range: range,
+      dateFrom: dateFrom,
+      dateTo: dateTo,
+    );
+    // A forced refresh must join the in-flight map before any SQLite await.
+    // Otherwise an already-running SWR refresh can finish while this request
+    // is reading cache, disappear from _inFlight, and cause a duplicate SAP call.
+    if (forceRefresh) {
+      return _refresh(
+        cacheKey: cacheKey,
+        subject: subject,
+        range: range,
+        dateFrom: dateFrom,
+        dateTo: dateTo,
+      );
+    }
+
+    final cached = await _readCache(cacheKey);
+    if (cached != null) {
+      final age = _now().difference(cached.fetchedAt);
+      if (age >= freshFor) {
+        unawaited(
+          _ignoreRefreshFailure(
+            _refresh(
+              cacheKey: cacheKey,
+              subject: subject,
+              range: range,
+              dateFrom: dateFrom,
+              dateTo: dateTo,
+            ),
+          ),
+        );
+      }
+      return cached.result;
+    }
+
+    return _refresh(
+      cacheKey: cacheKey,
+      subject: subject,
+      range: range,
+      dateFrom: dateFrom,
+      dateTo: dateTo,
+    );
+  }
+
+  Future<void> _ignoreRefreshFailure(Future<WorkHistoryResult> refresh) async {
+    try {
+      await refresh;
+    } catch (_) {
+      // SWR keeps the last good snapshot visible while offline. A pull-to-
+      // refresh uses forceRefresh and still surfaces the live failure.
+    }
+  }
+
+  Future<WorkHistoryResult> _refresh({
+    required String cacheKey,
+    required String subject,
+    required HistoryRange range,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+  }) async {
+    final existing = _inFlight[cacheKey];
+    if (existing != null) return existing;
+
+    final future = _refreshOnce(
+      cacheKey: cacheKey,
+      subject: subject,
+      range: range,
+      dateFrom: dateFrom,
+      dateTo: dateTo,
+    );
+    _inFlight[cacheKey] = future;
+
+    try {
+      return await future;
+    } finally {
+      if (identical(_inFlight[cacheKey], future)) {
+        final _ = _inFlight.remove(cacheKey);
+      }
+    }
+  }
+
+  Future<WorkHistoryResult> _refreshOnce({
+    required String cacheKey,
+    required String subject,
+    required HistoryRange range,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+  }) async {
+    final result = await loadRemote(
+      range: range,
+      dateFrom: dateFrom,
+      dateTo: dateTo,
+    );
+    final fetchedAt = _now();
+
+    await db.replaceWorkHistoryCache(
+      cacheKey: cacheKey,
+      subjectId: subject,
+      rangeCode: range.code,
+      requestDateFrom: _dateKeyOrNull(dateFrom),
+      requestDateTo: _dateKeyOrNull(dateTo),
+      scopeCode: result.scopeCode,
+      resultDateFrom: _dateKey(result.dateFrom),
+      resultDateTo: _dateKey(result.dateTo),
+      isTruncated: result.isTruncated,
+      fetchedAtUtc: fetchedAt.millisecondsSinceEpoch,
+      entries: [
+        for (final entry in result.entries)
+          {
+            'transaction_uuid': entry.transactionUuid,
+            'execution_date': _dateKey(entry.executionDate),
+            'worker_id': entry.workerId,
+            'worker_name': entry.workerName,
+            'production_order': entry.productionOrder,
+            'operation': entry.operation,
+            'plant': entry.plant,
+            'work_center': entry.workCenter,
+            'transaction_type': entry.transactionType,
+            'quantity': entry.quantity,
+            'unit_of_measure': entry.unitOfMeasure,
+            'transaction_status': entry.transactionStatus,
+          },
+      ],
+      workers: [
+        for (final worker in result.workers)
+          {
+            'worker_id': worker.workerId,
+            'worker_name': worker.workerName,
+            'assigned_quantity': worker.assignedQuantity,
+            'completed_quantity': worker.completedQuantity,
+            'remaining_quantity': worker.remainingQuantity,
+            'unit_of_measure': worker.unitOfMeasure,
+            'transaction_count': worker.transactionCount,
+          },
+      ],
+    );
+
+    final employeeNames = <String, String>{};
+    for (final worker in result.workers) {
+      if (worker.workerId.isNotEmpty) {
+        employeeNames[worker.workerId] = worker.workerName;
+      }
+    }
+    for (final entry in result.entries) {
+      if (entry.workerId.isNotEmpty) {
+        employeeNames.putIfAbsent(entry.workerId, () => entry.workerName);
+      }
+    }
+    await db.upsertEmployeesBatch([
+      for (final worker in employeeNames.entries)
+        {'worker_id': worker.key, 'worker_name': worker.value},
+    ]);
+
+    return result;
+  }
+
+  Future<_CachedWorkHistory?> _readCache(String cacheKey) async {
+    final raw = await db.getWorkHistoryCache(cacheKey);
+    if (raw == null) return null;
+
+    try {
+      final meta = Map<String, dynamic>.from(raw['meta'] as Map);
+      final entries = (raw['entries'] as List)
+          .map((row) => Map<String, dynamic>.from(row as Map))
+          .map(
+            (row) => WorkHistoryEntry(
+              transactionUuid: row['transaction_uuid']?.toString() ?? '',
+              executionDate: DateTime.parse(row['execution_date'] as String),
+              workerId: row['worker_id']?.toString() ?? '',
+              workerName: row['worker_name']?.toString() ?? '',
+              productionOrder: row['production_order']?.toString() ?? '',
+              operation: row['operation']?.toString() ?? '',
+              plant: row['plant']?.toString() ?? '',
+              workCenter: row['work_center']?.toString() ?? '',
+              transactionType: row['transaction_type']?.toString() ?? '',
+              quantity: (row['quantity'] as num).toDouble(),
+              unitOfMeasure: row['unit_of_measure']?.toString() ?? '',
+              transactionStatus: row['transaction_status']?.toString() ?? '',
+            ),
+          )
+          .toList(growable: false);
+      final workers = (raw['workers'] as List)
+          .map((row) => Map<String, dynamic>.from(row as Map))
+          .map(
+            (row) => WorkHistorySummary(
+              workerId: row['worker_id']?.toString() ?? '',
+              workerName: row['worker_name']?.toString() ?? '',
+              assignedQuantity: (row['assigned_quantity'] as num).toDouble(),
+              completedQuantity: (row['completed_quantity'] as num).toDouble(),
+              remainingQuantity: (row['remaining_quantity'] as num).toDouble(),
+              unitOfMeasure: row['unit_of_measure']?.toString() ?? '',
+              transactionCount: (row['transaction_count'] as num).toInt(),
+            ),
+          )
+          .toList(growable: false);
+
+      return _CachedWorkHistory(
+        result: WorkHistoryResult(
+          scopeCode: meta['scope_code']?.toString() ?? '',
+          dateFrom: DateTime.parse(meta['result_date_from'] as String),
+          dateTo: DateTime.parse(meta['result_date_to'] as String),
+          isTruncated: meta['is_truncated'] == 1,
+          entries: entries,
+          workers: workers,
+        ),
+        fetchedAt: DateTime.fromMillisecondsSinceEpoch(
+          meta['fetched_at_utc'] as int,
+        ),
+      );
+    } catch (_) {
+      // Cache rows are expendable. A malformed/old snapshot must never block a
+      // live SAP read after an app upgrade.
+      return null;
+    }
+  }
+
+  String _cacheKey({
+    required String subject,
+    required HistoryRange range,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+  }) {
+    final anchor = _dateKey(_now());
+    final from =
+        _dateKeyOrNull(dateFrom) ??
+        (range == HistoryRange.custom ? '-' : anchor);
+    final to =
+        _dateKeyOrNull(dateTo) ?? (range == HistoryRange.custom ? '-' : anchor);
+    return '$subject|${range.code}|$from|$to';
+  }
+
+  static String _dateKey(DateTime value) =>
+      '${value.year.toString().padLeft(4, '0')}-'
+      '${value.month.toString().padLeft(2, '0')}-'
+      '${value.day.toString().padLeft(2, '0')}';
+
+  static String? _dateKeyOrNull(DateTime? value) =>
+      value == null ? null : _dateKey(value);
+}
+
+class _CachedWorkHistory {
+  final WorkHistoryResult result;
+  final DateTime fetchedAt;
+
+  const _CachedWorkHistory({required this.result, required this.fetchedAt});
 }
 
 MutationReceipt _mutationReceipt(String id, SyncFailure? failure) {
