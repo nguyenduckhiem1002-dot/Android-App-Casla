@@ -31,7 +31,6 @@ class PlatformHardwareBarcodeScanner implements BarcodeScanner {
   }
 
   @override
-  Stream<BarcodeScanEvent> get scans => _events
-      .receiveBroadcastStream()
-      .map(BarcodeScanEvent.fromPlatform);
+  Stream<BarcodeScanEvent> get scans =>
+      _events.receiveBroadcastStream().map(BarcodeScanEvent.fromPlatform);
 }

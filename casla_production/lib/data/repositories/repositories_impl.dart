@@ -77,7 +77,9 @@ class AuthRepositoryImpl implements AuthRepository {
       if (email.isEmpty) {
         email = (detail?['Email'] ?? '').toString();
       }
-      if (maNv == username && detail?['WorkerID'] != null && detail!['WorkerID'].toString().isNotEmpty) {
+      if (maNv == username &&
+          detail?['WorkerID'] != null &&
+          detail!['WorkerID'].toString().isNotEmpty) {
         maNv = detail['WorkerID'].toString();
       }
     }
@@ -692,11 +694,7 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
     DateTime? dateFrom,
     DateTime? dateTo,
   }) =>
-      gateway.getWorkHistory(
-        range: range,
-        dateFrom: dateFrom,
-        dateTo: dateTo,
-      );
+      gateway.getWorkHistory(range: range, dateFrom: dateFrom, dateTo: dateTo);
 }
 
 MutationReceipt _mutationReceipt(String id, SyncFailure? failure) {

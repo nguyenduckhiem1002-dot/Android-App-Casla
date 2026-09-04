@@ -100,14 +100,12 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
 
   Future<void> _pickDateRange() async {
     final now = DateTime.now();
-    final initialRange = (_customDateFrom != null &&
+    final initialRange =
+        (_customDateFrom != null &&
             _customDateTo != null &&
             !_customDateFrom!.isAtSameMomentAs(_customDateTo!))
         ? DateTimeRange(start: _customDateFrom!, end: _customDateTo!)
-        : DateTimeRange(
-            start: now.subtract(const Duration(days: 7)),
-            end: now,
-          );
+        : DateTimeRange(start: now.subtract(const Duration(days: 7)), end: now);
 
     final picked = await showDateRangePicker(
       context: context,
@@ -151,8 +149,16 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
 
     setState(() {
       _range = HistoryRange.custom;
-      _customDateFrom = DateTime(picked.start.year, picked.start.month, picked.start.day);
-      _customDateTo = DateTime(picked.end.year, picked.end.month, picked.end.day);
+      _customDateFrom = DateTime(
+        picked.start.year,
+        picked.start.month,
+        picked.start.day,
+      );
+      _customDateTo = DateTime(
+        picked.end.year,
+        picked.end.month,
+        picked.end.day,
+      );
       _future = _load();
     });
   }
@@ -195,10 +201,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
               const SizedBox(height: 4),
               const Text(
                 'Chọn ngày cụ thể hoặc khoảng ngày (tối đa 1 tháng)',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: CaslaColors.muted,
-                ),
+                style: TextStyle(fontSize: 13, color: CaslaColors.muted),
               ),
               const SizedBox(height: 18),
               _buildOptionTile(

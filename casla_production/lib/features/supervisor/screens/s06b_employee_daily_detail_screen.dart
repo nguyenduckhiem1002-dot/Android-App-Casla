@@ -57,11 +57,14 @@ class _S06bEmployeeDailyDetailScreenState
   }
 
   Future<WorkHistoryResult> _fetchHistory() {
-    return ref.read(appStateProvider).workHistoryRepo.getWorkHistory(
-      range: HistoryRange.custom,
-      dateFrom: _selectedDate,
-      dateTo: _selectedDate,
-    );
+    return ref
+        .read(appStateProvider)
+        .workHistoryRepo
+        .getWorkHistory(
+          range: HistoryRange.custom,
+          dateFrom: _selectedDate,
+          dateTo: _selectedDate,
+        );
   }
 
   Future<void> _refresh() async {
@@ -77,7 +80,8 @@ class _S06bEmployeeDailyDetailScreenState
     final appState = ref.watch(appStateProvider);
     final workerName = widget.worker['ten']?.toString() ?? 'Nhân viên';
     final workerCode = widget.worker['ma_nv']?.toString() ?? 'Chưa có mã';
-    final workerTeam = widget.worker['bo_phan']?.toString() ?? 'Chưa xác định tổ';
+    final workerTeam =
+        widget.worker['bo_phan']?.toString() ?? 'Chưa xác định tổ';
     final workerId = widget.worker['id']?.toString() ?? '';
 
     return Scaffold(
@@ -170,7 +174,9 @@ class _S06bEmployeeDailyDetailScreenState
                 future: _historyFuture,
                 builder: (context, sapSnapshot) {
                   return StreamBuilder<List<Assignment>>(
-                    stream: appState.assignmentRepo.watchWorkerAssignments(workerId),
+                    stream: appState.assignmentRepo.watchWorkerAssignments(
+                      workerId,
+                    ),
                     builder: (context, assignmentSnapshot) {
                       final dateFormatted = _dateStr(_selectedDate);
 
@@ -194,23 +200,34 @@ class _S06bEmployeeDailyDetailScreenState
                                   ConnectionState.waiting &&
                               !prodSnapshot.hasData;
 
-                          if (isSapLoading && isAssignLoading && isProdLoading) {
+                          if (isSapLoading &&
+                              isAssignLoading &&
+                              isProdLoading) {
                             return const _EmployeeDetailSkeleton();
                           }
 
                           // 1. Process SAP Data
                           final sapResult = sapSnapshot.data;
-                          final allSapEntries = sapResult?.entries ?? const <WorkHistoryEntry>[];
+                          final allSapEntries =
+                              sapResult?.entries ?? const <WorkHistoryEntry>[];
                           final workerSapEntries = allSapEntries
-                              .where((e) =>
-                                  e.workerId == workerCode ||
-                                  e.workerId == workerId ||
-                                  (workerId.isNotEmpty && e.workerId.toLowerCase() == workerId.toLowerCase()) ||
-                                  (workerCode.isNotEmpty && e.workerId.toLowerCase() == workerCode.toLowerCase()))
+                              .where(
+                                (e) =>
+                                    e.workerId == workerCode ||
+                                    e.workerId == workerId ||
+                                    (workerId.isNotEmpty &&
+                                        e.workerId.toLowerCase() ==
+                                            workerId.toLowerCase()) ||
+                                    (workerCode.isNotEmpty &&
+                                        e.workerId.toLowerCase() ==
+                                            workerCode.toLowerCase()),
+                              )
                               .toList();
 
                           final sapInitialAssigns = workerSapEntries
-                              .where((e) => e.transactionType == 'INITIAL_ASSIGN')
+                              .where(
+                                (e) => e.transactionType == 'INITIAL_ASSIGN',
+                              )
                               .toList();
 
                           final sapConfirms = workerSapEntries
@@ -218,15 +235,22 @@ class _S06bEmployeeDailyDetailScreenState
                               .toList();
 
                           final sapSummary = sapResult?.workers
-                              .where((w) =>
-                                  w.workerId == workerCode ||
-                                  w.workerId == workerId ||
-                                  (workerId.isNotEmpty && w.workerId.toLowerCase() == workerId.toLowerCase()) ||
-                                  (workerCode.isNotEmpty && w.workerId.toLowerCase() == workerCode.toLowerCase()))
+                              .where(
+                                (w) =>
+                                    w.workerId == workerCode ||
+                                    w.workerId == workerId ||
+                                    (workerId.isNotEmpty &&
+                                        w.workerId.toLowerCase() ==
+                                            workerId.toLowerCase()) ||
+                                    (workerCode.isNotEmpty &&
+                                        w.workerId.toLowerCase() ==
+                                            workerCode.toLowerCase()),
+                              )
                               .firstOrNull;
 
                           // 2. Process Local Data
-                          final allAssignments = assignmentSnapshot.data ?? const <Assignment>[];
+                          final allAssignments =
+                              assignmentSnapshot.data ?? const <Assignment>[];
                           final filteredAssignments = allAssignments
                               .where((a) => a.businessDate == dateFormatted)
                               .toList();
@@ -236,7 +260,8 @@ class _S06bEmployeeDailyDetailScreenState
                           double totalAssigned = 0.0;
                           double totalCompleted = 0.0;
                           double totalRemaining = 0.0;
-                          String uom = (widget.worker['uom'] as String?) ?? 'cái';
+                          String uom =
+                              (widget.worker['uom'] as String?) ?? 'cái';
 
                           if (sapSummary != null) {
                             totalAssigned = sapSummary.assignedQuantity;
@@ -249,7 +274,9 @@ class _S06bEmployeeDailyDetailScreenState
                             // Sum from SAP entries if no summary
                             for (final a in sapInitialAssigns) {
                               totalAssigned += a.quantity;
-                              if (a.unitOfMeasure.isNotEmpty) uom = a.unitOfMeasure;
+                              if (a.unitOfMeasure.isNotEmpty) {
+                                uom = a.unitOfMeasure;
+                              }
                             }
                             for (final c in sapConfirms) {
                               totalCompleted += c.quantity;
@@ -260,19 +287,31 @@ class _S06bEmployeeDailyDetailScreenState
                               totalCompleted += a.completedQuantity;
                             }
                             // Local production records if not already in completed
-                            if (sapConfirms.isEmpty && filteredAssignments.isEmpty) {
+                            if (sapConfirms.isEmpty &&
+                                filteredAssignments.isEmpty) {
                               for (final r in productionRecords) {
-                                totalCompleted += (r['quantity'] as num?)?.toDouble() ?? 0.0;
+                                totalCompleted +=
+                                    (r['quantity'] as num?)?.toDouble() ?? 0.0;
                               }
                             }
-                            totalRemaining = (totalAssigned - totalCompleted).clamp(0.0, double.infinity);
+                            totalRemaining = (totalAssigned - totalCompleted)
+                                .clamp(0.0, double.infinity);
                           }
 
                           // Fallback to widget extra if 0
-                          if (totalAssigned == 0 && widget.worker['assigned_qty'] != null) {
-                            totalAssigned = (widget.worker['assigned_qty'] as num).toDouble();
-                            totalCompleted = (widget.worker['completed_qty'] as num?)?.toDouble() ?? 0.0;
-                            totalRemaining = (widget.worker['remaining_qty'] as num?)?.toDouble() ?? 0.0;
+                          if (totalAssigned == 0 &&
+                              widget.worker['assigned_qty'] != null) {
+                            totalAssigned =
+                                (widget.worker['assigned_qty'] as num)
+                                    .toDouble();
+                            totalCompleted =
+                                (widget.worker['completed_qty'] as num?)
+                                    ?.toDouble() ??
+                                0.0;
+                            totalRemaining =
+                                (widget.worker['remaining_qty'] as num?)
+                                    ?.toDouble() ??
+                                0.0;
                           }
 
                           final completionRate = totalAssigned > 0
@@ -280,7 +319,8 @@ class _S06bEmployeeDailyDetailScreenState
                               : 0.0;
 
                           final hasNoAssignments =
-                              filteredAssignments.isEmpty && sapInitialAssigns.isEmpty;
+                              filteredAssignments.isEmpty &&
+                              sapInitialAssigns.isEmpty;
                           final hasNoConfirms =
                               productionRecords.isEmpty && sapConfirms.isEmpty;
 
@@ -340,8 +380,8 @@ class _S06bEmployeeDailyDetailScreenState
                                         backgroundColor: CaslaColors.muted100,
                                         valueColor:
                                             const AlwaysStoppedAnimation<Color>(
-                                          CaslaColors.accentGold,
-                                        ),
+                                              CaslaColors.accentGold,
+                                            ),
                                       ),
                                     ),
                                     const SizedBox(height: 6),
@@ -423,8 +463,9 @@ class _S06bEmployeeDailyDetailScreenState
                                     padding: const EdgeInsets.all(14),
                                     decoration: BoxDecoration(
                                       color: CaslaColors.surface,
-                                      border:
-                                          Border.all(color: CaslaColors.line),
+                                      border: Border.all(
+                                        color: CaslaColors.line,
+                                      ),
                                       borderRadius: BorderRadius.circular(14),
                                     ),
                                     child: Column(
@@ -445,10 +486,14 @@ class _S06bEmployeeDailyDetailScreenState
                                               ),
                                             ),
                                             StatusChip(
-                                              status: e.transactionStatus == 'POSTED'
+                                              status:
+                                                  e.transactionStatus ==
+                                                      'POSTED'
                                                   ? 'SYNCED'
                                                   : e.transactionStatus,
-                                              label: e.transactionStatus == 'POSTED'
+                                              label:
+                                                  e.transactionStatus ==
+                                                      'POSTED'
                                                   ? 'ĐÃ GHI SỔ'
                                                   : null,
                                             ),
@@ -469,8 +514,9 @@ class _S06bEmployeeDailyDetailScreenState
                                               ),
                                             ),
                                             Text(
-                                              DateFormat('dd/MM HH:mm')
-                                                  .format(e.executionDate),
+                                              DateFormat(
+                                                'dd/MM HH:mm',
+                                              ).format(e.executionDate),
                                               style: const TextStyle(
                                                 fontFamily: 'monospace',
                                                 fontSize: 11,
@@ -497,15 +543,17 @@ class _S06bEmployeeDailyDetailScreenState
                                       },
                                       borderRadius: BorderRadius.circular(14),
                                       child: Container(
-                                        margin:
-                                            const EdgeInsets.only(bottom: 10),
+                                        margin: const EdgeInsets.only(
+                                          bottom: 10,
+                                        ),
                                         padding: const EdgeInsets.all(14),
                                         decoration: BoxDecoration(
                                           border: Border.all(
                                             color: CaslaColors.line,
                                           ),
-                                          borderRadius:
-                                              BorderRadius.circular(14),
+                                          borderRadius: BorderRadius.circular(
+                                            14,
+                                          ),
                                         ),
                                         child: Column(
                                           crossAxisAlignment:
@@ -645,8 +693,9 @@ class _S06bEmployeeDailyDetailScreenState
                                     padding: const EdgeInsets.all(12),
                                     decoration: BoxDecoration(
                                       color: CaslaColors.surface,
-                                      border:
-                                          Border.all(color: CaslaColors.line),
+                                      border: Border.all(
+                                        color: CaslaColors.line,
+                                      ),
                                       borderRadius: BorderRadius.circular(12),
                                     ),
                                     child: Row(
@@ -656,7 +705,7 @@ class _S06bEmployeeDailyDetailScreenState
                                         Expanded(
                                           child: Column(
                                             crossAxisAlignment:
-                                              CrossAxisAlignment.start,
+                                                CrossAxisAlignment.start,
                                             children: [
                                               Text(
                                                 '${e.productionOrder} · CĐ: ${e.operation}',
@@ -665,7 +714,8 @@ class _S06bEmployeeDailyDetailScreenState
                                                 style: const TextStyle(
                                                   fontWeight: FontWeight.w700,
                                                   fontSize: 13,
-                                                  color: CaslaColors.primaryNavy,
+                                                  color:
+                                                      CaslaColors.primaryNavy,
                                                 ),
                                               ),
                                               Text(
@@ -702,8 +752,9 @@ class _S06bEmployeeDailyDetailScreenState
                                     padding: const EdgeInsets.all(12),
                                     decoration: BoxDecoration(
                                       color: CaslaColors.surface,
-                                      border:
-                                          Border.all(color: CaslaColors.line),
+                                      border: Border.all(
+                                        color: CaslaColors.line,
+                                      ),
                                       borderRadius: BorderRadius.circular(12),
                                     ),
                                     child: Row(
@@ -722,15 +773,12 @@ class _S06bEmployeeDailyDetailScreenState
                                                 style: const TextStyle(
                                                   fontWeight: FontWeight.w700,
                                                   fontSize: 13,
-                                                  color: CaslaColors.primaryNavy,
+                                                  color:
+                                                      CaslaColors.primaryNavy,
                                                 ),
                                               ),
                                               Text(
-                                                '${DateFormat('HH:mm').format(
-                                                  DateTime.fromMillisecondsSinceEpoch(
-                                                    r['occurred_at_utc'] ?? 0,
-                                                  ),
-                                                )} · Người xác nhận: ${r['nguoi_xac_nhan']}',
+                                                '${DateFormat('HH:mm').format(DateTime.fromMillisecondsSinceEpoch(r['occurred_at_utc'] ?? 0))} · Người xác nhận: ${r['nguoi_xac_nhan']}',
                                                 maxLines: 1,
                                                 overflow: TextOverflow.ellipsis,
                                                 style: const TextStyle(

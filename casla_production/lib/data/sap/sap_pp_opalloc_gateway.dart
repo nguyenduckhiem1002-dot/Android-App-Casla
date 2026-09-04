@@ -326,11 +326,7 @@ class SapPpOpAllocGateway implements SapWriteGateway {
       // refresh too; that failure — not the original one — is what the
       // caller should see and act on ("phiên đăng nhập đã hết hạn").
       if (!await refreshSession()) rethrow;
-      return _getWorkHistoryOnce(
-        range,
-        dateFrom: dateFrom,
-        dateTo: dateTo,
-      );
+      return _getWorkHistoryOnce(range, dateFrom: dateFrom, dateTo: dateTo);
     }
   }
 
@@ -360,8 +356,8 @@ class SapPpOpAllocGateway implements SapWriteGateway {
           'AccessToken': accessToken,
           'DeviceID': deviceId,
           'RangeCode': range.code,
-          if (dateFromStr != null) 'DateFrom': dateFromStr,
-          if (dateToStr != null) 'DateTo': dateToStr,
+          'DateFrom': ?dateFromStr,
+          'DateTo': ?dateToStr,
           'WorkerID': '',
           'SummaryOnly': false,
         },

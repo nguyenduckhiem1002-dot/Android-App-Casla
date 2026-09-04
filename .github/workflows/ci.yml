@@ -2,6 +2,7 @@ name: Flutter CI
 
 on:
   push:
+    branches: [main, master, develop, 'chatgpt/**']
   pull_request:
     branches: [main, master, develop]
 

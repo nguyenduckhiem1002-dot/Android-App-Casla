@@ -553,20 +553,16 @@ class CaslaDatabase {
     String department = 'Công nhân sản xuất',
   }) async {
     final db = await _database;
-    await db.insert(
-      'employees',
-      {
-        'id': id,
-        'ma_nv': maNv,
-        'ten': name,
-        'bo_phan': department,
-        'trang_thai': 'ACTIVE',
-        'vai_tro': 'CONG_NHAN',
-        'quyen_han': jsonEncode(['VIEW_OWN_PRODUCTION']),
-        'to_ids': jsonEncode([]),
-      },
-      conflictAlgorithm: ConflictAlgorithm.ignore,
-    );
+    await db.insert('employees', {
+      'id': id,
+      'ma_nv': maNv,
+      'ten': name,
+      'bo_phan': department,
+      'trang_thai': 'ACTIVE',
+      'vai_tro': 'CONG_NHAN',
+      'quyen_han': jsonEncode(['VIEW_OWN_PRODUCTION']),
+      'to_ids': jsonEncode([]),
+    }, conflictAlgorithm: ConflictAlgorithm.ignore);
   }
 
   /// Workers belonging to any of [teamIds].
