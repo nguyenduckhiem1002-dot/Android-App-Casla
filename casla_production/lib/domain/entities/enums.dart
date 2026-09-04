@@ -83,6 +83,13 @@ enum UserRole {
 }
 
 /// Ma trận quyền chi tiết (Spec 2.1)
+///
+/// Chỉ ba giá trị có [code] bắt đầu bằng `PP_` là FuncID có thật trong
+/// `ztb_mob_func` — SAP chỉ phát hành `PP_INITIAL_ASSIGN`, `PP_HIST_SELF` và
+/// `PP_HIST_TEAM`. Các [code] còn lại (`ASSIGN_QUANTITY`, `VIEW_SYNC_STATUS`,
+/// …) là từ vựng nội bộ của app từ bản spec cũ; backend không hề biết đến
+/// chúng, nên tuyệt đối không dùng để so khớp với FuncID SAP trả về —
+/// `AuthRepositoryImpl.parseAuthorization` suy ra chúng từ vai trò.
 enum Permission {
   viewOwnProduction,
   recordOwnProduction,
