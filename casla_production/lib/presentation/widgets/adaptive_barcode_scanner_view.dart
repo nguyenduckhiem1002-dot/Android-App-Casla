@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../app/router/app_route_observer.dart';
 import '../../app/theme/casla_colors.dart';
@@ -46,6 +47,7 @@ class _AdaptiveBarcodeScannerViewState extends State<AdaptiveBarcodeScannerView>
   bool _forceCamera = false;
   bool _isHandlingScan = false;
   bool _isRouteVisible = true;
+  String _hardwareStatus = 'Sẵn sàng nhận mã từ đầu đọc tích hợp';
 
   @override
   void initState() {
@@ -78,6 +80,9 @@ class _AdaptiveBarcodeScannerViewState extends State<AdaptiveBarcodeScannerView>
     _isRouteVisible = true;
     _isHandlingScan = false;
     _deduplicator.reset();
+    if (mounted) {
+      setState(() => _hardwareStatus = 'Sẵn sàng nhận mã từ đầu đọc tích hợp');
+    }
   }
 
   Future<void> _detectHardwareScanner() async {
@@ -113,14 +118,22 @@ class _AdaptiveBarcodeScannerViewState extends State<AdaptiveBarcodeScannerView>
     }
 
     final code = event.rawValue.trim();
-    if (!_deduplicator.shouldAccept(code)) return;
+    if (code.isEmpty || !_deduplicator.shouldAccept(code)) return;
 
     _isHandlingScan = true;
+    setState(() => _hardwareStatus = 'Đã nhận mã • đang kiểm tra dữ liệu');
+    unawaited(HapticFeedback.mediumImpact());
+
     try {
       await Future<void>.sync(() => widget.onScan(code));
     } finally {
       await Future<void>.delayed(const Duration(milliseconds: 600));
-      if (mounted) _isHandlingScan = false;
+      if (mounted) {
+        setState(() {
+          _isHandlingScan = false;
+          _hardwareStatus = 'Sẵn sàng cho lượt quét tiếp theo';
+        });
+      }
     }
   }
 
@@ -144,8 +157,36 @@ class _AdaptiveBarcodeScannerViewState extends State<AdaptiveBarcodeScannerView>
     if (_checkingHardware) {
       return const ColoredBox(
         color: CaslaColors.navy900,
-        child: Center(
-          child: CircularProgressIndicator(color: CaslaColors.accentGold),
+        child: SafeArea(
+          child: Center(
+            child: Padding(
+              padding: EdgeInsets.all(28),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.document_scanner_outlined,
+                    color: CaslaColors.accentGold,
+                    size: 46,
+                  ),
+                  SizedBox(height: 16),
+                  LinearProgressIndicator(
+                    color: CaslaColors.accentGold,
+                    backgroundColor: Colors.white12,
+                  ),
+                  SizedBox(height: 14),
+                  Text(
+                    'Đang kiểm tra đầu đọc PDA...',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
       );
     }
@@ -165,94 +206,186 @@ class _AdaptiveBarcodeScannerViewState extends State<AdaptiveBarcodeScannerView>
         children: [
           SafeArea(
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
+              padding: const EdgeInsets.symmetric(horizontal: 22),
               child: Column(
                 children: [
                   const SizedBox(height: 18),
-                  const CaslaLogoWhite(size: 68, textColor: Colors.white),
+                  const CaslaLogoWhite(size: 64, textColor: Colors.white),
                   const Spacer(),
-                  Container(
-                    width: 124,
-                    height: 124,
-                    decoration: BoxDecoration(
-                      color: CaslaColors.accentGold.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(28),
-                      border: Border.all(
-                        color: CaslaColors.accentGold.withValues(alpha: 0.42),
+                  Semantics(
+                    liveRegion: true,
+                    label: _hardwareStatus,
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      width: 136,
+                      height: 136,
+                      decoration: BoxDecoration(
+                        color:
+                            (_isHandlingScan
+                                    ? CaslaColors.success
+                                    : CaslaColors.accentGold)
+                                .withValues(alpha: 0.13),
+                        borderRadius: BorderRadius.circular(30),
+                        border: Border.all(
+                          color:
+                              (_isHandlingScan
+                                      ? CaslaColors.success
+                                      : CaslaColors.accentGold)
+                                  .withValues(alpha: 0.56),
+                          width: 1.5,
+                        ),
+                      ),
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 160),
+                        child: Icon(
+                          _isHandlingScan
+                              ? Icons.check_circle_rounded
+                              : Icons.qr_code_scanner_rounded,
+                          key: ValueKey(_isHandlingScan),
+                          size: 70,
+                          color: _isHandlingScan
+                              ? const Color(0xFF65C56B)
+                              : CaslaColors.accentGold,
+                        ),
                       ),
                     ),
-                    child: const Icon(
-                      Icons.qr_code_scanner_rounded,
-                      size: 64,
-                      color: CaslaColors.accentGold,
-                    ),
                   ),
-                  const SizedBox(height: 28),
-                  const Text(
-                    'SẴN SÀNG QUÉT',
+                  const SizedBox(height: 24),
+                  Text(
+                    _isHandlingScan ? 'ĐÃ NHẬN MÃ' : 'SẴN SÀNG QUÉT',
                     textAlign: TextAlign.center,
-                    style: TextStyle(
+                    style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 22,
+                      fontSize: 23,
                       fontWeight: FontWeight.w800,
-                      letterSpacing: 0.6,
+                      letterSpacing: 0.4,
                     ),
                   ),
                   const SizedBox(height: 10),
-                  const Text(
-                    'Bóp nút trigger bên hông PDA để quét mã.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Color(0xFFB7C1E4),
-                      fontSize: 14,
-                      height: 1.45,
-                    ),
-                  ),
-                  const SizedBox(height: 26),
-                  Text(
-                    widget.title,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 160),
+                    child: Text(
+                      _hardwareStatus,
+                      key: ValueKey(_hardwareStatus),
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Color(0xFFB7C1E4),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        height: 1.4,
+                      ),
                     ),
                   ),
                   const SizedBox(height: 8),
-                  Text(
-                    widget.subtitle,
+                  const Text(
+                    'Bóp nút trigger bên hông RS38 để quét.',
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: Color(0xFF93A0CC),
                       fontSize: 13,
-                      height: 1.45,
+                      height: 1.4,
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 14,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.06),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Column(
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: const BoxDecoration(
+                                color: Color(0xFF65C56B),
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            const Text(
+                              'Đầu đọc PDA đang hoạt động',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          widget.title,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 17,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          widget.subtitle,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Color(0xFFB7C1E4),
+                            fontSize: 13,
+                            height: 1.45,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                   const Spacer(),
                   if (widget.onManualInput != null)
                     SizedBox(
                       width: double.infinity,
-                      height: 52,
+                      height: 56,
                       child: OutlinedButton.icon(
-                        onPressed: widget.onManualInput,
+                        onPressed: _isHandlingScan
+                            ? null
+                            : widget.onManualInput,
                         style: OutlinedButton.styleFrom(
                           foregroundColor: Colors.white,
+                          disabledForegroundColor: Colors.white38,
                           side: const BorderSide(color: Colors.white54),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
                         ),
                         icon: const Icon(Icons.keyboard_alt_outlined),
-                        label: const Text('Nhập mã thủ công'),
+                        label: const Text(
+                          'Nhập mã thủ công',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
                       ),
                     ),
-                  const SizedBox(height: 8),
-                  TextButton.icon(
-                    onPressed: _useCamera,
-                    icon: const Icon(Icons.camera_alt_outlined),
-                    label: const Text('Dùng camera'),
-                    style: TextButton.styleFrom(
-                      foregroundColor: CaslaColors.accentGold,
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 52,
+                    child: TextButton.icon(
+                      onPressed: _isHandlingScan ? null : _useCamera,
+                      icon: const Icon(Icons.camera_alt_outlined),
+                      label: const Text('Dùng camera thay thế'),
+                      style: TextButton.styleFrom(
+                        foregroundColor: CaslaColors.accentGold,
+                        disabledForegroundColor: Colors.white38,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 18),
+                  const SizedBox(height: 14),
                 ],
               ),
             ),
