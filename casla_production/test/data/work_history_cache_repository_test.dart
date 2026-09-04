@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:casla_production/core/database/casla_database.dart';
+import 'package:casla_production/core/telemetry/field_telemetry.dart';
 import 'package:casla_production/data/repositories/repositories_impl.dart';
 import 'package:casla_production/domain/entities/work_history.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -20,9 +21,11 @@ void main() {
   test('fresh cache avoids a second SAP call', () async {
     var calls = 0;
     final now = DateTime(2026, 9, 4, 12);
+    final telemetry = FieldTelemetry();
     final repo = WorkHistoryRepositoryImpl(
       db,
       cacheSubject: () => 'user-a:self',
+      telemetry: telemetry,
       now: () => now,
       loadRemote: ({required range, dateFrom, dateTo}) async {
         calls++;
@@ -36,6 +39,10 @@ void main() {
     expect(calls, 1);
     expect(first.workers.single.workerName, 'Nguyễn Văn A');
     expect(second.workers.single.workerName, 'Nguyễn Văn A');
+    final metrics = telemetry.snapshot();
+    expect(metrics.count(FieldMetric.workHistoryCacheMiss), 1);
+    expect(metrics.count(FieldMetric.workHistoryCacheHit), 1);
+    expect(metrics.count(FieldMetric.workHistoryRemoteSuccess), 1);
   });
 
   test('stale cache is returned while one refresh is shared', () async {
@@ -74,6 +81,30 @@ void main() {
     final refreshed = await joinedRefresh;
     expect(refreshed.workers.single.workerName, 'Bản mới');
     expect(calls, 2);
+  });
+
+  test('remote failures are counted without recording request data', () async {
+    final telemetry = FieldTelemetry();
+    final repo = WorkHistoryRepositoryImpl(
+      db,
+      cacheSubject: () => 'user-a:self',
+      telemetry: telemetry,
+      loadRemote: ({required range, dateFrom, dateTo}) async {
+        throw Exception('offline');
+      },
+    );
+
+    await expectLater(
+      repo.getWorkHistory(range: HistoryRange.day),
+      throwsException,
+    );
+
+    final snapshot = telemetry.snapshot();
+    final diagnostics = snapshot.toDiagnosticMap();
+    expect(snapshot.count(FieldMetric.workHistoryCacheMiss), 1);
+    expect(snapshot.count(FieldMetric.workHistoryRemoteFailure), 1);
+    expect(diagnostics.toString(), isNot(contains('user-a')));
+    expect(diagnostics.toString(), isNot(contains('offline')));
   });
 
   test('cache namespace prevents cross-account history reuse', () async {

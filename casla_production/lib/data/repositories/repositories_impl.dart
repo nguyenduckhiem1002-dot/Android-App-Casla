@@ -6,6 +6,7 @@ import 'dart:async';
 
 import '../../core/config/app_config.dart';
 import '../../core/database/casla_database.dart';
+import '../../core/telemetry/field_telemetry.dart';
 import '../../core/sync/sap_write_gateway.dart';
 import '../../core/sync/sync_failure.dart';
 import '../../core/sync/sync_push.dart';
@@ -697,6 +698,7 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
   final WorkHistoryLoader loadRemote;
   final String? Function() cacheSubject;
   final Duration freshFor;
+  final FieldTelemetry telemetry;
   final DateTime Function() _now;
 
   final Map<String, Future<WorkHistoryResult>> _inFlight = {};
@@ -706,8 +708,10 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
     required this.loadRemote,
     required this.cacheSubject,
     this.freshFor = const Duration(minutes: 2),
+    FieldTelemetry? telemetry,
     DateTime Function()? now,
-  }) : _now = now ?? DateTime.now;
+  }) : telemetry = telemetry ?? FieldTelemetry.instance,
+       _now = now ?? DateTime.now;
 
   @override
   Future<WorkHistoryResult> getWorkHistory({
@@ -718,7 +722,27 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
   }) async {
     final subject = cacheSubject()?.trim();
     if (subject == null || subject.isEmpty) {
-      return loadRemote(range: range, dateFrom: dateFrom, dateTo: dateTo);
+      final stopwatch = Stopwatch()..start();
+      try {
+        final result = await loadRemote(
+          range: range,
+          dateFrom: dateFrom,
+          dateTo: dateTo,
+        );
+        stopwatch.stop();
+        telemetry.recordDuration(
+          FieldMetric.workHistoryRemoteSuccess,
+          stopwatch.elapsed,
+        );
+        return result;
+      } catch (_) {
+        stopwatch.stop();
+        telemetry.recordDuration(
+          FieldMetric.workHistoryRemoteFailure,
+          stopwatch.elapsed,
+        );
+        rethrow;
+      }
     }
 
     final cacheKey = _cacheKey(
@@ -744,6 +768,7 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
     if (cached != null) {
       final age = _now().difference(cached.fetchedAt);
       if (age >= freshFor) {
+        telemetry.increment(FieldMetric.workHistoryStaleHit);
         unawaited(
           _ignoreRefreshFailure(
             _refresh(
@@ -755,10 +780,13 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
             ),
           ),
         );
+      } else {
+        telemetry.increment(FieldMetric.workHistoryCacheHit);
       }
       return cached.result;
     }
 
+    telemetry.increment(FieldMetric.workHistoryCacheMiss);
     return _refresh(
       cacheKey: cacheKey,
       subject: subject,
@@ -812,11 +840,27 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
     DateTime? dateFrom,
     DateTime? dateTo,
   }) async {
-    final result = await loadRemote(
-      range: range,
-      dateFrom: dateFrom,
-      dateTo: dateTo,
-    );
+    final stopwatch = Stopwatch()..start();
+    late final WorkHistoryResult result;
+    try {
+      result = await loadRemote(
+        range: range,
+        dateFrom: dateFrom,
+        dateTo: dateTo,
+      );
+      stopwatch.stop();
+      telemetry.recordDuration(
+        FieldMetric.workHistoryRemoteSuccess,
+        stopwatch.elapsed,
+      );
+    } catch (_) {
+      stopwatch.stop();
+      telemetry.recordDuration(
+        FieldMetric.workHistoryRemoteFailure,
+        stopwatch.elapsed,
+      );
+      rethrow;
+    }
     final fetchedAt = _now();
 
     await db.replaceWorkHistoryCache(

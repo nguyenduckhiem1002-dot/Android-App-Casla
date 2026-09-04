@@ -23,10 +23,13 @@ class W01HistoryScreen extends ConsumerStatefulWidget {
 }
 
 class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
+  static const int _historyEntryPageSize = 50;
+
   HistoryRange _range = HistoryRange.month;
   DateTime? _customDateFrom;
   DateTime? _customDateTo;
   late Future<WorkHistoryResult> _future;
+  int _visibleEntryCount = _historyEntryPageSize;
 
   @override
   void initState() {
@@ -54,6 +57,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
     if (range == _range) return;
     setState(() {
       _range = range;
+      _visibleEntryCount = _historyEntryPageSize;
       _future = _load();
     });
   }
@@ -62,7 +66,10 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
     try {
       final result = await _load(forceRefresh: true);
       if (!mounted) return;
-      setState(() => _future = Future.value(result));
+      setState(() {
+        _visibleEntryCount = _historyEntryPageSize;
+        _future = Future.value(result);
+      });
     } catch (_) {
       if (!mounted) return;
       final cached = _load();
@@ -113,6 +120,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
       _range = HistoryRange.custom;
       _customDateFrom = DateTime(picked.year, picked.month, picked.day);
       _customDateTo = DateTime(picked.year, picked.month, picked.day);
+      _visibleEntryCount = _historyEntryPageSize;
       _future = _load();
     });
   }
@@ -178,6 +186,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
         picked.end.month,
         picked.end.day,
       );
+      _visibleEntryCount = _historyEntryPageSize;
       _future = _load();
     });
   }
@@ -572,6 +581,13 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
   }
 
   Widget _buildContent(WorkHistoryResult result) {
+    final visibleCount = _visibleEntryCount < result.entries.length
+        ? _visibleEntryCount
+        : result.entries.length;
+    final visibleEntries = result.entries
+        .take(visibleCount)
+        .toList(growable: false);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -628,12 +644,34 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
               padding: const EdgeInsets.symmetric(vertical: 4),
-              itemCount: result.entries.length,
+              itemCount: visibleEntries.length,
               separatorBuilder: (_, _) => const Divider(height: 1),
               itemBuilder: (context, index) =>
-                  _buildEntryTile(result.entries[index]),
+                  _buildEntryTile(visibleEntries[index]),
             ),
           ),
+        if (visibleEntries.length < result.entries.length) ...[
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            height: 52,
+            child: OutlinedButton.icon(
+              key: const Key('history-load-more'),
+              onPressed: () {
+                setState(() {
+                  final next = _visibleEntryCount + _historyEntryPageSize;
+                  _visibleEntryCount = next < result.entries.length
+                      ? next
+                      : result.entries.length;
+                });
+              },
+              icon: const Icon(Icons.expand_more_rounded),
+              label: Text(
+                'Xem thêm • ${visibleEntries.length}/${result.entries.length} giao dịch',
+              ),
+            ),
+          ),
+        ],
       ],
     );
   }
