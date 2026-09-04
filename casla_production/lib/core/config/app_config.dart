@@ -1,6 +1,8 @@
 // Core — Environment & SAP API Configuration
 // Spec: SAP OData / RAP Integration Setup
 
+import 'package:flutter/foundation.dart';
+
 class AppConfig {
   /// Tên ứng dụng hiển thị
   static const String _appName = String.fromEnvironment(
@@ -9,38 +11,45 @@ class AppConfig {
   );
   static String get appName => _normalizeEnvValue(_appName);
 
-  /// Legacy OData V2 base URL (`ZUI_USER_QR_API`).
-  ///
-  /// That service does not exist in the real backend — the actual mobile
-  /// surface is the two RAP OData V4 services below (`ZUI_MOB_AUTH`,
-  /// `ZUI_PP_OPALLOC`). Kept only so existing config/tests that read it don't
-  /// break; nothing in the app calls it anymore.
-  @Deprecated('Use sapAuthServiceUrl / sapPpOpAllocServiceUrl instead.')
+  /// `https://<tenant>.s4hana.cloud.sap/sap/opu/odata4/sap/` — the shared
+  /// root every OData V4 service on this tenant is published under. The two
+  /// full service roots below are this plus a fixed, per-service suffix; only
+  /// this one value needs to change if the tenant changes.
   static const String _sapBaseUrl = String.fromEnvironment('SAP_BASE_URL');
-  @Deprecated('Use sapAuthServiceUrl / sapPpOpAllocServiceUrl instead.')
   static String get sapBaseUrl => _normalizeEnvValue(_sapBaseUrl);
 
+  /// Service-binding suffixes, as actually published on the target tenant —
+  /// confirmed against the real service, not derived from the ABAP service
+  /// definition name (the binding technical name is assigned separately and
+  /// isn't guessable from it: `ZUI_MOB_AUTH`'s binding is `ZAPI_MOB_AUTH`, not
+  /// `ZUI_MOB_AUTH_O4`). Republishing under a different binding means editing
+  /// these two constants.
+  @visibleForTesting
+  static const String authServiceSuffix =
+      'zapi_mob_auth/srvd_a2x/sap/zui_mob_auth/0001/';
+  @visibleForTesting
+  static const String ppOpAllocServiceSuffix =
+      'zapi_pp_opalloc/srvd_a2x/sap/zui_pp_opalloc/0001/';
+
   /// Full service root for `ZUI_MOB_AUTH` (login/refresh/logout/changePassword).
-  ///
-  /// ABAP Cloud OData V4 service roots typically look like
-  /// `/sap/opu/odata4/sap/<binding>/srvd_a2x/sap/<service_definition>/0001/`,
-  /// but the exact binding name is assigned when the service is published on
-  /// the target tenant and isn't fixed by the service definition alone — copy
-  /// it from the tenant's Communication Arrangement / Service Binding, not
-  /// from this default.
-  static const String _sapAuthServiceUrl = String.fromEnvironment(
-    'SAP_AUTH_SERVICE_URL',
-  );
-  static String get sapAuthServiceUrl => _normalizeEnvValue(_sapAuthServiceUrl);
+  static String get sapAuthServiceUrl =>
+      joinServiceUrl(sapBaseUrl, authServiceSuffix);
 
   /// Full service root for `ZUI_PP_OPALLOC` (submitInitialAssign/
   /// submitConfirm/submitRecall/submitReverse/getSyncStatus/getWorkHistory).
-  /// See [sapAuthServiceUrl] for the URL-shape caveat.
-  static const String _sapPpOpAllocServiceUrl = String.fromEnvironment(
-    'SAP_PP_OPALLOC_SERVICE_URL',
-  );
   static String get sapPpOpAllocServiceUrl =>
-      _normalizeEnvValue(_sapPpOpAllocServiceUrl);
+      joinServiceUrl(sapBaseUrl, ppOpAllocServiceSuffix);
+
+  /// Joins [sapBaseUrl] with a service-binding suffix. A blank [base] means
+  /// SAP_BASE_URL was never configured — stays blank rather than becoming a
+  /// bare `/suffix` path that would resolve against whatever host Dio
+  /// defaults to.
+  @visibleForTesting
+  static String joinServiceUrl(String base, String suffix) {
+    if (base.isEmpty) return '';
+    final withSlash = base.endsWith('/') ? base : '$base/';
+    return '$withSlash$suffix';
+  }
 
   /// SAP Basic Authentication User
   static const String _sapBasicAuthUser = String.fromEnvironment(
