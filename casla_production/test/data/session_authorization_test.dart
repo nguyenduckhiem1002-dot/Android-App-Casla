@@ -1,12 +1,12 @@
-// SAP no longer sends an explicit Role claim (see ZA_MOB_LoginResult) — the
-// app derives it from the FuncID permission set login/refresh return. These
-// tests exercise that derivation directly, against the same SapPermission /
-// SapWorkContext shapes SapAuthController parses off the wire.
+// SAP sends no explicit Role claim (see ZA_MOB_LoginResult) — the app derives
+// it from the FuncID permission set login/refresh return. These tests exercise
+// that derivation directly, against the same SapPermission / SapWorkContext
+// shapes SapAuthController parses off the wire.
 //
-// Two roles reach the app now: the full supervisor set (write access, scoped
-// by Work Context) and a bare PP_HIST_SELF/PP_HIST_TEAM account (read-only
-// history — see zcl_pp_work_history), which needs no Work Context since
-// getWorkHistory resolves scope server-side.
+// The vocabulary here is only what the backend actually issues:
+// PP_INITIAL_ASSIGN (the sole FuncID zbp_r_pp_opalloc gates a write on),
+// PP_HIST_SELF and PP_HIST_TEAM (read scopes in zcl_pp_work_history). Nothing
+// else SAP returns may influence the role.
 
 import 'package:casla_production/data/repositories/repositories_impl.dart';
 import 'package:casla_production/data/sap/sap_auth_controller.dart';
@@ -27,45 +27,66 @@ const _workContext = SapWorkContext(
 
 void main() {
   group('SAP session authorization — supervisor', () {
-    test('a full supervisor permission set maps to supervisor', () {
+    test('PP_INITIAL_ASSIGN maps to supervisor', () {
+      // The real shape of a manager account: one write FuncID plus both
+      // history scopes.
       final authorization = AuthRepositoryImpl.parseAuthorization(
         permissions: [
-          _perm('VIEW_TEAM_PRODUCTION'),
-          _perm('ASSIGN_QUANTITY'),
-          _perm('RECALL_ASSIGNMENT'),
+          _perm('PP_HIST_SELF'),
+          _perm('PP_HIST_TEAM'),
+          _perm('PP_INITIAL_ASSIGN'),
         ],
         workContexts: const [_workContext],
       );
 
       expect(authorization.role, UserRole.supervisor);
-      expect(
-        authorization.permissions,
-        containsAll([Permission.viewTeamProduction, Permission.assignQuantity]),
-      );
       expect(authorization.workContexts, [_workContext]);
     });
 
-    test('does not promote an account missing part of the supervisor set', () {
-      // VIEW_TEAM_PRODUCTION alone is also not a recognized history
-      // permission, so this must still be rejected outright, not silently
-      // downgraded to worker.
+    test('a supervisor reaches every screen the router gates', () {
+      // The router's redirect asks for these by name. None of them is a SAP
+      // FuncID, so they have to come from the role — if this regresses, a
+      // manager lands on the shell and every sub-route bounces back to it.
+      final authorization = AuthRepositoryImpl.parseAuthorization(
+        permissions: [_perm('PP_INITIAL_ASSIGN')],
+        workContexts: const [_workContext],
+      );
+
       expect(
-        () => AuthRepositoryImpl.parseAuthorization(
-          permissions: [_perm('VIEW_TEAM_PRODUCTION')],
-          workContexts: const [_workContext],
-        ),
-        throwsException,
+        authorization.permissions,
+        containsAll([
+          Permission.assignQuantity,
+          Permission.recallAssignment,
+          Permission.viewTeamProduction,
+          Permission.viewEmployeeHistory,
+          Permission.viewSyncStatus,
+          Permission.switchUser,
+        ]),
       );
     });
 
-    test('requires at least one work context even with full permissions', () {
+    test('history scopes are kept alongside the supervisor set', () {
+      final authorization = AuthRepositoryImpl.parseAuthorization(
+        permissions: [_perm('PP_INITIAL_ASSIGN'), _perm('PP_HIST_TEAM')],
+        workContexts: const [_workContext],
+      );
+
+      expect(
+        authorization.permissions,
+        contains(Permission.viewTeamProductionHistory),
+      );
+      expect(
+        authorization.permissions,
+        isNot(contains(Permission.viewOwnProductionHistory)),
+      );
+    });
+
+    test('requires at least one work context', () {
+      // has_work_scope rejects every write outside the account's Plant/
+      // WorkCenter, so a supervisor without one has nothing it can do.
       expect(
         () => AuthRepositoryImpl.parseAuthorization(
-          permissions: [
-            _perm('VIEW_TEAM_PRODUCTION'),
-            _perm('ASSIGN_QUANTITY'),
-            _perm('RECALL_ASSIGNMENT'),
-          ],
+          permissions: [_perm('PP_INITIAL_ASSIGN')],
           workContexts: const [],
         ),
         throwsException,
@@ -101,24 +122,33 @@ void main() {
       );
     });
 
-    test('a worker session never picks up leftover supervisor claims', () {
-      // Only VIEW_TEAM_PRODUCTION present, not the full supervisor set — a
-      // worker account should not read as partially-supervisor.
+    test('a worker never picks up a supervisor screen gate', () {
       final authorization = AuthRepositoryImpl.parseAuthorization(
-        permissions: [_perm('PP_HIST_SELF'), _perm('VIEW_TEAM_PRODUCTION')],
-        workContexts: const [],
+        permissions: [_perm('PP_HIST_SELF'), _perm('PP_HIST_TEAM')],
+        workContexts: const [_workContext],
       );
 
       expect(authorization.role, UserRole.worker);
+      expect(
+        authorization.permissions,
+        isNot(contains(Permission.assignQuantity)),
+      );
     });
   });
 
   group('SAP session authorization — rejected', () {
-    test('an account with neither permission set is rejected', () {
+    test('the retired spec vocabulary grants nothing', () {
+      // ASSIGN_QUANTITY / VIEW_TEAM_PRODUCTION and friends were never in
+      // ztb_mob_func. Matching on them is what mis-filed a manager account as
+      // a worker; they must now read as no permission at all.
       expect(
         () => AuthRepositoryImpl.parseAuthorization(
-          permissions: [_perm('VIEW_OWN_PRODUCTION')],
-          workContexts: const [],
+          permissions: [
+            _perm('ASSIGN_QUANTITY'),
+            _perm('RECALL_ASSIGNMENT'),
+            _perm('VIEW_TEAM_PRODUCTION'),
+          ],
+          workContexts: const [_workContext],
         ),
         throwsException,
       );

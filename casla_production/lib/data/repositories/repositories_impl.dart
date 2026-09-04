@@ -104,32 +104,50 @@ class AuthRepositoryImpl implements AuthRepository {
     }
   }
 
-  /// Function IDs that mark an account as a supervisor for this app.
+  /// The FuncIDs SAP actually issues for this app.
   ///
-  /// SAP no longer sends an explicit Role claim (see `ZA_MOB_LoginResult` —
-  /// there is no `Role` field): the app derives it from the permission set
-  /// login/refresh return, the same vocabulary `ZA_MOB_Permission.FuncID`
-  /// uses. Matching [Permission.assignQuantity] alone would let a
-  /// worker-only account with one stray permission in, so this requires the
-  /// full supervisor set.
-  static const _supervisorFuncIds = {
-    'ASSIGN_QUANTITY',
-    'RECALL_ASSIGNMENT',
-    'VIEW_TEAM_PRODUCTION',
+  /// SAP sends no explicit Role claim (`ZA_MOB_LoginResult` has no `Role`
+  /// field), so the app derives one from the FuncID set login/refresh return.
+  /// The vocabulary is short because the backend only gates one thing on a
+  /// FuncID: `zbp_r_pp_opalloc`'s `initialAssign` calls `validate_token` with
+  /// `required_func = 'PP_INITIAL_ASSIGN'`. `transfer`, `recall` and `confirm`
+  /// pass no `required_func` at all — they are gated by `has_work_scope` plus
+  /// `verify_worker_password` instead. `PP_HIST_SELF`/`PP_HIST_TEAM` are read
+  /// scopes checked in `zcl_pp_work_history`.
+  ///
+  /// Holding `PP_INITIAL_ASSIGN` is therefore the only signal SAP gives that
+  /// an account is a supervisor.
+  static const _funcInitialAssign = 'PP_INITIAL_ASSIGN';
+  static const _funcHistSelf = 'PP_HIST_SELF';
+  static const _funcHistTeam = 'PP_HIST_TEAM';
+
+  /// Granted to every supervisor session.
+  ///
+  /// These have no SAP counterpart — they are app-local screen gates from the
+  /// old spec (see [Permission]). The backend re-checks work scope and the
+  /// worker password on every write regardless, so gating them client-side is
+  /// navigation ergonomics, not security.
+  static const _supervisorPermissions = {
+    Permission.assignQuantity,
+    Permission.recallAssignment,
+    Permission.viewTeamProduction,
+    Permission.viewEmployeeHistory,
+    Permission.viewSyncStatus,
+    Permission.switchUser,
   };
 
   /// Converts the permissions/work-contexts SAP returned into the app
   /// session's role/permission/scope claims.
   ///
-  /// The app now serves two roles:
-  /// - the full supervisor set above → [UserRole.supervisor], which also
-  ///   needs at least one Work Context (Plant/WorkCenter) since the
-  ///   supervisor screens scope by team;
-  /// - `PP_HIST_SELF` (see `zcl_pp_work_history`) alone, with no supervisor
-  ///   permissions and no Work Context required → [UserRole.worker], who can
-  ///   only reach the read-only history screen. `getWorkHistory` derives the
-  ///   worker's own id server-side from the authenticated account, so no
-  ///   local Work Context is needed for this.
+  /// The app serves two roles:
+  /// - `PP_INITIAL_ASSIGN` → [UserRole.supervisor], which also needs at least
+  ///   one Work Context (Plant/WorkCenter): the supervisor screens scope by
+  ///   team, and `has_work_scope` rejects every write outside it anyway;
+  /// - a history scope alone (`PP_HIST_SELF` and/or `PP_HIST_TEAM`, see
+  ///   `zcl_pp_work_history`) with no Work Context required →
+  ///   [UserRole.worker], who only reaches the read-only history screen.
+  ///   `getWorkHistory` resolves the worker's own id server-side from the
+  ///   authenticated account, so no local Work Context is needed.
   ///
   /// Still fails closed: an account with neither is rejected rather than
   /// silently landing on a broken/empty UI.
@@ -144,26 +162,26 @@ class AuthRepositoryImpl implements AuthRepository {
     required List<SapWorkContext> workContexts,
   }) {
     final funcIds = permissions.map((p) => p.funcId).toSet();
-    final appPermissions = Permission.values
-        .where((permission) => funcIds.contains(permission.code))
-        .toSet();
+    final historyPermissions = <Permission>{
+      if (funcIds.contains(_funcHistSelf)) Permission.viewOwnProductionHistory,
+      if (funcIds.contains(_funcHistTeam)) Permission.viewTeamProductionHistory,
+    };
 
-    if (funcIds.containsAll(_supervisorFuncIds)) {
+    if (funcIds.contains(_funcInitialAssign)) {
       if (workContexts.isEmpty) {
         throw Exception('Tài khoản chưa được phân phạm vi tổ sản xuất.');
       }
       return (
         role: UserRole.supervisor,
-        permissions: appPermissions,
+        permissions: {...historyPermissions, ..._supervisorPermissions},
         workContexts: workContexts,
       );
     }
 
-    if (funcIds.contains(Permission.viewOwnProductionHistory.code) ||
-        funcIds.contains(Permission.viewTeamProductionHistory.code)) {
+    if (historyPermissions.isNotEmpty) {
       return (
         role: UserRole.worker,
-        permissions: appPermissions,
+        permissions: historyPermissions,
         workContexts: workContexts,
       );
     }
