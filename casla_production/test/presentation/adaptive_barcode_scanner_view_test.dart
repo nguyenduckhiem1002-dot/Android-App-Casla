@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:casla_production/core/scanner/barcode_scan_event.dart';
 import 'package:casla_production/core/scanner/barcode_scanner.dart';
+import 'package:casla_production/core/telemetry/field_telemetry.dart';
 import 'package:casla_production/presentation/widgets/adaptive_barcode_scanner_view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -11,6 +12,7 @@ void main() {
     tester,
   ) async {
     final scanner = _FakeScanner(available: true);
+    final telemetry = FieldTelemetry();
     addTearDown(scanner.close);
     final accepted = <String>[];
 
@@ -21,6 +23,7 @@ void main() {
             title: 'Xác nhận công nhân',
             subtitle: 'Quét mã công nhân',
             hardwareScanner: scanner,
+            telemetry: telemetry,
             onScan: accepted.add,
             onManualInput: () {},
           ),
@@ -39,16 +42,18 @@ void main() {
     await tester.pump();
 
     expect(accepted, ['MNV00123']);
+    expect(telemetry.snapshot().count(FieldMetric.hardwareScanAccepted), 1);
     expect(find.text('ĐÃ NHẬN MÃ'), findsOneWidget);
     expect(find.text('Đã nhận mã • đang kiểm tra dữ liệu'), findsOneWidget);
-
-    scanner.emit('MNV00123');
-    await tester.pump();
-    expect(accepted, ['MNV00123']);
 
     await tester.pump(const Duration(milliseconds: 650));
     expect(find.text('SẴN SÀNG QUÉT'), findsOneWidget);
     expect(find.text('Sẵn sàng cho lượt quét tiếp theo'), findsOneWidget);
+
+    scanner.emit('MNV00123');
+    await tester.pump();
+    expect(accepted, ['MNV00123']);
+    expect(telemetry.snapshot().count(FieldMetric.hardwareScanDuplicate), 1);
   });
 
   testWidgets('manual action stays available in hardware scanner mode', (

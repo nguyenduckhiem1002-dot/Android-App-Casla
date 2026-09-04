@@ -80,8 +80,8 @@ class FieldTelemetrySnapshot {
       result[metric.name] = <String, int>{
         'count': countValue,
         if (totalMs > 0) 'totalDurationMs': totalMs,
-        if (totalMs > 0) 'averageDurationMs':
-            averageDuration(metric).inMilliseconds,
+        if (totalMs > 0)
+          'averageDurationMs': averageDuration(metric).inMilliseconds,
       };
     }
     return result;

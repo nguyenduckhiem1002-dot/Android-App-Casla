@@ -9,6 +9,7 @@ import '../../core/scanner/barcode_scan_event.dart';
 import '../../core/scanner/barcode_scanner.dart';
 import '../../core/scanner/platform_hardware_barcode_scanner.dart';
 import '../../core/scanner/scan_deduplicator.dart';
+import '../../core/telemetry/field_telemetry.dart';
 import 'casla_logo.dart';
 import 'qr_scanner_view.dart';
 
@@ -20,6 +21,7 @@ class AdaptiveBarcodeScannerView extends StatefulWidget {
   final VoidCallback? onManualInput;
   final FutureOr<void> Function(String code) onScan;
   final BarcodeScanner? hardwareScanner;
+  final FieldTelemetry? telemetry;
 
   const AdaptiveBarcodeScannerView({
     super.key,
@@ -28,6 +30,7 @@ class AdaptiveBarcodeScannerView extends StatefulWidget {
     required this.onScan,
     this.onManualInput,
     this.hardwareScanner,
+    this.telemetry,
   });
 
   @override
@@ -39,6 +42,8 @@ class _AdaptiveBarcodeScannerViewState extends State<AdaptiveBarcodeScannerView>
     with RouteAware {
   late final BarcodeScanner _hardwareScanner;
   final ScanDeduplicator _deduplicator = ScanDeduplicator();
+
+  FieldTelemetry get _telemetry => widget.telemetry ?? FieldTelemetry.instance;
 
   StreamSubscription<BarcodeScanEvent>? _scanSubscription;
   ModalRoute<dynamic>? _route;
@@ -118,8 +123,13 @@ class _AdaptiveBarcodeScannerViewState extends State<AdaptiveBarcodeScannerView>
     }
 
     final code = event.rawValue.trim();
-    if (code.isEmpty || !_deduplicator.shouldAccept(code)) return;
+    if (code.isEmpty) return;
+    if (!_deduplicator.shouldAccept(code)) {
+      _telemetry.increment(FieldMetric.hardwareScanDuplicate);
+      return;
+    }
 
+    _telemetry.increment(FieldMetric.hardwareScanAccepted);
     _isHandlingScan = true;
     setState(() => _hardwareStatus = 'Đã nhận mã • đang kiểm tra dữ liệu');
     unawaited(HapticFeedback.mediumImpact());

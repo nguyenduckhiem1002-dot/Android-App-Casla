@@ -39,22 +39,25 @@ void main() {
     );
   });
 
-  test('diagnostic map contains only enum metric names and numeric aggregates', () {
-    final telemetry = FieldTelemetry();
-    telemetry.recordDuration(
-      FieldMetric.workHistoryRemoteFailure,
-      const Duration(milliseconds: 17),
-    );
+  test(
+    'diagnostic map contains only enum metric names and numeric aggregates',
+    () {
+      final telemetry = FieldTelemetry();
+      telemetry.recordDuration(
+        FieldMetric.workHistoryRemoteFailure,
+        const Duration(milliseconds: 17),
+      );
 
-    final diagnostics = telemetry.snapshot().toDiagnosticMap();
+      final diagnostics = telemetry.snapshot().toDiagnosticMap();
 
-    expect(diagnostics.keys, [FieldMetric.workHistoryRemoteFailure.name]);
-    expect(diagnostics.values.single, {
-      'count': 1,
-      'totalDurationMs': 17,
-      'averageDurationMs': 17,
-    });
-  });
+      expect(diagnostics.keys, [FieldMetric.workHistoryRemoteFailure.name]);
+      expect(diagnostics.values.single, {
+        'count': 1,
+        'totalDurationMs': 17,
+        'averageDurationMs': 17,
+      });
+    },
+  );
 
   test('reset clears all aggregates', () {
     final telemetry = FieldTelemetry();
