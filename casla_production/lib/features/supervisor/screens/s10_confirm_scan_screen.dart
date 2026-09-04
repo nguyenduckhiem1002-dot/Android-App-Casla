@@ -4,8 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../app/theme/casla_colors.dart';
 import '../../../core/utils/worker_qr_parser.dart';
+import '../../../domain/policies/worker_scope_policy.dart';
 import '../../../main.dart';
-import '../../../presentation/widgets/qr_scanner_view.dart';
+import '../../../presentation/widgets/adaptive_barcode_scanner_view.dart';
 
 class S10ConfirmScanScreen extends ConsumerStatefulWidget {
   const S10ConfirmScanScreen({super.key});
@@ -42,12 +43,21 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
         _showError('Không tìm thấy công nhân có mã ${parsed.maNv}.');
         return;
       }
+
       final session = ref.read(appStateProvider).currentSession;
-      final isInScope = await db.isEmployeeInScope(
-        worker['id'] as String,
-        session?.toIds ?? const [],
+      final workerTeamIds =
+          (worker['to_ids'] as List<dynamic>? ?? const <dynamic>[])
+              .map((value) => value.toString())
+              .toList();
+      final scopeMatch = WorkerScopePolicy.evaluate(
+        workerTeamIds: workerTeamIds,
+        supervisorTeamIds: session?.toIds ?? const <String>[],
       );
-      if (!isInScope) {
+
+      // SAP-derived history cache can know the worker before it knows the
+      // worker-to-team mapping. Treat that as unknown instead of rejecting a
+      // valid scan. SAP still validates work scope on every write operation.
+      if (scopeMatch == WorkerScopeMatch.outOfScope) {
         _showError('Công nhân không thuộc phạm vi tổ bạn được phân quyền.');
         return;
       }
@@ -172,7 +182,7 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
     return Scaffold(
       body: Stack(
         children: [
-          QrScannerView(
+          AdaptiveBarcodeScannerView(
             title: 'Xác nhận công nhân',
             subtitle:
                 'Quét thẻ hoặc mã QR công nhân để xem chi tiết và xác nhận.',
