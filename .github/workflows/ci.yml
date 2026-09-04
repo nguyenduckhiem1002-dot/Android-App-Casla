@@ -83,6 +83,32 @@ jobs:
 
           echo "$output" | grep -q "Production Android release is not configured"
 
+      - name: Verify production release rejects demo data
+        working-directory: casla_production/android
+        run: |
+          demo_define=$(printf 'ENABLE_DEMO_DATA=true' | base64 -w0)
+          dummy_keystore="$RUNNER_TEMP/casla-ci-dummy.jks"
+          touch "$dummy_keystore"
+
+          set +e
+          output=$(
+            CASLA_ANDROID_APPLICATION_ID=com.casla.ci \
+            CASLA_ANDROID_STORE_FILE="$dummy_keystore" \
+            CASLA_ANDROID_STORE_PASSWORD=ci-only \
+            CASLA_ANDROID_KEY_ALIAS=ci-only \
+            CASLA_ANDROID_KEY_PASSWORD=ci-only \
+            ./gradlew -Pdart-defines="$demo_define" :app:verifyCaslaSigning 2>&1
+          )
+          status=$?
+          set -e
+
+          if [ "$status" -eq 0 ]; then
+            echo "::error::Production guard accepted ENABLE_DEMO_DATA=true."
+            exit 1
+          fi
+
+          echo "$output" | grep -q "ENABLE_DEMO_DATA must not be true for a production release"
+
   ios:
     name: iOS / Xcode build
     runs-on: macos-14
@@ -122,3 +148,17 @@ jobs:
           CODE_SIGNING_ALLOWED=NO
           CODE_SIGNING_REQUIRED=NO
           build
+
+      - name: Verify iOS production identity guard fails closed
+        run: |
+          set +e
+          output=$(bash ios/verify_production_identity.sh 2>&1)
+          status=$?
+          set -e
+
+          if [ "$status" -eq 0 ]; then
+            echo "::error::iOS production identity guard unexpectedly passed without release values."
+            exit 1
+          fi
+
+          echo "$output" | grep -q "iOS production identity is not configured"
