@@ -233,6 +233,11 @@ class CaslaDatabase {
         'uom': 'cái',
         'so_luong_don': 1000.0,
         'trang_thai': 'OPEN',
+        // Demo-only values — a real order's production_order/operation must
+        // come from the actual SAP Manufacturing Order/Operation, entered or
+        // scanned separately from the app-internal ma_qr/ma_don_hang above.
+        'production_order': '000010001234',
+        'operation': '0010',
       },
       {
         'id': 'ord-2',
@@ -244,6 +249,8 @@ class CaslaDatabase {
         'uom': 'cái',
         'so_luong_don': 500.0,
         'trang_thai': 'OPEN',
+        'production_order': '000010001235',
+        'operation': '0010',
       },
       {
         'id': 'ord-3',
@@ -255,6 +262,8 @@ class CaslaDatabase {
         'uom': 'cái',
         'so_luong_don': 800.0,
         'trang_thai': 'OPEN',
+        'production_order': '000010001236',
+        'operation': '0010',
       },
     ]) {
       insert('orders', o);
@@ -595,6 +604,42 @@ class CaslaDatabase {
   Future<List<Map<String, dynamic>>> getAllOrders() async {
     final db = await _database;
     return _rows(await db.query('orders'));
+  }
+
+  Future<Map<String, dynamic>?> getOrderById(String id) async {
+    final db = await _database;
+    final rows = await db.query(
+      'orders',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : Map<String, dynamic>.from(rows.first);
+  }
+
+  /// The live SAP keys a mutation against [assignmentId] must resolve to, or
+  /// null if the assignment (or its order) doesn't exist, or the order has
+  /// never had `production_order`/`operation` filled in.
+  ///
+  /// A blank value here is not "no order" — it's an order that predates the
+  /// SAP live-key fields, or was created without them. Either way, pushing
+  /// that mutation to SAP is meaningless, so callers must treat null as
+  /// "cannot sync", not as "sync with empty strings".
+  Future<({String productionOrder, String operation})?> getSapOperationKeys(
+    String assignmentId,
+  ) async {
+    final assignment = await getAssignmentById(assignmentId);
+    if (assignment == null) return null;
+    final order = await getOrderById(assignment['don_hang_id'] as String);
+    final productionOrder = order?['production_order'] as String?;
+    final operation = order?['operation'] as String?;
+    if (productionOrder == null ||
+        productionOrder.isEmpty ||
+        operation == null ||
+        operation.isEmpty) {
+      return null;
+    }
+    return (productionOrder: productionOrder, operation: operation);
   }
 
   /// Resolves a scanned or typed code to exactly one order.

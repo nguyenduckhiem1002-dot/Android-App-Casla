@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/theme/casla_colors.dart';
+import '../../../core/config/app_config.dart';
+import '../../../core/utils/device_info.dart';
 import '../../../data/sap/sap_auth_controller.dart';
 import '../../../data/sap/sap_odata_client.dart';
 import '../../../main.dart';
@@ -54,29 +56,28 @@ Future<void> showChangePasswordDialog(
 
               try {
                 final appSession = ref?.read(appStateProvider).currentSession;
-                final finalUuid = (userUuid != null && userUuid.isNotEmpty)
-                    ? userUuid
-                    : (appSession?.id ?? '');
                 final finalToken =
                     (accessToken != null && accessToken.isNotEmpty)
                     ? accessToken
                     : (appSession?.accessToken ?? '');
 
-                if (finalUuid.isEmpty || finalUuid.startsWith('sap-')) {
+                if (finalToken.isEmpty) {
                   setState(() {
                     isLoading = false;
                     errorText =
-                        'Không tìm thấy User UUID hợp lệ. Vui lòng đăng nhập lại.';
+                        'Không tìm thấy phiên đăng nhập hợp lệ. Vui lòng đăng nhập lại.';
                   });
                   return;
                 }
 
-                final sapAuth = SapAuthController(SapODataClient());
+                final sapAuth = SapAuthController(
+                  SapODataClient(baseUrl: AppConfig.sapAuthServiceUrl),
+                );
                 await sapAuth.changePassword(
-                  userUuid: finalUuid,
                   accessToken: finalToken,
-                  oldPassword: current,
+                  currentPassword: current,
                   newPassword: newPwd,
+                  deviceId: await DeviceInfoHelper.getDeviceId(),
                 );
 
                 if (!context.mounted) return;

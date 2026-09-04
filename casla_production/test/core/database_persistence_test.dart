@@ -13,6 +13,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
 import '../support/database_test_harness.dart';
+import '../support/fake_sap_gateway.dart';
 
 void main() {
   late Directory tempDir;
@@ -32,7 +33,7 @@ void main() {
 
   test('a queued production record survives closing and reopening', () async {
     final first = CaslaDatabase.instance;
-    final repo = ProductionRepositoryImpl(first);
+    final repo = ProductionRepositoryImpl(first, gateway: NoopSapGateway());
 
     // asg-001 is seeded with 650 assigned and 436 already recorded.
     final recordId = await repo.recordProduction(
@@ -43,19 +44,26 @@ void main() {
       createdBy: 'MNV00100',
     );
 
-    final pendingBefore = await first.watchPendingCount().first;
-    expect(pendingBefore, greaterThan(0));
+    // recordProduction's immediate push attempt hits NoopSapGateway, which
+    // always throws — this item lands FAILED, not PENDING, same as any other
+    // unrecognized gateway error would. It must still be on disk afterward,
+    // whatever its status.
+    final queueBefore = await first.watchSyncQueue().first;
+    final itemBefore = queueBefore.firstWhere(
+      (i) => i['entity_id'] == recordId,
+    );
+    expect(itemBefore['status'], 'FAILED');
 
     await first.close();
 
     final reopened = CaslaDatabase.instance;
     expect(identical(reopened, first), isFalse);
 
-    expect(await reopened.watchPendingCount().first, pendingBefore);
     expect(await reopened.getCompletedQuantity('asg-001'), 466.0);
 
-    final queue = await reopened.watchSyncQueue().first;
-    expect(queue.any((i) => i['entity_id'] == recordId), isTrue);
+    final queueAfter = await reopened.watchSyncQueue().first;
+    final itemAfter = queueAfter.firstWhere((i) => i['entity_id'] == recordId);
+    expect(itemAfter['status'], 'FAILED');
   });
 
   test('reopening does not re-run the demo seed', () async {

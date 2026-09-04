@@ -13,6 +13,10 @@ abstract class AuthRepository {
 
 /// Assignment CRUD & queries
 abstract class AssignmentRepository {
+  /// [workerPassword] is the worker's own SAP password — required by
+  /// `submitInitialAssign` to push this immediately. Omit it (or pass an
+  /// empty string) to write the assignment locally only; it stays queued as
+  /// PENDING until a supervisor supplies the password from the sync screen.
   Future<String> createAssignment({
     required String workerId,
     required String orderId,
@@ -22,6 +26,7 @@ abstract class AssignmentRepository {
     required String shiftId,
     String? note,
     required String createdBy,
+    String? workerPassword,
   });
 
   Stream<List<Assignment>> watchWorkerAssignments(String workerId);
@@ -31,6 +36,8 @@ abstract class AssignmentRepository {
 
 /// Production recording
 abstract class ProductionRepository {
+  /// See [AssignmentRepository.createAssignment] for what [workerPassword]
+  /// does and why it's optional.
   Future<String> recordProduction({
     required String assignmentId,
     required double quantity,
@@ -38,6 +45,7 @@ abstract class ProductionRepository {
     required String shiftId,
     required String createdBy,
     String? note,
+    String? workerPassword,
   });
 
   Stream<List<ProductionRecord>> watchRecordsByAssignment(String assignmentId);
@@ -47,6 +55,8 @@ abstract class ProductionRepository {
 
 /// Recall operations
 abstract class RecallRepository {
+  /// See [AssignmentRepository.createAssignment] for what [workerPassword]
+  /// does and why it's optional.
   Future<String> recallAssignment({
     required String assignmentId,
     required double quantity,
@@ -55,6 +65,7 @@ abstract class RecallRepository {
     required String businessDate,
     required String shiftId,
     required String createdBy,
+    String? workerPassword,
   });
 
   Future<double> getRecalledQuantity(String assignmentId);

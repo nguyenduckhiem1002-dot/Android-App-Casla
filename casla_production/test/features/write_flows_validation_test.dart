@@ -11,6 +11,7 @@ import 'package:casla_production/core/database/casla_database.dart';
 import 'package:casla_production/data/repositories/repositories_impl.dart';
 import 'package:casla_production/domain/entities/enums.dart';
 import '../support/database_test_harness.dart';
+import '../support/fake_sap_gateway.dart';
 
 void main() {
   useInMemoryDatabase();
@@ -23,9 +24,10 @@ void main() {
   setUp(() {
     CaslaDatabase.resetForTesting();
     db = CaslaDatabase.instance;
-    assignmentRepo = AssignmentRepositoryImpl(db);
-    productionRepo = ProductionRepositoryImpl(db);
-    recallRepo = RecallRepositoryImpl(db);
+    final gateway = NoopSapGateway();
+    assignmentRepo = AssignmentRepositoryImpl(db, gateway: gateway);
+    productionRepo = ProductionRepositoryImpl(db, gateway: gateway);
+    recallRepo = RecallRepositoryImpl(db, gateway: gateway);
   });
 
   // Seed assignment asg-001: 650 assigned, 436 already completed (prod-001 +

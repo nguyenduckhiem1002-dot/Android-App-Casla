@@ -1,9 +1,8 @@
 // Sync — the seam between the queue and SAP
 // Spec: Section 9 (SAP OData/RAP)
 //
-// Phase 1 defines this contract and tests the engine against fakes. Phase 2
-// implements it over `SapODataClient` once the ABAP side exposes entity sets for
-// PhanCong, GhiNhanSanLuong and ThuHoiPhanCong.
+// Implemented by SapPpOpAllocGateway (lib/data/sap/sap_pp_opalloc_gateway.dart)
+// against the real ZUI_PP_OPALLOC service.
 
 /// One queued transaction, paired with the row it was built from.
 class SyncPushRequest {
@@ -13,7 +12,23 @@ class SyncPushRequest {
   /// The source row from `assignments` / `production_records` / `recall_records`.
   final Map<String, dynamic> source;
 
-  const SyncPushRequest({required this.queueItem, required this.source});
+  /// The worker's own password, required by every ZUI_PP_OPALLOC mutation.
+  ///
+  /// This is deliberately not a column anywhere — SQLite is a durability
+  /// guarantee for the *record*, not a place to hold a worker's credential
+  /// while it waits to be retried. It is supplied fresh, in memory, only for
+  /// the immediate push a repository makes right after the write; the
+  /// automatic background engine has no way to obtain one and always leaves
+  /// this null, so [SapWriteGateway.push] must throw
+  /// [WorkerVerificationRequiredException] rather than send an empty string
+  /// when this is missing.
+  final String? workerPassword;
+
+  const SyncPushRequest({
+    required this.queueItem,
+    required this.source,
+    this.workerPassword,
+  });
 
   String get id => queueItem['id'] as String;
   String get entityType => queueItem['entity_type'] as String;

@@ -9,7 +9,7 @@
 import 'package:sqflite/sqflite.dart';
 
 /// Bump on every schema change and add the matching step to [migrate].
-const int schemaVersion = 1;
+const int schemaVersion = 2;
 
 /// Tables holding transactions that must survive a restart until SAP confirms
 /// them. The retention policy in Spec 4.7 forbids clearing these.
@@ -58,7 +58,13 @@ const List<String> _createStatements = [
     dac_tinh TEXT,
     uom TEXT,
     so_luong_don REAL NOT NULL,
-    trang_thai TEXT NOT NULL
+    trang_thai TEXT NOT NULL,
+    -- SAP live keys (added v2). Every mobile mutation against ZUI_PP_OPALLOC
+    -- resolves the SAP Manufacturing Order + Operation live from these two
+    -- fields, not from `ma_don_hang` — that code is an app-internal label and
+    -- is never guaranteed to match SAP's real order number format.
+    production_order TEXT,
+    operation TEXT
   )
   ''',
   // getOrderByCode resolves a scan against any of these identifiers.
@@ -194,8 +200,20 @@ Future<void> createSchema(Database db) async {
 ///
 /// Adding `2` here means "run this to go from version 1 to version 2".
 const Map<int, Future<void> Function(Database)> _migrations = {
-  // 1: _upgradeTo2,
+  1: _upgradeV1ToV2,
 };
+
+/// v2 — SAP live keys on `orders`.
+///
+/// `ZUI_PP_OPALLOC` resolves the live SAP Manufacturing Order + Operation from
+/// `ProductionOrder + Operation`, supplied per mutation. A v1 database has
+/// nowhere to keep those, so every existing order gains them as nullable —
+/// existing rows read back NULL until a supervisor fills them in; new orders
+/// created after this migration should always set both.
+Future<void> _upgradeV1ToV2(Database db) async {
+  await db.execute('ALTER TABLE orders ADD COLUMN production_order TEXT');
+  await db.execute('ALTER TABLE orders ADD COLUMN operation TEXT');
+}
 
 /// Walks a database from [from] up to [to], one version at a time.
 Future<void> migrate(Database db, int from, int to) async {

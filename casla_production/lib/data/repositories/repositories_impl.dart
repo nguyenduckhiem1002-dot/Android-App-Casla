@@ -2,7 +2,11 @@
 // Spec: Section 9.1 (Business contracts)
 // Each transaction: Entity + SyncQueue + AuditLog atomic
 
+import '../../core/config/app_config.dart';
 import '../../core/database/casla_database.dart';
+import '../../core/sync/sap_write_gateway.dart';
+import '../../core/sync/sync_failure.dart';
+import '../../core/sync/sync_push.dart';
 import '../../core/utils/id_generator.dart';
 import '../../core/utils/device_info.dart';
 import 'package:flutter/foundation.dart';
@@ -21,183 +25,144 @@ class AuthRepositoryImpl implements AuthRepository {
   late final SapAuthController _sapAuth;
 
   AuthRepositoryImpl(this.db) {
-    _sapClient = SapODataClient();
+    _sapClient = SapODataClient(baseUrl: AppConfig.sapAuthServiceUrl);
     _sapAuth = SapAuthController(_sapClient);
   }
+
+  /// Exposed so [AppState] can reuse the same authenticated client for token
+  /// refresh, rather than standing up a second one.
+  SapAuthController get authController => _sapAuth;
 
   @override
   Future<UserSession> loginByCredentials(
     String username,
     String password,
   ) async {
-    final sapResult = await _sapAuth.loginWithCredentials(username, password);
-    if (sapResult != null && sapResult.accessToken.isNotEmpty) {
-      final userDetail = sapResult.userDetail;
-      final fullName =
-          (userDetail?['FullName'] ?? userDetail?['Username'] ?? username)
-              .toString();
-      final email = (userDetail?['Email'] ?? userDetail?['email'] ?? '')
-          .toString();
-      final teamName =
-          (userDetail?['TeamName'] ??
-                  userDetail?['team_name'] ??
-                  userDetail?['TenTo'] ??
-                  '')
-              .toString();
-      final pwdReqVal =
-          userDetail?['PasswordChangeRequired'] ??
-          userDetail?['password_change_required'];
-      final passwordChangeRequired =
-          pwdReqVal == true ||
-          pwdReqVal.toString().toLowerCase() == 'true' ||
-          pwdReqVal == 1;
-      final userUuid = sapResult.userUuid;
+    final deviceId = await DeviceInfoHelper.getDeviceId();
+    final result = await _sapAuth.login(
+      username: username,
+      password: password,
+      deviceId: deviceId,
+    );
 
-      final authorization = parseAuthorization(userDetail);
-
-      final session = UserSession(
-        id: userUuid.isNotEmpty ? userUuid : 'sap-$username',
-        maNv: username,
-        fullName: fullName,
-        email: email,
-        accessToken: sapResult.accessToken,
-        passwordChangeRequired: passwordChangeRequired,
-        teamName: teamName,
-        role: authorization.role,
-        permissions: authorization.permissions,
-        toIds: authorization.teamIds,
+    // `Status == 'F'` covers wrong password, inactive account AND a lockout —
+    // deliberately the same public response for all three, so this must not
+    // try to guess which one happened from anything else in the result.
+    if (!result.isSuccess) {
+      throw Exception(
+        'Đăng nhập thất bại. Vui lòng kiểm tra lại tài khoản hoặc mật khẩu.',
       );
-
-      await db.insertAuditLog({
-        'id': IdGenerator.newId(),
-        'event_type': 'LOGIN_SAP',
-        'actor_id': username,
-        'target_employee_id': username,
-        'entity_type': 'SESSION',
-        'entity_id': session.id,
-        'device_id': DeviceInfoHelper.deviceId,
-        'occurred_at_utc': DateTime.now().millisecondsSinceEpoch,
-      });
-
-      return session;
     }
 
-    throw Exception(
-      'Đăng nhập thất bại. Vui lòng kiểm tra lại tài khoản hoặc mật khẩu SAP!',
+    final authorization = parseAuthorization(
+      permissions: result.permissions,
+      workContexts: result.workContexts,
     );
+
+    // Display-only; a failed lookup must not fail the login itself.
+    final detail = await _sapAuth.getUserDetail(result.userUuid);
+
+    final session = UserSession(
+      id: result.userUuid,
+      maNv: username,
+      fullName: (detail?['FullName'] ?? username).toString(),
+      email: (detail?['Email'] ?? '').toString(),
+      teamName: authorization.workContexts.isNotEmpty
+          ? authorization.workContexts.first.workName
+          : '',
+      accessToken: result.accessToken,
+      refreshToken: result.refreshToken,
+      passwordChangeRequired: result.passwordChangeRequired,
+      role: authorization.role,
+      permissions: authorization.permissions,
+      toIds: authorization.workContexts.map((w) => w.workId).toList(),
+    );
+
+    await db.insertAuditLog({
+      'id': IdGenerator.newId(),
+      'event_type': 'LOGIN_SAP',
+      'actor_id': username,
+      'target_employee_id': username,
+      'entity_type': 'SESSION',
+      'entity_id': session.id,
+      'device_id': deviceId,
+      'occurred_at_utc': DateTime.now().millisecondsSinceEpoch,
+    });
+
+    return session;
   }
 
   @override
   Future<void> logout({String? accessToken}) async {
     if (accessToken != null && accessToken.isNotEmpty) {
-      await _sapAuth.logout(accessToken);
+      await _sapAuth.logout(
+        accessToken: accessToken,
+        deviceId: await DeviceInfoHelper.getDeviceId(),
+      );
     }
   }
 
-  /// Converts authorization claims returned by SAP into the app session.
-  /// Missing claims fail closed; a successful login must never silently become
-  /// a fully privileged supervisor session.
+  /// Function IDs that mark an account as a supervisor for this app.
+  ///
+  /// SAP no longer sends an explicit Role claim (see `ZA_MOB_LoginResult` —
+  /// there is no `Role` field): the app derives it from the permission set
+  /// login/refresh return, the same vocabulary `ZA_MOB_Permission.FuncID`
+  /// uses. Matching [Permission.assignQuantity] alone would let a
+  /// worker-only account with one stray permission in, so this requires the
+  /// full supervisor set.
+  static const _supervisorFuncIds = {
+    'ASSIGN_QUANTITY',
+    'RECALL_ASSIGNMENT',
+    'VIEW_TEAM_PRODUCTION',
+  };
+
+  /// Converts the permissions/work-contexts SAP returned into the app
+  /// session's role/permission/scope claims.
+  ///
+  /// Fails closed: this app has no worker- or inspector-facing screens yet
+  /// (Spec 5.1 describes them, but only the Supervisor surface is built), so
+  /// an account without the full supervisor permission set is rejected here
+  /// rather than silently landing on a broken/empty UI.
   @visibleForTesting
-  static ({UserRole role, Set<Permission> permissions, List<String> teamIds})
-  parseAuthorization(Map<String, dynamic>? detail) {
-    if (detail == null) {
-      throw Exception('Tài khoản SAP chưa có thông tin phân quyền.');
-    }
+  static ({
+    UserRole role,
+    Set<Permission> permissions,
+    List<SapWorkContext> workContexts,
+  })
+  parseAuthorization({
+    required List<SapPermission> permissions,
+    required List<SapWorkContext> workContexts,
+  }) {
+    final funcIds = permissions.map((p) => p.funcId).toSet();
 
-    final rawRole = _firstClaim(detail, const [
-      'Role',
-      'role',
-      'UserRole',
-      'user_role',
-      'VaiTro',
-      'vai_tro',
-    ]);
-    final normalizedRole = rawRole?.toString().trim().toUpperCase();
-    final role = switch (normalizedRole) {
-      'SUPERVISOR' => UserRole.supervisor,
-      'SAP_ADMIN' => UserRole.sapAdmin,
-      _ => throw Exception(
+    if (!funcIds.containsAll(_supervisorFuncIds)) {
+      throw Exception(
         'Tài khoản không có vai trò Supervisor được phép sử dụng ứng dụng.',
-      ),
-    };
-
-    final permissionCodes = _claimCodes(
-      _firstClaim(detail, const [
-        'Permissions',
-        'permissions',
-        'PermissionCodes',
-        'permission_codes',
-        'QuyenHan',
-        'quyen_han',
-      ]),
-    );
-    final permissions = Permission.values
-        .where((permission) => permissionCodes.contains(permission.code))
-        .toSet();
-    if (!permissions.contains(Permission.viewTeamProduction)) {
-      throw Exception('Tài khoản chưa được cấp quyền VIEW_TEAM_PRODUCTION.');
+      );
     }
 
-    final teamIds = _claimCodes(
-      _firstClaim(detail, const [
-        'TeamIds',
-        'team_ids',
-        'ToIds',
-        'to_ids',
-        'SupervisorScope',
-        'supervisor_scope',
-      ]),
-      normalizeUpperCase: false,
-    ).toList(growable: false);
-    if (teamIds.isEmpty) {
+    final appPermissions = Permission.values
+        .where((permission) => funcIds.contains(permission.code))
+        .toSet();
+
+    if (workContexts.isEmpty) {
       throw Exception('Tài khoản chưa được phân phạm vi tổ sản xuất.');
     }
 
-    return (role: role, permissions: permissions, teamIds: teamIds);
-  }
-
-  static dynamic _firstClaim(Map<String, dynamic> detail, List<String> keys) {
-    for (final key in keys) {
-      final value = detail[key];
-      if (value != null) return value;
-    }
-    return null;
-  }
-
-  static Set<String> _claimCodes(
-    dynamic claim, {
-    bool normalizeUpperCase = true,
-  }) {
-    if (claim == null) return const {};
-    final values = claim is Iterable
-        ? claim
-        : claim.toString().split(RegExp(r'[,;]'));
-    return values
-        .map((value) {
-          if (value is Map) {
-            return (value['Code'] ??
-                    value['code'] ??
-                    value['Id'] ??
-                    value['id'])
-                ?.toString();
-          }
-          return value.toString();
-        })
-        .whereType<String>()
-        .map((value) {
-          final trimmed = value.trim();
-          return normalizeUpperCase ? trimmed.toUpperCase() : trimmed;
-        })
-        .where((value) => value.isNotEmpty)
-        .toSet();
+    return (
+      role: UserRole.supervisor,
+      permissions: appPermissions,
+      workContexts: workContexts,
+    );
   }
 }
 
 // ─── Assignment Repository ──────────────────────────────────────────
 class AssignmentRepositoryImpl implements AssignmentRepository {
   final CaslaDatabase db;
+  final SapWriteGateway gateway;
 
-  AssignmentRepositoryImpl(this.db);
+  AssignmentRepositoryImpl(this.db, {required this.gateway});
 
   @override
   Future<String> createAssignment({
@@ -209,6 +174,7 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
     required String shiftId,
     String? note,
     required String createdBy,
+    String? workerPassword,
   }) async {
     if (assignedQuantity <= 0) throw Exception('Số lượng giao phải lớn hơn 0');
 
@@ -217,7 +183,7 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
     final now = DateTime.now().millisecondsSinceEpoch;
 
     // Atomic: Assignment + SyncQueue + AuditLog
-    await db.insertAssignment({
+    final assignmentRow = {
       'id': id,
       'nhan_vien_id': workerId,
       'don_hang_id': orderId,
@@ -233,9 +199,10 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
       'sync_status': 'PENDING',
       'idempotency_key': idempotencyKey,
       'created_at_utc': now,
-    });
+    };
+    await db.insertAssignment(assignmentRow);
 
-    await db.insertSyncQueueItem({
+    final queueItem = {
       'id': IdGenerator.newId(),
       'entity_type': 'ASSIGNMENT',
       'entity_id': id,
@@ -244,7 +211,8 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
       'retry_count': 0,
       'created_at_utc': now,
       'updated_at_utc': now,
-    });
+    };
+    await db.insertSyncQueueItem(queueItem);
 
     await db.insertAuditLog({
       'id': IdGenerator.newId(),
@@ -258,6 +226,21 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
       'occurred_at_utc': now,
       'device_id': DeviceInfoHelper.deviceId,
     });
+
+    // Spec 4.7: "Có mạng/API tốt → gửi ngay". Every mutation on this backend
+    // needs the worker's own password; without one this call still isn't a
+    // no-op — it immediately marks the item NEEDS_VERIFICATION rather than
+    // leaving it looking like ordinary PENDING work the background engine
+    // will get to on its own (it never can, for this backend — see
+    // `SyncPushRequest.workerPassword`).
+    await pushAndRecord(
+      database: db,
+      gateway: gateway,
+      backoff: SyncBackoff(),
+      queueItem: queueItem,
+      source: assignmentRow,
+      workerPassword: workerPassword,
+    );
 
     return id;
   }
@@ -366,8 +349,9 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
 // ─── Production Repository ──────────────────────────────────────────
 class ProductionRepositoryImpl implements ProductionRepository {
   final CaslaDatabase db;
+  final SapWriteGateway gateway;
 
-  ProductionRepositoryImpl(this.db);
+  ProductionRepositoryImpl(this.db, {required this.gateway});
 
   @override
   Future<String> recordProduction({
@@ -377,6 +361,7 @@ class ProductionRepositoryImpl implements ProductionRepository {
     required String shiftId,
     required String createdBy,
     String? note,
+    String? workerPassword,
   }) async {
     final assignment = await db.getAssignmentById(assignmentId);
     if (assignment == null) throw Exception('Phân công không tồn tại');
@@ -406,7 +391,7 @@ class ProductionRepositoryImpl implements ProductionRepository {
     final now = DateTime.now().millisecondsSinceEpoch;
 
     // Atomic: ProductionRecord + SyncQueue + AuditLog
-    await db.insertProductionRecord({
+    final recordRow = {
       'id': id,
       'phan_cong_id': assignmentId,
       'quantity': quantity,
@@ -419,14 +404,15 @@ class ProductionRepositoryImpl implements ProductionRepository {
       'sync_status': 'PENDING',
       'idempotency_key': idempotencyKey,
       'created_at_utc': now,
-    });
+    };
+    await db.insertProductionRecord(recordRow);
 
     // If remaining reaches 0, update assignment status
     if ((remaining - quantity) <= 0.0001) {
       await db.updateAssignmentStatus(assignmentId, 'COMPLETED', 'PENDING');
     }
 
-    await db.insertSyncQueueItem({
+    final queueItem = {
       'id': IdGenerator.newId(),
       'entity_type': 'PRODUCTION',
       'entity_id': id,
@@ -435,7 +421,8 @@ class ProductionRepositoryImpl implements ProductionRepository {
       'retry_count': 0,
       'created_at_utc': now,
       'updated_at_utc': now,
-    });
+    };
+    await db.insertSyncQueueItem(queueItem);
 
     await db.insertAuditLog({
       'id': IdGenerator.newId(),
@@ -449,6 +436,17 @@ class ProductionRepositoryImpl implements ProductionRepository {
       'occurred_at_utc': now,
       'device_id': DeviceInfoHelper.deviceId,
     });
+
+    // See AssignmentRepositoryImpl.createAssignment for what this does
+    // without a password.
+    await pushAndRecord(
+      database: db,
+      gateway: gateway,
+      backoff: SyncBackoff(),
+      queueItem: queueItem,
+      source: recordRow,
+      workerPassword: workerPassword,
+    );
 
     return id;
   }
@@ -495,8 +493,9 @@ class ProductionRepositoryImpl implements ProductionRepository {
 // ─── Recall Repository ──────────────────────────────────────────────
 class RecallRepositoryImpl implements RecallRepository {
   final CaslaDatabase db;
+  final SapWriteGateway gateway;
 
-  RecallRepositoryImpl(this.db);
+  RecallRepositoryImpl(this.db, {required this.gateway});
 
   @override
   Future<String> recallAssignment({
@@ -507,6 +506,7 @@ class RecallRepositoryImpl implements RecallRepository {
     required String businessDate,
     required String shiftId,
     required String createdBy,
+    String? workerPassword,
   }) async {
     final assignment = await db.getAssignmentById(assignmentId);
     if (assignment == null) throw Exception('Phân công không tồn tại');
@@ -532,7 +532,7 @@ class RecallRepositoryImpl implements RecallRepository {
     final idempotencyKey = IdGenerator.newIdempotencyKey();
     final now = DateTime.now().millisecondsSinceEpoch;
 
-    await db.insertRecallRecord({
+    final recallRow = {
       'id': id,
       'phan_cong_id': assignmentId,
       'quantity': quantity,
@@ -546,14 +546,15 @@ class RecallRepositoryImpl implements RecallRepository {
       'sync_status': 'PENDING',
       'idempotency_key': idempotencyKey,
       'created_at_utc': now,
-    });
+    };
+    await db.insertRecallRecord(recallRow);
 
     // If total recall + completed == assigned, update status
     if ((maxRecall - quantity) <= 0.0001) {
       await db.updateAssignmentStatus(assignmentId, 'RECALLED', 'PENDING');
     }
 
-    await db.insertSyncQueueItem({
+    final queueItem = {
       'id': IdGenerator.newId(),
       'entity_type': 'RECALL',
       'entity_id': id,
@@ -562,7 +563,8 @@ class RecallRepositoryImpl implements RecallRepository {
       'retry_count': 0,
       'created_at_utc': now,
       'updated_at_utc': now,
-    });
+    };
+    await db.insertSyncQueueItem(queueItem);
 
     await db.insertAuditLog({
       'id': IdGenerator.newId(),
@@ -576,6 +578,17 @@ class RecallRepositoryImpl implements RecallRepository {
       'occurred_at_utc': now,
       'device_id': DeviceInfoHelper.deviceId,
     });
+
+    // See AssignmentRepositoryImpl.createAssignment for what this does
+    // without a password.
+    await pushAndRecord(
+      database: db,
+      gateway: gateway,
+      backoff: SyncBackoff(),
+      queueItem: queueItem,
+      source: recallRow,
+      workerPassword: workerPassword,
+    );
 
     return id;
   }
