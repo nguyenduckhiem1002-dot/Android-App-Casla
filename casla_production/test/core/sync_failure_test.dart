@@ -181,12 +181,13 @@ void main() {
       expect(failure.isRetryable, isTrue);
     });
 
-    test('WORKER_AUTH_FAILED is a permanent, explained rejection', () {
+    test('WORKER_AUTH_FAILED waits for a fresh human verification', () {
       final failure = classifySyncError(
         const SapBusinessError('WORKER_AUTH_FAILED'),
       );
 
-      expect(failure.kind, SyncFailureKind.permanent);
+      expect(failure.kind, SyncFailureKind.needsVerification);
+      expect(failure.isRetryable, isFalse);
       expect(failure.message, contains('Mật khẩu xác nhận'));
     });
 

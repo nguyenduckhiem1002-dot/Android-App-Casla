@@ -7,11 +7,13 @@ import '../../core/database/casla_database.dart';
 import '../../core/sync/sap_write_gateway.dart';
 import '../../core/sync/sync_failure.dart';
 import '../../core/sync/sync_push.dart';
+import '../../core/sync/verified_sync_coordinator.dart';
 import '../../core/utils/id_generator.dart';
 import '../../core/utils/device_info.dart';
 import 'package:flutter/foundation.dart';
 import '../../domain/entities/entities.dart';
 import '../../domain/entities/enums.dart';
+import '../../domain/entities/mutation_receipt.dart';
 import '../../domain/entities/work_history.dart';
 import '../../domain/policies/production_math.dart';
 import '../../domain/repositories/repositories.dart';
@@ -180,7 +182,7 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
   AssignmentRepositoryImpl(this.db, {required this.gateway});
 
   @override
-  Future<String> createAssignment({
+  Future<MutationReceipt> createAssignment({
     required String workerId,
     required String orderId,
     required String teamId,
@@ -215,21 +217,20 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
       'idempotency_key': idempotencyKey,
       'created_at_utc': now,
     };
-    await db.insertAssignment(assignmentRow);
-
     final queueItem = {
       'id': IdGenerator.newId(),
       'entity_type': 'ASSIGNMENT',
       'entity_id': id,
       'action': 'CREATE',
+      'payload_summary': 'Phân công · +${assignedQuantity.toStringAsFixed(0)}',
+      'idempotency_key': idempotencyKey,
+      'device_id': DeviceInfoHelper.deviceId,
       'priority': 1,
       'retry_count': 0,
       'created_at_utc': now,
       'updated_at_utc': now,
     };
-    await db.insertSyncQueueItem(queueItem);
-
-    await db.insertAuditLog({
+    final auditLog = {
       'id': IdGenerator.newId(),
       'event_type': 'CREATE_ASSIGNMENT',
       'actor_id': createdBy,
@@ -240,7 +241,13 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
       'shift_id': shiftId,
       'occurred_at_utc': now,
       'device_id': DeviceInfoHelper.deviceId,
-    });
+    };
+
+    await db.createAssignmentAtomically(
+      assignment: assignmentRow,
+      queueItem: queueItem,
+      auditLog: auditLog,
+    );
 
     // Spec 4.7: "Có mạng/API tốt → gửi ngay". Every mutation on this backend
     // needs the worker's own password; without one this call still isn't a
@@ -248,7 +255,7 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
     // leaving it looking like ordinary PENDING work the background engine
     // will get to on its own (it never can, for this backend — see
     // `SyncPushRequest.workerPassword`).
-    await pushAndRecord(
+    final failure = await pushAndRecord(
       database: db,
       gateway: gateway,
       backoff: SyncBackoff(),
@@ -257,7 +264,7 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
       workerPassword: workerPassword,
     );
 
-    return id;
+    return _mutationReceipt(id, failure);
   }
 
   @override
@@ -271,6 +278,15 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
   Stream<List<Assignment>> watchAllAssignments() {
     return db.watchAllAssignments().asyncMap((entities) async {
       return _mapToAssignmentsBatch(entities);
+    });
+  }
+
+  @override
+  Stream<Assignment?> watchAssignment(String id) {
+    return db.watchAssignmentById(id).asyncMap((entity) async {
+      if (entity == null) return null;
+      final results = await _mapToAssignmentsBatch([entity]);
+      return results.isEmpty ? null : results.first;
     });
   }
 
@@ -348,12 +364,7 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
           note: entity['note'] as String?,
           createdBy: entity['created_by'] as String,
           idempotencyKey: entity['idempotency_key'] as String,
-          syncStatus: SyncStatus.values.firstWhere(
-            (s) =>
-                s.name.toUpperCase() ==
-                (entity['sync_status'] as String).toUpperCase(),
-            orElse: () => SyncStatus.pending,
-          ),
+          syncStatus: SyncStatus.fromStorage(entity['sync_status']),
         ),
       );
     }
@@ -365,11 +376,16 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
 class ProductionRepositoryImpl implements ProductionRepository {
   final CaslaDatabase db;
   final SapWriteGateway gateway;
+  final VerifiedSyncCoordinator verifiedSync;
 
-  ProductionRepositoryImpl(this.db, {required this.gateway});
+  ProductionRepositoryImpl(
+    this.db, {
+    required this.gateway,
+    required this.verifiedSync,
+  });
 
   @override
-  Future<String> recordProduction({
+  Future<MutationReceipt> recordProduction({
     required String assignmentId,
     required double quantity,
     required String businessDate,
@@ -420,26 +436,21 @@ class ProductionRepositoryImpl implements ProductionRepository {
       'idempotency_key': idempotencyKey,
       'created_at_utc': now,
     };
-    await db.insertProductionRecord(recordRow);
-
-    // If remaining reaches 0, update assignment status
-    if ((remaining - quantity) <= 0.0001) {
-      await db.updateAssignmentStatus(assignmentId, 'COMPLETED', 'PENDING');
-    }
-
     final queueItem = {
       'id': IdGenerator.newId(),
       'entity_type': 'PRODUCTION',
       'entity_id': id,
       'action': 'CREATE',
+      'payload_summary':
+          'Xác nhận hoàn thành · +${quantity.toStringAsFixed(0)}',
+      'idempotency_key': idempotencyKey,
+      'device_id': DeviceInfoHelper.deviceId,
       'priority': 1,
       'retry_count': 0,
       'created_at_utc': now,
       'updated_at_utc': now,
     };
-    await db.insertSyncQueueItem(queueItem);
-
-    await db.insertAuditLog({
+    final auditLog = {
       'id': IdGenerator.newId(),
       'event_type': 'RECORD_PRODUCTION',
       'actor_id': createdBy,
@@ -450,11 +461,26 @@ class ProductionRepositoryImpl implements ProductionRepository {
       'shift_id': shiftId,
       'occurred_at_utc': now,
       'device_id': DeviceInfoHelper.deviceId,
-    });
+    };
 
-    // See AssignmentRepositoryImpl.createAssignment for what this does
-    // without a password.
-    await pushAndRecord(
+    await db.recordProductionAtomically(
+      record: recordRow,
+      queueItem: queueItem,
+      auditLog: auditLog,
+      assignmentStatus: (remaining - quantity) <= 0.0001 ? 'COMPLETED' : null,
+    );
+
+    if (workerPassword?.isNotEmpty == true) {
+      // This may also push an unsynced parent assignment first. Sending the
+      // child directly would omit OriginalTransactionUUID and break lineage.
+      final report = await verifiedSync.syncVerifiedWorkerChain(
+        anchorQueueItemId: queueItem['id'] as String,
+        workerPassword: workerPassword!,
+      );
+      return _verifiedMutationReceipt(db, id, queueItem, report);
+    }
+
+    final failure = await pushAndRecord(
       database: db,
       gateway: gateway,
       backoff: SyncBackoff(),
@@ -463,7 +489,7 @@ class ProductionRepositoryImpl implements ProductionRepository {
       workerPassword: workerPassword,
     );
 
-    return id;
+    return _mutationReceipt(id, failure);
   }
 
   @override
@@ -484,12 +510,7 @@ class ProductionRepositoryImpl implements ProductionRepository {
                   occurredAtUtc: r['occurred_at_utc'] as int,
                   deviceId: r['device_id'] as String,
                   idempotencyKey: r['idempotency_key'] as String,
-                  syncStatus: SyncStatus.values.firstWhere(
-                    (s) =>
-                        s.name.toUpperCase() ==
-                        (r['sync_status'] as String).toUpperCase(),
-                    orElse: () => SyncStatus.pending,
-                  ),
+                  syncStatus: SyncStatus.fromStorage(r['sync_status']),
                 ),
               )
               .toList(),
@@ -509,11 +530,16 @@ class ProductionRepositoryImpl implements ProductionRepository {
 class RecallRepositoryImpl implements RecallRepository {
   final CaslaDatabase db;
   final SapWriteGateway gateway;
+  final VerifiedSyncCoordinator verifiedSync;
 
-  RecallRepositoryImpl(this.db, {required this.gateway});
+  RecallRepositoryImpl(
+    this.db, {
+    required this.gateway,
+    required this.verifiedSync,
+  });
 
   @override
-  Future<String> recallAssignment({
+  Future<MutationReceipt> recallAssignment({
     required String assignmentId,
     required double quantity,
     required String reasonCode,
@@ -562,26 +588,20 @@ class RecallRepositoryImpl implements RecallRepository {
       'idempotency_key': idempotencyKey,
       'created_at_utc': now,
     };
-    await db.insertRecallRecord(recallRow);
-
-    // If total recall + completed == assigned, update status
-    if ((maxRecall - quantity) <= 0.0001) {
-      await db.updateAssignmentStatus(assignmentId, 'RECALLED', 'PENDING');
-    }
-
     final queueItem = {
       'id': IdGenerator.newId(),
       'entity_type': 'RECALL',
       'entity_id': id,
       'action': 'CREATE',
+      'payload_summary': 'Thu hồi phân công · -${quantity.toStringAsFixed(0)}',
+      'idempotency_key': idempotencyKey,
+      'device_id': DeviceInfoHelper.deviceId,
       'priority': 1,
       'retry_count': 0,
       'created_at_utc': now,
       'updated_at_utc': now,
     };
-    await db.insertSyncQueueItem(queueItem);
-
-    await db.insertAuditLog({
+    final auditLog = {
       'id': IdGenerator.newId(),
       'event_type': 'RECALL_ASSIGNMENT',
       'actor_id': createdBy,
@@ -592,11 +612,24 @@ class RecallRepositoryImpl implements RecallRepository {
       'shift_id': shiftId,
       'occurred_at_utc': now,
       'device_id': DeviceInfoHelper.deviceId,
-    });
+    };
 
-    // See AssignmentRepositoryImpl.createAssignment for what this does
-    // without a password.
-    await pushAndRecord(
+    await db.recallAssignmentAtomically(
+      record: recallRow,
+      queueItem: queueItem,
+      auditLog: auditLog,
+      assignmentStatus: (maxRecall - quantity) <= 0.0001 ? 'RECALLED' : null,
+    );
+
+    if (workerPassword?.isNotEmpty == true) {
+      final report = await verifiedSync.syncVerifiedWorkerChain(
+        anchorQueueItemId: queueItem['id'] as String,
+        workerPassword: workerPassword!,
+      );
+      return _verifiedMutationReceipt(db, id, queueItem, report);
+    }
+
+    final failure = await pushAndRecord(
       database: db,
       gateway: gateway,
       backoff: SyncBackoff(),
@@ -605,7 +638,7 @@ class RecallRepositoryImpl implements RecallRepository {
       workerPassword: workerPassword,
     );
 
-    return id;
+    return _mutationReceipt(id, failure);
   }
 
   @override
@@ -622,4 +655,49 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
   @override
   Future<WorkHistoryResult> getWorkHistory({required HistoryRange range}) =>
       gateway.getWorkHistory(range: range);
+}
+
+MutationReceipt _mutationReceipt(String id, SyncFailure? failure) {
+  if (failure == null) {
+    return MutationReceipt(id: id, state: MutationDeliveryState.synced);
+  }
+  final state = switch (failure.kind) {
+    SyncFailureKind.needsVerification =>
+      MutationDeliveryState.needsVerification,
+    SyncFailureKind.permanent => MutationDeliveryState.rejected,
+    SyncFailureKind.transient ||
+    SyncFailureKind.auth => MutationDeliveryState.queued,
+  };
+  return MutationReceipt(
+    id: id,
+    state: state,
+    code: failure.code,
+    message: failure.message,
+  );
+}
+
+Future<MutationReceipt> _verifiedMutationReceipt(
+  CaslaDatabase db,
+  String id,
+  Map<String, dynamic> queueItem,
+  VerifiedSyncReport report,
+) async {
+  if (report.outcome == VerifiedSyncOutcome.synced) {
+    return MutationReceipt(id: id, state: MutationDeliveryState.synced);
+  }
+
+  final queued = await db.getSyncQueueItemById(queueItem['id'] as String);
+  final status = queued?['status']?.toString();
+  final code = queued?['last_error_code']?.toString();
+  final state = status == 'NEEDS_VERIFICATION' || code == 'WORKER_AUTH_FAILED'
+      ? MutationDeliveryState.needsVerification
+      : status == 'FAILED' || report.outcome == VerifiedSyncOutcome.rejected
+      ? MutationDeliveryState.rejected
+      : MutationDeliveryState.queued;
+  return MutationReceipt(
+    id: id,
+    state: state,
+    code: code,
+    message: report.message,
+  );
 }

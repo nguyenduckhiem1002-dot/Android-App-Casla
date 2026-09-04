@@ -287,6 +287,7 @@ class CaslaDatabase {
         'occurred_at_utc': now,
         'device_id': 'PDA-CT02-A17',
         'sync_status': 'SYNCED',
+        'sap_id': '00000000-0000-0000-0000-000000000001',
         'idempotency_key': 'demo-key-001',
         'created_at_utc': now,
       },
@@ -341,6 +342,7 @@ class CaslaDatabase {
         'occurred_at_utc': now,
         'device_id': 'PDA-CT02-A17',
         'sync_status': 'SYNCED',
+        'sap_id': '00000000-0000-0000-0000-000000000005',
         'idempotency_key': 'demo-key-005',
         'created_at_utc': now,
       },
@@ -359,6 +361,7 @@ class CaslaDatabase {
         'occurred_at_utc': now - 86400000,
         'device_id': 'PDA-CT02-A17',
         'sync_status': 'SYNCED',
+        'sap_id': '00000000-0000-0000-0000-000000000002',
         'idempotency_key': 'demo-key-002',
         'created_at_utc': now - 86400000,
       },
@@ -702,6 +705,22 @@ class CaslaDatabase {
     _notifyAssignments();
   }
 
+  /// Commits the durable assignment envelope as one unit.
+  Future<void> createAssignmentAtomically({
+    required Map<String, dynamic> assignment,
+    required Map<String, dynamic> queueItem,
+    required Map<String, dynamic> auditLog,
+  }) async {
+    final db = await _database;
+    await db.transaction((txn) async {
+      await txn.insert('assignments', assignment);
+      await txn.insert('sync_queue', queueItem);
+      await txn.insert('audit_log', auditLog);
+    });
+    _notifyAssignments();
+    _notifySyncQueue();
+  }
+
   Future<Map<String, dynamic>?> getAssignmentById(String id) async {
     final db = await _database;
     final rows = await db.query(
@@ -734,6 +753,10 @@ class CaslaDatabase {
         await db.query('assignments', orderBy: 'created_at_utc DESC'),
       );
     });
+  }
+
+  Stream<Map<String, dynamic>?> watchAssignmentById(String id) {
+    return _ticks(_assignmentController).asyncMap((_) => getAssignmentById(id));
   }
 
   Stream<List<Map<String, dynamic>>> watchAssignmentsByTeams(
@@ -792,6 +815,32 @@ class CaslaDatabase {
     await db.insert('production_records', record);
     _notifyProduction();
     _notifyAssignments();
+  }
+
+  /// Commits a production record, its queue item and audit event together.
+  Future<void> recordProductionAtomically({
+    required Map<String, dynamic> record,
+    required Map<String, dynamic> queueItem,
+    required Map<String, dynamic> auditLog,
+    String? assignmentStatus,
+  }) async {
+    final db = await _database;
+    await db.transaction((txn) async {
+      await txn.insert('production_records', record);
+      if (assignmentStatus != null) {
+        await txn.update(
+          'assignments',
+          {'status': assignmentStatus},
+          where: 'id = ?',
+          whereArgs: [record['phan_cong_id']],
+        );
+      }
+      await txn.insert('sync_queue', queueItem);
+      await txn.insert('audit_log', auditLog);
+    });
+    _notifyProduction();
+    _notifyAssignments();
+    _notifySyncQueue();
   }
 
   /// Writes a production record straight to the store, bypassing every business
@@ -934,12 +983,53 @@ class CaslaDatabase {
     );
   }
 
+  Stream<List<Map<String, dynamic>>> watchProductionHistory(
+    String employeeId, {
+    String? fromBusinessDate,
+    String? toBusinessDate,
+  }) {
+    return _watch(
+      _productionController,
+      () => getProductionHistory(
+        employeeId,
+        fromBusinessDate: fromBusinessDate,
+        toBusinessDate: toBusinessDate,
+      ),
+    );
+  }
+
   // ─── Recall Record Queries ────────────────────────────────────────
   Future<void> insertRecallRecord(Map<String, dynamic> record) async {
     final db = await _database;
     await db.insert('recall_records', record);
     _notifyRecalls();
     _notifyAssignments();
+  }
+
+  /// Commits a recall record, its queue item and audit event together.
+  Future<void> recallAssignmentAtomically({
+    required Map<String, dynamic> record,
+    required Map<String, dynamic> queueItem,
+    required Map<String, dynamic> auditLog,
+    String? assignmentStatus,
+  }) async {
+    final db = await _database;
+    await db.transaction((txn) async {
+      await txn.insert('recall_records', record);
+      if (assignmentStatus != null) {
+        await txn.update(
+          'assignments',
+          {'status': assignmentStatus},
+          where: 'id = ?',
+          whereArgs: [record['phan_cong_id']],
+        );
+      }
+      await txn.insert('sync_queue', queueItem);
+      await txn.insert('audit_log', auditLog);
+    });
+    _notifyRecalls();
+    _notifyAssignments();
+    _notifySyncQueue();
   }
 
   Future<double> getRecalledQuantity(String assignmentId) async {
@@ -1000,6 +1090,61 @@ class CaslaDatabase {
     });
   }
 
+  Future<Map<String, dynamic>?> getSyncQueueItemById(String id) async {
+    final db = await _database;
+    final rows = await db.query(
+      'sync_queue',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : Map<String, dynamic>.from(rows.first);
+  }
+
+  /// All work for one worker that can be sent with one fresh verification.
+  /// Assignments are returned before their production/recall descendants so
+  /// SAP always has the OriginalTransactionUUID lineage first.
+  Future<List<Map<String, dynamic>>> getVerifiableSyncItemsForWorker(
+    String workerId,
+  ) async {
+    final db = await _database;
+    return _rows(
+      await db.rawQuery(
+        '''
+        SELECT q.*
+        FROM sync_queue q
+        LEFT JOIN assignments direct_assignment
+          ON q.entity_type = 'ASSIGNMENT'
+         AND direct_assignment.id = q.entity_id
+        LEFT JOIN production_records production
+          ON q.entity_type IN ('PRODUCTION', 'PRODUCTION_RECORD')
+         AND production.id = q.entity_id
+        LEFT JOIN recall_records recall
+          ON q.entity_type IN ('RECALL', 'RECALL_RECORD')
+         AND recall.id = q.entity_id
+        LEFT JOIN assignments parent_assignment
+          ON parent_assignment.id = COALESCE(
+            production.phan_cong_id,
+            recall.phan_cong_id
+          )
+        WHERE (
+            q.status IN ('PENDING', 'NEEDS_VERIFICATION')
+            OR q.last_error_code = 'WORKER_AUTH_FAILED'
+          )
+          AND COALESCE(
+            direct_assignment.nhan_vien_id,
+            parent_assignment.nhan_vien_id
+          ) = ?
+        ORDER BY
+          CASE WHEN q.entity_type = 'ASSIGNMENT' THEN 0 ELSE 1 END ASC,
+          q.created_at_utc ASC,
+          q.id ASC
+        ''',
+        [workerId],
+      ),
+    );
+  }
+
   Stream<int> watchPendingCount() {
     return _watch(_syncQueueController, () async {
       final db = await _database;
@@ -1008,6 +1153,15 @@ class CaslaDatabase {
           "SELECT COUNT(*) AS c FROM sync_queue WHERE status = 'PENDING'",
         ),
       );
+    }).map((rows) => rows.first['c'] as int);
+  }
+
+  /// Every transaction still waiting for SAP, regardless of whether it is
+  /// retrying automatically, needs verification, or needs operator attention.
+  Stream<int> watchOutstandingSyncCount() {
+    return _watch(_syncQueueController, () async {
+      final db = await _database;
+      return _rows(await db.rawQuery('SELECT COUNT(*) AS c FROM sync_queue'));
     }).map((rows) => rows.first['c'] as int);
   }
 
@@ -1090,23 +1244,51 @@ class CaslaDatabase {
     int? nextRetryAtUtc,
   }) async {
     final db = await _database;
-    await db.rawUpdate(
-      'UPDATE sync_queue SET '
-      'retry_count = retry_count + 1, '
-      'last_error_code = ?, last_error_message = ?, '
-      'status = ?, failure_kind = ?, next_retry_at_utc = ?, updated_at_utc = ? '
-      'WHERE id = ?',
-      [
-        errorCode,
-        errorMessage,
-        status,
-        failureKind,
-        nextRetryAtUtc,
-        DateTime.now().millisecondsSinceEpoch,
-        id,
-      ],
-    );
+    var changed = false;
+    await db.transaction((txn) async {
+      final rows = await txn.query(
+        'sync_queue',
+        columns: ['entity_type', 'entity_id'],
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      if (rows.isEmpty) return;
+
+      final queueItem = rows.first;
+      await txn.rawUpdate(
+        'UPDATE sync_queue SET '
+        'retry_count = retry_count + 1, '
+        'last_error_code = ?, last_error_message = ?, '
+        'status = ?, failure_kind = ?, next_retry_at_utc = ?, updated_at_utc = ? '
+        'WHERE id = ?',
+        [
+          errorCode,
+          errorMessage,
+          status,
+          failureKind,
+          nextRetryAtUtc,
+          DateTime.now().millisecondsSinceEpoch,
+          id,
+        ],
+      );
+
+      final table = _entitySourceTables[queueItem['entity_type']];
+      if (table != null) {
+        await txn.update(
+          table,
+          {'sync_status': status},
+          where: 'id = ?',
+          whereArgs: [queueItem['entity_id']],
+        );
+      }
+      changed = true;
+    });
+    if (!changed) return;
     _notifySyncQueue();
+    _notifyAssignments();
+    _notifyProduction();
+    _notifyRecalls();
   }
 
   /// Removes a confirmed queue item and stamps its source row as SYNCED.
@@ -1146,21 +1328,48 @@ class CaslaDatabase {
     final db = await _database;
     // Requeue without deleting the source transaction. The sync engine is
     // responsible for removing the item only after SAP acknowledges it.
-    final changed = await db.update(
-      'sync_queue',
-      {
-        'status': 'PENDING',
-        'last_error_code': null,
-        'last_error_message': null,
-        'failure_kind': null,
-        'next_retry_at_utc': null,
-        'updated_at_utc': DateTime.now().millisecondsSinceEpoch,
-      },
-      where: 'id = ?',
-      whereArgs: [id],
-    );
-    if (changed == 0) return false;
+    var changed = false;
+    await db.transaction((txn) async {
+      final rows = await txn.query(
+        'sync_queue',
+        columns: ['entity_type', 'entity_id'],
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      if (rows.isEmpty) return;
+
+      final queueItem = rows.first;
+      await txn.update(
+        'sync_queue',
+        {
+          'status': 'PENDING',
+          'last_error_code': null,
+          'last_error_message': null,
+          'failure_kind': null,
+          'next_retry_at_utc': null,
+          'updated_at_utc': DateTime.now().millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+
+      final table = _entitySourceTables[queueItem['entity_type']];
+      if (table != null) {
+        await txn.update(
+          table,
+          {'sync_status': 'PENDING'},
+          where: 'id = ?',
+          whereArgs: [queueItem['entity_id']],
+        );
+      }
+      changed = true;
+    });
+    if (!changed) return false;
     _notifySyncQueue();
+    _notifyAssignments();
+    _notifyProduction();
+    _notifyRecalls();
     return true;
   }
 

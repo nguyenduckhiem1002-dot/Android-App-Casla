@@ -8,8 +8,12 @@
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:casla_production/core/database/casla_database.dart';
+import 'package:casla_production/core/sync/sap_write_gateway.dart';
+import 'package:casla_production/core/sync/sync_failure.dart';
+import 'package:casla_production/core/sync/verified_sync_coordinator.dart';
 import 'package:casla_production/data/repositories/repositories_impl.dart';
 import 'package:casla_production/domain/entities/enums.dart';
+import 'package:casla_production/domain/entities/mutation_receipt.dart';
 import '../support/database_test_harness.dart';
 import '../support/fake_sap_gateway.dart';
 
@@ -25,9 +29,21 @@ void main() {
     CaslaDatabase.resetForTesting();
     db = CaslaDatabase.instance;
     final gateway = NoopSapGateway();
+    final verifiedSync = VerifiedSyncCoordinator(
+      database: db,
+      gateway: gateway,
+    );
     assignmentRepo = AssignmentRepositoryImpl(db, gateway: gateway);
-    productionRepo = ProductionRepositoryImpl(db, gateway: gateway);
-    recallRepo = RecallRepositoryImpl(db, gateway: gateway);
+    productionRepo = ProductionRepositoryImpl(
+      db,
+      gateway: gateway,
+      verifiedSync: verifiedSync,
+    );
+    recallRepo = RecallRepositoryImpl(
+      db,
+      gateway: gateway,
+      verifiedSync: verifiedSync,
+    );
   });
 
   // Seed assignment asg-001: 650 assigned, 436 already completed (prod-001 +
@@ -37,7 +53,7 @@ void main() {
 
   group('Create assignment', () {
     test('accepts a positive quantity', () async {
-      final id = await assignmentRepo.createAssignment(
+      final receipt = await assignmentRepo.createAssignment(
         workerId: 'emp-1',
         orderId: 'ord-1',
         teamId: 'team-2',
@@ -47,8 +63,9 @@ void main() {
         createdBy: 'MNV00100',
       );
 
-      expect(id, isNotEmpty);
-      expect(await db.getAssignmentById(id), isNotNull);
+      expect(receipt.id, isNotEmpty);
+      expect(receipt.state, MutationDeliveryState.rejected);
+      expect(await db.getAssignmentById(receipt.id), isNotNull);
     });
 
     test('rejects a zero quantity', () async {
@@ -97,6 +114,11 @@ void main() {
       expect(
         await db.getCompletedQuantity(seededAssignmentId),
         closeTo(before + 50.0, 0.001),
+      );
+      expect(
+        (await db.getAssignmentById(seededAssignmentId))!['sync_status'],
+        'SYNCED',
+        reason: 'a child mutation must not dirty the assignment delivery state',
       );
     });
 
@@ -170,6 +192,11 @@ void main() {
       expect(
         await db.getRecalledQuantity(seededAssignmentId),
         closeTo(100.0, 0.001),
+      );
+      expect(
+        (await db.getAssignmentById(seededAssignmentId))!['sync_status'],
+        'SYNCED',
+        reason: 'a recall owns its own sync state',
       );
     });
 
@@ -250,4 +277,142 @@ void main() {
       expect(assignment.workerName, isNotEmpty);
     });
   });
+
+  group('Durable mutation envelope', () {
+    test('rolls the entity back when its queue insert fails', () async {
+      const id = 'asg-atomic-rollback';
+      await expectLater(
+        db.createAssignmentAtomically(
+          assignment: {
+            'id': id,
+            'nhan_vien_id': 'emp-1',
+            'don_hang_id': 'ord-1',
+            'to_id': 'team-2',
+            'assigned_quantity': 1.0,
+            'business_date': '2026-08-14',
+            'shift_id': 'SHIFT_1',
+            'status': 'OPEN',
+            'created_by': 'MNV00100',
+            'occurred_at_utc': 1,
+            'device_id': 'TEST',
+            'sync_status': 'PENDING',
+            'idempotency_key': 'atomic-rollback-key',
+            'created_at_utc': 1,
+          },
+          // Missing required entity_type makes the second insert fail.
+          queueItem: {'id': 'sync-atomic-rollback', 'created_at_utc': 1},
+          auditLog: {'id': 'audit-atomic-rollback', 'occurred_at_utc': 1},
+        ),
+        throwsA(anything),
+      );
+
+      expect(await db.getAssignmentById(id), isNull);
+    });
+
+    test('one verification sends the worker chain parent first', () async {
+      final gateway = _PasswordGateway();
+      final coordinator = VerifiedSyncCoordinator(
+        database: db,
+        gateway: gateway,
+      );
+      final assignments = AssignmentRepositoryImpl(db, gateway: gateway);
+      final production = ProductionRepositoryImpl(
+        db,
+        gateway: gateway,
+        verifiedSync: coordinator,
+      );
+
+      final assignment = await assignments.createAssignment(
+        workerId: 'emp-1',
+        orderId: 'ord-1',
+        teamId: 'team-2',
+        assignedQuantity: 80,
+        businessDate: '2026-08-14',
+        shiftId: 'SHIFT_1',
+        createdBy: 'MNV00100',
+      );
+      final record = await production.recordProduction(
+        assignmentId: assignment.id,
+        quantity: 20,
+        businessDate: '2026-08-14',
+        shiftId: 'SHIFT_1',
+        createdBy: 'MNV00100',
+      );
+      expect(assignment.state, MutationDeliveryState.needsVerification);
+      expect(record.state, MutationDeliveryState.needsVerification);
+      expect(
+        (await assignments.getAssignmentById(assignment.id))!.syncStatus,
+        SyncStatus.needsVerification,
+      );
+
+      final feed = await db.watchSyncFeed().first;
+      final anchor = feed.firstWhere((item) => item['entity_id'] == record.id);
+      final report = await coordinator.syncVerifiedWorkerChain(
+        anchorQueueItemId: anchor['id'] as String,
+        workerPassword: 'worker-secret',
+      );
+
+      expect(report.outcome, VerifiedSyncOutcome.synced);
+      expect(report.syncedCount, 2);
+      expect(gateway.entityTypes, ['ASSIGNMENT', 'PRODUCTION']);
+      expect(
+        (await db.getAssignmentById(assignment.id))?['sap_id'],
+        'sap-${assignment.id}',
+      );
+    });
+
+    test(
+      'confirm with one password syncs an unsynced parent before its child',
+      () async {
+        final gateway = _PasswordGateway();
+        final coordinator = VerifiedSyncCoordinator(
+          database: db,
+          gateway: gateway,
+        );
+        final assignments = AssignmentRepositoryImpl(db, gateway: gateway);
+        final production = ProductionRepositoryImpl(
+          db,
+          gateway: gateway,
+          verifiedSync: coordinator,
+        );
+
+        final assignment = await assignments.createAssignment(
+          workerId: 'emp-1',
+          orderId: 'ord-1',
+          teamId: 'team-2',
+          assignedQuantity: 80,
+          businessDate: '2026-08-14',
+          shiftId: 'SHIFT_1',
+          createdBy: 'MNV00100',
+        );
+        final record = await production.recordProduction(
+          assignmentId: assignment.id,
+          quantity: 20,
+          businessDate: '2026-08-14',
+          shiftId: 'SHIFT_1',
+          createdBy: 'MNV00100',
+          workerPassword: 'worker-secret',
+        );
+
+        expect(record.state, MutationDeliveryState.synced);
+        expect(gateway.entityTypes, ['ASSIGNMENT', 'PRODUCTION']);
+      },
+    );
+  });
+}
+
+class _PasswordGateway implements SapWriteGateway {
+  final List<String> entityTypes = [];
+
+  @override
+  Future<SapWriteResult> push(SyncPushRequest request) async {
+    if (request.workerPassword?.isNotEmpty != true) {
+      throw const WorkerVerificationRequiredException();
+    }
+    entityTypes.add(request.entityType);
+    return SapWriteResult(sapId: 'sap-${request.entityId}');
+  }
+
+  @override
+  Future<bool> refreshSession() async => false;
 }

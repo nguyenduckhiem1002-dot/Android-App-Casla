@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../app/theme/casla_colors.dart';
 import '../../../domain/entities/enums.dart';
+import '../../../core/utils/device_info.dart';
 import '../../../main.dart';
 import '../widgets/change_password_dialog.dart';
 
@@ -13,23 +14,20 @@ class S13AccountScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final appState = ref.watch(appStateProvider);
     final emp = appState.currentSession;
-    final userName = emp?.fullName ?? emp?.userName ?? 'Trần Thị B';
-    final userCode = emp?.maNv ?? 'N/A';
+    final userName = emp?.fullName ?? emp?.userName ?? 'Người dùng';
+    final userCode = emp?.maNv ?? 'Chưa có mã';
     final userEmail = emp?.email.isNotEmpty == true
         ? emp!.email
-        : '$userCode@caslastone.com';
-    final isSupervisor = emp?.role == UserRole.supervisor;
-    final role = isSupervisor ? 'SUPERVISOR' : 'CÔNG NHÂN';
-
-    final permissions = isSupervisor
-        ? [
-            'Giao chỉ tiêu số lượng',
-            'Xác nhận hoàn thành',
-            'Thu hồi phân công',
-            'Xem sản lượng tổ',
-            'Xem trạng thái đồng bộ',
-          ]
-        : ['Xem lịch sử bản thân'];
+        : 'Chưa cập nhật';
+    final managementScope = emp?.teamName.isNotEmpty == true
+        ? emp!.teamName
+        : (emp?.toIds.isNotEmpty == true
+              ? emp!.toIds.join(', ')
+              : 'Chưa được phân phạm vi');
+    final role = (emp?.role ?? UserRole.worker).label.toUpperCase();
+    final permissions = (emp?.permissions ?? const <Permission>{})
+        .map(_permissionLabel)
+        .toList();
 
     return Scaffold(
       backgroundColor: CaslaColors.background,
@@ -88,6 +86,9 @@ class S13AccountScreen extends ConsumerWidget {
                   const SizedBox(height: 12),
                   Text(
                     userName,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
                     style: const TextStyle(
                       fontFamily: 'Manrope',
                       fontWeight: FontWeight.w800,
@@ -107,6 +108,8 @@ class S13AccountScreen extends ConsumerWidget {
                   const SizedBox(height: 2),
                   Text(
                     userEmail,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontSize: 12, color: Colors.white70),
                   ),
                   const SizedBox(height: 10),
@@ -159,8 +162,11 @@ class S13AccountScreen extends ConsumerWidget {
                   _buildSettingRow('Họ và tên', userName),
                   _buildSettingRow('Tài khoản SAP', userCode),
                   _buildSettingRow('Email liên hệ', userEmail),
-                  _buildSettingRow('Phạm vi quản lý', 'Tổ Cắt 1–3'),
-                  _buildSettingRow('Mã thiết bị PDA', 'PDA-CT02-A17'),
+                  _buildSettingRow('Phạm vi quản lý', managementScope),
+                  _buildSettingRow(
+                    'Mã thiết bị PDA',
+                    DeviceInfoHelper.deviceId,
+                  ),
 
                   const SizedBox(height: 14),
                   const Divider(height: 1),
@@ -176,30 +182,36 @@ class S13AccountScreen extends ConsumerWidget {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: permissions.map((p) {
-                      return Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 5,
-                        ),
-                        decoration: BoxDecoration(
-                          color: CaslaColors.muted100,
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Text(
-                          p,
-                          style: const TextStyle(
-                            fontSize: 10.5,
-                            fontWeight: FontWeight.w700,
-                            color: CaslaColors.primaryNavy,
+                  if (permissions.isEmpty)
+                    const Text(
+                      'Chưa có quyền ứng dụng nào được cấp.',
+                      style: TextStyle(color: CaslaColors.muted, fontSize: 12),
+                    )
+                  else
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: permissions.map((p) {
+                        return Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 5,
                           ),
-                        ),
-                      );
-                    }).toList(),
-                  ),
+                          decoration: BoxDecoration(
+                            color: CaslaColors.muted100,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            p,
+                            style: const TextStyle(
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.w700,
+                              color: CaslaColors.primaryNavy,
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
                 ],
               ),
             ),
@@ -220,12 +232,7 @@ class S13AccountScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 10),
             OutlinedButton(
-              onPressed: () async {
-                await appState.logout();
-                if (context.mounted) {
-                  context.go('/login');
-                }
-              },
+              onPressed: () => _confirmLogout(context, ref),
               child: const Text('Đăng xuất'),
             ),
           ],
@@ -244,6 +251,7 @@ class S13AccountScreen extends ConsumerWidget {
             label,
             style: const TextStyle(fontSize: 12.5, color: CaslaColors.muted),
           ),
+          const SizedBox(width: 16),
           Expanded(
             child: Text(
               value,
@@ -261,4 +269,42 @@ class S13AccountScreen extends ConsumerWidget {
       ),
     );
   }
+
+  Future<void> _confirmLogout(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Đăng xuất?'),
+        content: const Text(
+          'Các giao dịch chưa đồng bộ vẫn được giữ an toàn trên thiết bị.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Ở lại'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Đăng xuất'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+    await ref.read(appStateProvider).logout();
+    if (context.mounted) context.go('/login');
+  }
+
+  String _permissionLabel(Permission permission) => switch (permission) {
+    Permission.viewOwnProduction => 'Xem sản lượng cá nhân',
+    Permission.recordOwnProduction => 'Ghi sản lượng cá nhân',
+    Permission.assignQuantity => 'Giao chỉ tiêu số lượng',
+    Permission.recallAssignment => 'Thu hồi phân công',
+    Permission.viewTeamProduction => 'Xem sản lượng tổ',
+    Permission.viewEmployeeHistory => 'Xem lịch sử công nhân',
+    Permission.viewSyncStatus => 'Xem trạng thái đồng bộ',
+    Permission.switchUser => 'Chuyển công nhân',
+    Permission.viewOwnProductionHistory => 'Xem lịch sử bản thân',
+    Permission.viewTeamProductionHistory => 'Xem lịch sử tổ',
+  };
 }

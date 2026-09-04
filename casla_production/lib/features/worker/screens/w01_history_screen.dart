@@ -13,6 +13,7 @@ import '../../../app/theme/casla_colors.dart';
 import '../../../core/sync/sync_failure.dart';
 import '../../../domain/entities/work_history.dart';
 import '../../../main.dart';
+import '../../../presentation/widgets/casla_skeleton.dart';
 
 class W01HistoryScreen extends ConsumerStatefulWidget {
   const W01HistoryScreen({super.key});
@@ -100,10 +101,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
                   _buildRangeTabs(),
                   const SizedBox(height: 14),
                   if (snapshot.connectionState == ConnectionState.waiting)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 48),
-                      child: Center(child: CircularProgressIndicator()),
-                    )
+                    const _HistorySkeleton()
                   else if (snapshot.hasError)
                     _buildError(snapshot.error!)
                   else if (snapshot.hasData)
@@ -454,5 +452,31 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
       default:
         return Icons.receipt_long_outlined;
     }
+  }
+}
+
+class _HistorySkeleton extends StatelessWidget {
+  const _HistorySkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        const Row(
+          children: [
+            Expanded(child: CaslaSkeleton(height: 76, radius: 12)),
+            SizedBox(width: 8),
+            Expanded(child: CaslaSkeleton(height: 76, radius: 12)),
+            SizedBox(width: 8),
+            Expanded(child: CaslaSkeleton(height: 76, radius: 12)),
+          ],
+        ),
+        const SizedBox(height: 18),
+        for (var index = 0; index < 4; index++) ...[
+          const CaslaSkeleton(height: 64, radius: 10),
+          const SizedBox(height: 8),
+        ],
+      ],
+    );
   }
 }

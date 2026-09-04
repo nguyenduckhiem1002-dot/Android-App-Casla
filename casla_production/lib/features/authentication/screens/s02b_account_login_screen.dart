@@ -60,6 +60,7 @@ class _S02bAccountLoginScreenState
       await appState.loginByCredentials(username, password);
       if (!mounted) return;
       final role = appState.currentSession?.role;
+      _passwordController.clear();
       context.go(role == UserRole.worker ? '/history' : '/supervisor');
     } catch (e) {
       if (!mounted) return;
@@ -125,42 +126,45 @@ class _S02bAccountLoginScreenState
                         children: [
                           // Error Banner
                           if (_errorMessage != null) ...[
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 14,
-                                vertical: 12,
-                              ),
-                              decoration: BoxDecoration(
-                                color: CaslaColors.dangerBg,
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(
-                                  color: CaslaColors.danger.withValues(
-                                    alpha: 0.25,
-                                  ),
-                                  width: 1,
+                            Semantics(
+                              liveRegion: true,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                  vertical: 12,
                                 ),
-                              ),
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Icon(
-                                    Icons.error_outline_rounded,
-                                    color: CaslaColors.danger,
-                                    size: 18,
+                                decoration: BoxDecoration(
+                                  color: CaslaColors.dangerBg,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: CaslaColors.danger.withValues(
+                                      alpha: 0.25,
+                                    ),
+                                    width: 1,
                                   ),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Text(
-                                      _errorMessage!,
-                                      style: const TextStyle(
-                                        color: CaslaColors.danger,
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w600,
-                                        height: 1.3,
+                                ),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Icon(
+                                      Icons.error_outline_rounded,
+                                      color: CaslaColors.danger,
+                                      size: 18,
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Text(
+                                        _errorMessage!,
+                                        style: const TextStyle(
+                                          color: CaslaColors.danger,
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                          height: 1.3,
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
                             ),
                             const SizedBox(height: 18),
@@ -186,7 +190,15 @@ class _S02bAccountLoginScreenState
                           const SizedBox(height: 8),
                           TextField(
                             controller: _usernameController,
+                            autofillHints: const [AutofillHints.username],
+                            autocorrect: false,
+                            enableSuggestions: false,
                             textInputAction: TextInputAction.next,
+                            onChanged: (_) {
+                              if (_errorMessage != null) {
+                                setState(() => _errorMessage = null);
+                              }
+                            },
                             decoration: const InputDecoration(
                               hintText: 'Nhập mã quản lý / username',
                               prefixIcon: Icon(
@@ -218,9 +230,19 @@ class _S02bAccountLoginScreenState
                           const SizedBox(height: 8),
                           TextField(
                             controller: _passwordController,
+                            autofillHints: const [AutofillHints.password],
+                            autocorrect: false,
+                            enableSuggestions: false,
                             obscureText: _obscurePassword,
                             textInputAction: TextInputAction.done,
-                            onSubmitted: (_) => _submitLogin(),
+                            onChanged: (_) {
+                              if (_errorMessage != null) {
+                                setState(() => _errorMessage = null);
+                              }
+                            },
+                            onSubmitted: (_) {
+                              if (!_isLoading) _submitLogin();
+                            },
                             decoration: InputDecoration(
                               hintText: 'Nhập mật khẩu',
                               prefixIcon: const Icon(
@@ -229,6 +251,9 @@ class _S02bAccountLoginScreenState
                                 color: CaslaColors.muted,
                               ),
                               suffixIcon: IconButton(
+                                tooltip: _obscurePassword
+                                    ? 'Hiện mật khẩu'
+                                    : 'Ẩn mật khẩu',
                                 icon: Icon(
                                   _obscurePassword
                                       ? Icons.visibility_outlined

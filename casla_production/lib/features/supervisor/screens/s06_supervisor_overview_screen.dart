@@ -10,6 +10,7 @@ import '../../../main.dart';
 import '../../../presentation/widgets/kpi_card.dart';
 import '../../../presentation/widgets/status_chip.dart';
 import '../../../presentation/widgets/casla_empty_state.dart';
+import '../../../presentation/widgets/casla_skeleton.dart';
 import '../../account/widgets/change_password_dialog.dart';
 
 class S06SupervisorOverviewScreen extends ConsumerStatefulWidget {
@@ -26,6 +27,8 @@ class _S06SupervisorOverviewScreenState
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
   bool _hasCheckedMandatoryPassword = false;
+  String _employeeScopeKey = '';
+  Future<List<Map<String, dynamic>>>? _employeesFuture;
 
   @override
   void initState() {
@@ -48,8 +51,8 @@ class _S06SupervisorOverviewScreenState
   }
 
   // Filter States
-  String _selectedTeamId = 'ALL'; // 'ALL', 'team-1', 'team-2', 'team-3'
-  String _selectedTeamLabel = 'Tổ: Tất cả';
+  String _selectedTeamId = 'ALL';
+  String _selectedTeamLabel = 'Tất cả tổ';
 
   DateTime _selectedDate = DateTime.now();
 
@@ -68,74 +71,106 @@ class _S06SupervisorOverviewScreenState
     return DateFormat('dd/MM/yyyy').format(d);
   }
 
-  void _showTeamFilterSheet() {
-    showModalBottomSheet(
+  Future<List<Map<String, dynamic>>> _employeesFor(List<String> teamIds) {
+    final sortedIds = [...teamIds]..sort();
+    final scopeKey = sortedIds.join('|');
+    if (_employeesFuture == null || _employeeScopeKey != scopeKey) {
+      _employeeScopeKey = scopeKey;
+      _employeesFuture = ref
+          .read(appStateProvider)
+          .db
+          .getEmployeesByTeamIds(teamIds);
+    }
+    return _employeesFuture!;
+  }
+
+  Future<void> _showTeamFilterSheet() async {
+    final appState = ref.read(appStateProvider);
+    final scope = appState.currentSession?.toIds.toSet() ?? const <String>{};
+    final allTeams = await appState.db.getAllTeams();
+    if (!mounted) return;
+    final teams = allTeams.where((team) => scope.contains(team['id'])).toList();
+
+    await showModalBottomSheet<void>(
       context: context,
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      builder: (context) {
-        return Container(
-          padding: const EdgeInsets.all(18),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Lọc theo Tổ sản xuất',
-                style: TextStyle(
-                  fontFamily: 'Manrope',
-                  fontWeight: FontWeight.w800,
-                  fontSize: 16,
-                  color: CaslaColors.primaryNavy,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: SizedBox(
+            height: MediaQuery.sizeOf(sheetContext).height * 0.68,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(18, 18, 18, 10),
+                  child: Text(
+                    'Lọc theo tổ sản xuất',
+                    style: TextStyle(
+                      fontFamily: 'Manrope',
+                      fontWeight: FontWeight.w800,
+                      fontSize: 17,
+                      color: CaslaColors.primaryNavy,
+                    ),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              ListTile(
-                title: const Text('Tất cả các tổ'),
-                selected: _selectedTeamId == 'ALL',
-                onTap: () {
-                  setState(() {
-                    _selectedTeamId = 'ALL';
-                    _selectedTeamLabel = 'Tổ: Tất cả';
-                  });
-                  Navigator.pop(context);
-                },
-              ),
-              ListTile(
-                title: const Text('Tổ Cắt 1'),
-                selected: _selectedTeamId == 'team-1',
-                onTap: () {
-                  setState(() {
-                    _selectedTeamId = 'team-1';
-                    _selectedTeamLabel = 'Tổ Cắt 1';
-                  });
-                  Navigator.pop(context);
-                },
-              ),
-              ListTile(
-                title: const Text('Tổ Cắt 2'),
-                selected: _selectedTeamId == 'team-2',
-                onTap: () {
-                  setState(() {
-                    _selectedTeamId = 'team-2';
-                    _selectedTeamLabel = 'Tổ Cắt 2';
-                  });
-                  Navigator.pop(context);
-                },
-              ),
-              ListTile(
-                title: const Text('Tổ Cắt 3'),
-                selected: _selectedTeamId == 'team-3',
-                onTap: () {
-                  setState(() {
-                    _selectedTeamId = 'team-3';
-                    _selectedTeamLabel = 'Tổ Cắt 3';
-                  });
-                  Navigator.pop(context);
-                },
-              ),
-            ],
+                Expanded(
+                  child: ListView(
+                    padding: const EdgeInsets.fromLTRB(10, 0, 10, 18),
+                    children: [
+                      ListTile(
+                        title: const Text('Tất cả các tổ'),
+                        selected: _selectedTeamId == 'ALL',
+                        trailing: _selectedTeamId == 'ALL'
+                            ? const Icon(Icons.check)
+                            : null,
+                        onTap: () {
+                          setState(() {
+                            _selectedTeamId = 'ALL';
+                            _selectedTeamLabel = 'Tất cả tổ';
+                          });
+                          Navigator.pop(sheetContext);
+                        },
+                      ),
+                      for (final team in teams)
+                        ListTile(
+                          title: Text(
+                            team['ten_to'] as String? ?? 'Tổ sản xuất',
+                          ),
+                          subtitle: team['ma_to'] == null
+                              ? null
+                              : Text(team['ma_to'].toString()),
+                          selected: _selectedTeamId == team['id'],
+                          trailing: _selectedTeamId == team['id']
+                              ? const Icon(Icons.check)
+                              : null,
+                          onTap: () {
+                            setState(() {
+                              _selectedTeamId = team['id'] as String;
+                              _selectedTeamLabel =
+                                  team['ten_to'] as String? ?? 'Tổ sản xuất';
+                            });
+                            Navigator.pop(sheetContext);
+                          },
+                        ),
+                      if (teams.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.all(16),
+                          child: Text(
+                            'Chưa có dữ liệu tên tổ tương ứng với phạm vi SAP.',
+                            style: TextStyle(
+                              color: CaslaColors.muted,
+                              fontSize: 12.5,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         );
       },
@@ -143,11 +178,12 @@ class _S06SupervisorOverviewScreenState
   }
 
   void _showDatePickerDialog() async {
+    final now = DateTime.now();
     final picked = await showDatePicker(
       context: context,
       initialDate: _selectedDate,
-      firstDate: DateTime(2026, 1, 1),
-      lastDate: DateTime(2027, 12, 31),
+      firstDate: DateTime(now.year - 2, 1, 1),
+      lastDate: DateTime(now.year + 2, 12, 31),
     );
     if (picked != null) {
       setState(() {
@@ -160,10 +196,10 @@ class _S06SupervisorOverviewScreenState
   Widget build(BuildContext context) {
     final appState = ref.watch(appStateProvider);
     final emp = appState.currentSession;
-    final supervisorName = emp?.userName ?? 'Trần Thị B';
+    final supervisorName = emp?.userName ?? 'Supervisor';
 
     final effectiveTeamIds = _selectedTeamId == 'ALL'
-        ? (emp?.toIds ?? ['team-1', 'team-2', 'team-3'])
+        ? (emp?.toIds ?? const <String>[])
         : [_selectedTeamId];
 
     return Scaffold(
@@ -211,58 +247,66 @@ class _S06SupervisorOverviewScreenState
               : Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Row(
-                      children: [
-                        Container(
-                          width: 44,
-                          height: 44,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF26305C),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          alignment: Alignment.center,
-                          child: Text(
-                            supervisorName.isNotEmpty
-                                ? supervisorName
-                                      .split(' ')
-                                      .last[0]
-                                      .toUpperCase()
-                                : 'B',
-                            style: const TextStyle(
-                              fontFamily: 'Manrope',
-                              fontWeight: FontWeight.w800,
-                              fontSize: 18,
-                              color: Colors.white,
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 44,
+                            height: 44,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF26305C),
+                              borderRadius: BorderRadius.circular(12),
                             ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(
-                              supervisorName,
+                            alignment: Alignment.center,
+                            child: Text(
+                              supervisorName.isNotEmpty
+                                  ? supervisorName
+                                        .split(' ')
+                                        .last[0]
+                                        .toUpperCase()
+                                  : 'B',
                               style: const TextStyle(
                                 fontFamily: 'Manrope',
                                 fontWeight: FontWeight.w800,
-                                fontSize: 17,
+                                fontSize: 18,
                                 color: Colors.white,
                               ),
                             ),
-                            const SizedBox(height: 2),
-                            const Text(
-                              'Supervisor · Tổ Cắt 1–3',
-                              style: TextStyle(
-                                fontFamily: 'Inter',
-                                fontSize: 12.5,
-                                fontWeight: FontWeight.w500,
-                                color: CaslaColors.identityMeta,
-                              ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  supervisorName,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontFamily: 'Manrope',
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 17,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Supervisor · ${emp?.teamName.isNotEmpty == true ? emp!.teamName : 'Phạm vi được phân quyền'}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontFamily: 'Inter',
+                                    fontSize: 12.5,
+                                    fontWeight: FontWeight.w500,
+                                    color: CaslaColors.identityMeta,
+                                  ),
+                                ),
+                              ],
                             ),
-                          ],
-                        ),
-                      ],
+                          ),
+                        ],
+                      ),
                     ),
                     Row(
                       children: [
@@ -296,6 +340,19 @@ class _S06SupervisorOverviewScreenState
       body: StreamBuilder<List<Assignment>>(
         stream: appState.assignmentRepo.watchAllAssignments(),
         builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting &&
+              !snapshot.hasData) {
+            return const _OverviewSkeleton();
+          }
+          if (snapshot.hasError) {
+            return const CaslaEmptyState(
+              icon: Icons.cloud_off_outlined,
+              title: 'Không tải được tổng quan',
+              message:
+                  'Dữ liệu vẫn an toàn trên thiết bị. Hãy mở lại màn hình để thử lại.',
+            );
+          }
+
           final rawAssignments = snapshot.data ?? const <Assignment>[];
           final selectedDateFormatted = _dateStr(_selectedDate);
 
@@ -326,10 +383,24 @@ class _S06SupervisorOverviewScreenState
           final openCount = assignments
               .where((a) => a.status == AssignmentStatus.open)
               .length;
+          final assignedWorkerCount = byWorker.length;
 
           return FutureBuilder<List<Map<String, dynamic>>>(
-            future: appState.db.getEmployeesByTeamIds(effectiveTeamIds),
+            future: _employeesFor(effectiveTeamIds),
             builder: (context, empSnapshot) {
+              if (empSnapshot.connectionState == ConnectionState.waiting &&
+                  !empSnapshot.hasData) {
+                return const _OverviewSkeleton();
+              }
+              if (empSnapshot.hasError) {
+                return const CaslaEmptyState(
+                  icon: Icons.people_outline,
+                  title: 'Không tải được danh sách công nhân',
+                  message:
+                      'Không thể đọc dữ liệu công nhân trong phạm vi hiện tại.',
+                );
+              }
+
               final rawEmployees = empSnapshot.data ?? [];
 
               // Filter employees by search query
@@ -390,8 +461,8 @@ class _S06SupervisorOverviewScreenState
                               value: totalCompleted.toStringAsFixed(0),
                             ),
                             KpiCard(
-                              label: 'Đang làm việc',
-                              value: '${employees.length}',
+                              label: 'Đã được giao',
+                              value: '$assignedWorkerCount',
                               uom: 'NV',
                             ),
                             KpiCard(
@@ -407,9 +478,9 @@ class _S06SupervisorOverviewScreenState
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            const Text(
-                              'Công nhân được giao hôm nay',
-                              style: TextStyle(
+                            Text(
+                              'Công nhân trong phạm vi · ${_formatDisplayDate(_selectedDate)}',
+                              style: const TextStyle(
                                 fontFamily: 'Manrope',
                                 fontWeight: FontWeight.w800,
                                 fontSize: 14,
@@ -438,7 +509,7 @@ class _S06SupervisorOverviewScreenState
                             icon: Icons.people_outline_rounded,
                             title: 'Không có nhân viên phù hợp',
                             message:
-                                'Không tìm thấy nhân viên nào phù hợp với bộ lọc hiện tại. Thử thay đổi ngày, ca hoặc tổ sản xuất.',
+                                'Không tìm thấy nhân viên nào phù hợp. Thử đổi ngày, tổ sản xuất hoặc từ khóa tìm kiếm.',
                           )
                         : ListView.builder(
                             padding: const EdgeInsets.fromLTRB(18, 0, 18, 80),
@@ -511,33 +582,43 @@ class _S06SupervisorOverviewScreenState
                                             crossAxisAlignment:
                                                 CrossAxisAlignment.start,
                                             children: [
-                                              Column(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                children: [
-                                                  Text(
-                                                    worker['ten'] ??
-                                                        'Nhân viên',
-                                                    style: const TextStyle(
-                                                      fontFamily: 'Manrope',
-                                                      fontWeight:
-                                                          FontWeight.w700,
-                                                      fontSize: 14.5,
-                                                      color: CaslaColors
-                                                          .primaryNavy,
+                                              Expanded(
+                                                child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  children: [
+                                                    Text(
+                                                      worker['ten'] ??
+                                                          'Nhân viên',
+                                                      maxLines: 1,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                      style: const TextStyle(
+                                                        fontFamily: 'Manrope',
+                                                        fontWeight:
+                                                            FontWeight.w700,
+                                                        fontSize: 14.5,
+                                                        color: CaslaColors
+                                                            .primaryNavy,
+                                                      ),
                                                     ),
-                                                  ),
-                                                  const SizedBox(height: 2),
-                                                  Text(
-                                                    '${worker['ma_nv']} · ${worker['bo_phan']}',
-                                                    style: const TextStyle(
-                                                      fontFamily: 'monospace',
-                                                      fontSize: 11.5,
-                                                      color: CaslaColors.muted,
+                                                    const SizedBox(height: 2),
+                                                    Text(
+                                                      '${worker['ma_nv']} · ${worker['bo_phan']}',
+                                                      maxLines: 1,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                      style: const TextStyle(
+                                                        fontFamily: 'monospace',
+                                                        fontSize: 11.5,
+                                                        color:
+                                                            CaslaColors.muted,
+                                                      ),
                                                     ),
-                                                  ),
-                                                ],
+                                                  ],
+                                                ),
                                               ),
+                                              const SizedBox(width: 8),
                                               StatusChip(
                                                 status: status,
                                                 label: statusLabel,
@@ -598,16 +679,22 @@ class _S06SupervisorOverviewScreenState
           );
         },
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          context.push('/supervisor/create_assignment');
-        },
-        backgroundColor: CaslaColors.accentGold,
-        foregroundColor: CaslaColors.navy900,
-        elevation: 4,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        child: const Icon(Icons.add, size: 28),
-      ),
+      floatingActionButton:
+          emp?.hasPermission(Permission.assignQuantity) == true
+          ? FloatingActionButton(
+              tooltip: 'Tạo phân công',
+              onPressed: () {
+                context.push('/supervisor/create_assignment');
+              },
+              backgroundColor: CaslaColors.accentGold,
+              foregroundColor: CaslaColors.navy900,
+              elevation: 4,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: const Icon(Icons.add, size: 28),
+            )
+          : null,
     );
   }
 
@@ -654,17 +741,24 @@ class _S06SupervisorOverviewScreenState
     final failed = assignments
         .where((a) => a.syncStatus == SyncStatus.failed)
         .length;
-    if (failed > 0) return ('FAILED', '$failed FAILED');
+    if (failed > 0) return ('FAILED', '$failed LỖI');
+
+    final needsVerification = assignments
+        .where((a) => a.syncStatus == SyncStatus.needsVerification)
+        .length;
+    if (needsVerification > 0) {
+      return ('NEEDS_VERIFICATION', '$needsVerification CẦN XÁC MINH');
+    }
 
     final pending = assignments
         .where((a) => a.syncStatus == SyncStatus.pending)
         .length;
-    if (pending > 0) return ('PENDING', '$pending PENDING');
+    if (pending > 0) return ('PENDING', '$pending ĐANG CHỜ');
 
     final anyCompleted = assignments.any((a) => a.completedQuantity > 0);
     if (!anyCompleted) return ('OPEN', 'CHƯA XÁC NHẬN');
 
-    return ('SYNCED', 'SYNCED');
+    return ('SYNCED', 'ĐÃ ĐỒNG BỘ');
   }
 
   Widget _buildStatItem(String label, String value) {
@@ -688,6 +782,48 @@ class _S06SupervisorOverviewScreenState
             color: CaslaColors.primaryNavy,
           ),
         ),
+      ],
+    );
+  }
+}
+
+class _OverviewSkeleton extends StatelessWidget {
+  const _OverviewSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(18),
+      children: [
+        const Row(
+          children: [
+            CaslaSkeleton(width: 132, height: 34, radius: 18),
+            SizedBox(width: 8),
+            CaslaSkeleton(width: 104, height: 34, radius: 18),
+          ],
+        ),
+        const SizedBox(height: 14),
+        GridView.count(
+          crossAxisCount: 2,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          crossAxisSpacing: 10,
+          mainAxisSpacing: 10,
+          childAspectRatio: 1.6,
+          children: const [
+            CaslaSkeleton(height: 84, radius: 12),
+            CaslaSkeleton(height: 84, radius: 12),
+            CaslaSkeleton(height: 84, radius: 12),
+            CaslaSkeleton(height: 84, radius: 12),
+          ],
+        ),
+        const SizedBox(height: 20),
+        const CaslaSkeleton(width: 210, height: 18, radius: 6),
+        const SizedBox(height: 12),
+        for (var index = 0; index < 3; index++) ...[
+          const CaslaSkeleton(height: 126, radius: 12),
+          const SizedBox(height: 10),
+        ],
       ],
     );
   }

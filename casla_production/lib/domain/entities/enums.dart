@@ -31,8 +31,19 @@ enum AssignmentStatus {
 enum SyncStatus {
   pending,
   syncing,
+  needsVerification,
   synced,
   failed;
+
+  static SyncStatus fromStorage(Object? value) {
+    return switch (value?.toString().toUpperCase()) {
+      'SYNCING' => SyncStatus.syncing,
+      'NEEDS_VERIFICATION' => SyncStatus.needsVerification,
+      'SYNCED' => SyncStatus.synced,
+      'FAILED' => SyncStatus.failed,
+      _ => SyncStatus.pending,
+    };
+  }
 
   String get label {
     switch (this) {
@@ -40,6 +51,8 @@ enum SyncStatus {
         return 'PENDING';
       case SyncStatus.syncing:
         return 'SYNCING';
+      case SyncStatus.needsVerification:
+        return 'NEEDS_VERIFICATION';
       case SyncStatus.synced:
         return 'SYNCED';
       case SyncStatus.failed:

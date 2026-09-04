@@ -13,14 +13,20 @@ class StatusChip extends StatelessWidget {
     Color fg;
 
     switch (status.toUpperCase()) {
-      case 'OPEN':
       case 'SYNCED':
+      case 'COMPLETED':
         bg = CaslaColors.successBg;
         fg = CaslaColors.success;
         break;
+      case 'OPEN':
       case 'PENDING':
+      case 'SYNCING':
         bg = CaslaColors.pendingBg;
         fg = CaslaColors.pending;
+        break;
+      case 'NEEDS_VERIFICATION':
+        bg = CaslaColors.gold100;
+        fg = CaslaColors.gold700;
         break;
       case 'FAILED':
       case 'CLOSED':
@@ -33,7 +39,20 @@ class StatusChip extends StatelessWidget {
         fg = CaslaColors.gold700;
     }
 
-    final displayText = label ?? status.toUpperCase();
+    final displayText =
+        label ??
+        switch (status.toUpperCase()) {
+          'OPEN' => 'ĐANG MỞ',
+          'PENDING' => 'ĐANG CHỜ',
+          'SYNCING' => 'ĐANG GỬI',
+          'SYNCED' => 'ĐÃ ĐỒNG BỘ',
+          'COMPLETED' => 'HOÀN THÀNH',
+          'NEEDS_VERIFICATION' => 'CẦN XÁC MINH',
+          'FAILED' => 'LỖI',
+          'CLOSED' => 'ĐÃ ĐÓNG',
+          'RECALLED' => 'ĐÃ THU HỒI',
+          _ => status.toUpperCase(),
+        };
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),

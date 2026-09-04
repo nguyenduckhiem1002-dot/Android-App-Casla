@@ -316,6 +316,18 @@ SyncFailure _classifySapBusinessError(SapBusinessError error) {
     );
   }
 
+  // A wrong worker password does not invalidate the business transaction.
+  // Automatic retry still cannot help, but a human can immediately recover by
+  // entering the correct password on S12, so surface it as verification work
+  // rather than an irreversible rejection.
+  if (error.code == 'WORKER_AUTH_FAILED') {
+    return SyncFailure(
+      kind: SyncFailureKind.needsVerification,
+      code: error.code,
+      message: _sapBusinessMessages[error.code]!,
+    );
+  }
+
   return SyncFailure(
     kind: SyncFailureKind.permanent,
     code: error.code,

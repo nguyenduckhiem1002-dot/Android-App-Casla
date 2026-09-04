@@ -33,10 +33,11 @@ void main() {
   });
 
   test('retry keeps the transaction queued until SAP confirms it', () async {
+    await db.updateAssignmentStatus('asg-001', 'OPEN', 'FAILED');
     await db.insertSyncQueueItem({
       'id': 'retry-me',
       'entity_type': 'ASSIGNMENT',
-      'entity_id': 'asg-retry',
+      'entity_id': 'asg-001',
       'action': 'CREATE',
       'created_at_utc': 1,
       'retry_count': 0,
@@ -51,5 +52,30 @@ void main() {
 
     expect(item['status'], 'PENDING');
     expect(item['last_error_code'], isNull);
+    expect((await db.getAssignmentById('asg-001'))!['sync_status'], 'PENDING');
+  });
+
+  test('outstanding count includes every unresolved sync state', () async {
+    for (final item in await db.watchSyncQueue().first) {
+      await db.deleteSyncQueueItem(item['id'] as String);
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final entry in const [
+      ('sync-pending', 'PENDING'),
+      ('sync-verify', 'NEEDS_VERIFICATION'),
+      ('sync-failed', 'FAILED'),
+    ]) {
+      await db.insertSyncQueueItem({
+        'id': entry.$1,
+        'entity_type': 'ASSIGNMENT',
+        'entity_id': 'asg-001',
+        'action': 'CREATE',
+        'status': entry.$2,
+        'created_at_utc': now,
+      });
+    }
+
+    expect(await db.watchOutstandingSyncCount().first, 3);
+    expect(await db.watchPendingCount().first, 1);
   });
 }

@@ -5,6 +5,8 @@ import 'package:intl/intl.dart';
 import '../../../app/theme/casla_colors.dart';
 import '../../../domain/entities/entities.dart';
 import '../../../main.dart';
+import '../../../presentation/widgets/casla_empty_state.dart';
+import '../../../presentation/widgets/casla_skeleton.dart';
 import '../../../presentation/widgets/status_chip.dart';
 
 class S06bEmployeeDailyDetailScreen extends ConsumerStatefulWidget {
@@ -17,6 +19,29 @@ class S06bEmployeeDailyDetailScreen extends ConsumerStatefulWidget {
       _S06bEmployeeDailyDetailScreenState();
 }
 
+class _EmployeeDetailSkeleton extends StatelessWidget {
+  const _EmployeeDetailSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(18),
+      children: [
+        const CaslaSkeleton(width: 170, height: 18, radius: 6),
+        const SizedBox(height: 12),
+        const CaslaSkeleton(height: 94, radius: 14),
+        const SizedBox(height: 20),
+        const CaslaSkeleton(width: 210, height: 18, radius: 6),
+        const SizedBox(height: 12),
+        for (var index = 0; index < 3; index++) ...[
+          const CaslaSkeleton(height: 68, radius: 12),
+          const SizedBox(height: 8),
+        ],
+      ],
+    );
+  }
+}
+
 class _S06bEmployeeDailyDetailScreenState
     extends ConsumerState<S06bEmployeeDailyDetailScreen> {
   DateTime _selectedDate = DateTime.now();
@@ -27,9 +52,9 @@ class _S06bEmployeeDailyDetailScreenState
   Widget build(BuildContext context) {
     final appState = ref.watch(appStateProvider);
     final workerName = widget.worker['ten'] ?? 'Nhân viên';
-    final workerCode = widget.worker['ma_nv'] ?? 'MNV00000';
-    final workerTeam = widget.worker['bo_phan'] ?? 'Tổ Cắt 2';
-    final workerId = widget.worker['id'] ?? 'emp-1';
+    final workerCode = widget.worker['ma_nv'] ?? 'Chưa có mã';
+    final workerTeam = widget.worker['bo_phan'] ?? 'Chưa xác định tổ';
+    final workerId = widget.worker['id'] as String? ?? '';
 
     return Scaffold(
       backgroundColor: CaslaColors.background,
@@ -45,6 +70,8 @@ class _S06bEmployeeDailyDetailScreenState
           children: [
             Text(
               workerName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                 fontFamily: 'Manrope',
                 fontWeight: FontWeight.w800,
@@ -54,6 +81,8 @@ class _S06bEmployeeDailyDetailScreenState
             const SizedBox(height: 2),
             Text(
               '$workerCode · $workerTeam',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                 fontFamily: 'Inter',
                 fontSize: 12.5,
@@ -84,11 +113,12 @@ class _S06bEmployeeDailyDetailScreenState
                 ),
                 OutlinedButton.icon(
                   onPressed: () async {
+                    final now = DateTime.now();
                     final picked = await showDatePicker(
                       context: context,
                       initialDate: _selectedDate,
-                      firstDate: DateTime(2026, 1, 1),
-                      lastDate: DateTime(2027, 12, 31),
+                      firstDate: DateTime(now.year - 2, 1, 1),
+                      lastDate: DateTime(now.year + 2, 12, 31),
                     );
                     if (picked != null) {
                       setState(() {
@@ -112,6 +142,19 @@ class _S06bEmployeeDailyDetailScreenState
             child: StreamBuilder<List<Assignment>>(
               stream: appState.assignmentRepo.watchWorkerAssignments(workerId),
               builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting &&
+                    !snapshot.hasData) {
+                  return const _EmployeeDetailSkeleton();
+                }
+                if (snapshot.hasError) {
+                  return const CaslaEmptyState(
+                    icon: Icons.cloud_off_outlined,
+                    title: 'Không tải được chi tiết công nhân',
+                    message:
+                        'Không thể đọc dữ liệu phân công trên thiết bị lúc này.',
+                  );
+                }
+
                 final allAssignments = snapshot.data ?? const <Assignment>[];
                 final dateFormatted = _dateStr(_selectedDate);
 
@@ -119,13 +162,19 @@ class _S06bEmployeeDailyDetailScreenState
                     .where((a) => a.businessDate == dateFormatted)
                     .toList();
 
-                return FutureBuilder<List<Map<String, dynamic>>>(
-                  future: appState.db.getProductionHistory(
+                return StreamBuilder<List<Map<String, dynamic>>>(
+                  stream: appState.db.watchProductionHistory(
                     workerId,
                     fromBusinessDate: dateFormatted,
                     toBusinessDate: dateFormatted,
                   ),
                   builder: (context, prodSnapshot) {
+                    if (prodSnapshot.connectionState ==
+                            ConnectionState.waiting &&
+                        !prodSnapshot.hasData) {
+                      return const _EmployeeDetailSkeleton();
+                    }
+                    final productionLoadFailed = prodSnapshot.hasError;
                     final records = prodSnapshot.data ?? [];
 
                     return SingleChildScrollView(
@@ -252,7 +301,39 @@ class _S06bEmployeeDailyDetailScreenState
                           ),
                           const SizedBox(height: 10),
 
-                          if (records.isEmpty)
+                          if (productionLoadFailed)
+                            Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: CaslaColors.dangerBg,
+                                border: Border.all(
+                                  color: CaslaColors.danger.withValues(
+                                    alpha: 0.35,
+                                  ),
+                                ),
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: const Row(
+                                children: [
+                                  Icon(
+                                    Icons.history_toggle_off_outlined,
+                                    color: CaslaColors.danger,
+                                  ),
+                                  SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      'Chưa tải được lịch sử sản lượng. Danh sách phân công phía trên vẫn dùng được.',
+                                      style: TextStyle(
+                                        color: CaslaColors.danger,
+                                        fontSize: 12.5,
+                                        height: 1.4,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )
+                          else if (records.isEmpty)
                             Container(
                               padding: const EdgeInsets.all(16),
                               decoration: BoxDecoration(
@@ -296,28 +377,35 @@ class _S06bEmployeeDailyDetailScreenState
                                     mainAxisAlignment:
                                         MainAxisAlignment.spaceBetween,
                                     children: [
-                                      Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            r['ten_sp'] ?? '',
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.w700,
-                                              fontSize: 13,
-                                              color: CaslaColors.primaryNavy,
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              r['ten_sp'] ?? '',
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.w700,
+                                                fontSize: 13,
+                                                color: CaslaColors.primaryNavy,
+                                              ),
                                             ),
-                                          ),
-                                          Text(
-                                            '$timeStr · Người xác nhận: ${r['nguoi_xac_nhan']}',
-                                            style: const TextStyle(
-                                              fontFamily: 'monospace',
-                                              fontSize: 11,
-                                              color: CaslaColors.muted,
+                                            Text(
+                                              '$timeStr · Người xác nhận: ${r['nguoi_xac_nhan']}',
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                fontFamily: 'monospace',
+                                                fontSize: 11,
+                                                color: CaslaColors.muted,
+                                              ),
                                             ),
-                                          ),
-                                        ],
+                                          ],
+                                        ),
                                       ),
+                                      const SizedBox(width: 12),
                                       Text(
                                         '+${(r['quantity'] as double).toStringAsFixed(0)} cái',
                                         style: const TextStyle(

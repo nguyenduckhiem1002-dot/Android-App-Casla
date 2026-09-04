@@ -5,6 +5,8 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../../app/router/app_route_observer.dart';
 import '../../app/theme/casla_colors.dart';
+import '../../core/config/app_config.dart';
+import '../../core/utils/device_info.dart';
 import 'casla_logo.dart';
 
 class QrScannerView extends StatefulWidget {
@@ -64,6 +66,14 @@ class _QrScannerViewState extends State<QrScannerView>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _animController
+        ..stop()
+        ..value = 0.5;
+    } else if (!_animController.isAnimating) {
+      _animController.repeat(reverse: true);
+    }
+
     final route = ModalRoute.of(context);
     if (route == _route) return;
 
@@ -163,21 +173,24 @@ class _QrScannerViewState extends State<QrScannerView>
         MobileScanner(
           controller: controller,
           errorBuilder: (context, error) {
+            final permissionDenied = error.toString().toLowerCase().contains(
+              'permission',
+            );
             return Container(
               color: CaslaColors.navy900,
               alignment: Alignment.center,
               padding: const EdgeInsets.all(24),
-              child: const Column(
+              child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(
+                  const Icon(
                     Icons.camera_alt_outlined,
                     color: CaslaColors.accentGold,
                     size: 54,
                   ),
-                  SizedBox(height: 16),
-                  Text(
-                    'Camera Máy ảo đang sẵn sàng',
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Không thể mở camera',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: Colors.white,
@@ -185,14 +198,47 @@ class _QrScannerViewState extends State<QrScannerView>
                       fontWeight: FontWeight.w700,
                     ),
                   ),
-                  SizedBox(height: 8),
+                  const SizedBox(height: 8),
                   Text(
-                    'Vui lòng bấm "Nhập thủ công" bên dưới để test nhanh',
+                    permissionDenied
+                        ? 'Hãy cấp quyền camera trong cài đặt thiết bị rồi thử lại.'
+                        : widget.onManualInput == null
+                        ? 'Camera đang bận hoặc chưa sẵn sàng. Hãy thử mở lại camera.'
+                        : 'Camera đang bận hoặc chưa sẵn sàng. Bạn có thể thử lại hoặc nhập mã bằng tay.',
                     textAlign: TextAlign.center,
-                    style: TextStyle(
+                    style: const TextStyle(
                       color: CaslaColors.identityMeta,
                       fontSize: 12.5,
                     ),
+                  ),
+                  const SizedBox(height: 16),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: _startCamera,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.white,
+                          side: const BorderSide(color: Colors.white54),
+                          minimumSize: const Size(0, 46),
+                        ),
+                        icon: const Icon(Icons.refresh),
+                        label: const Text('Thử mở lại'),
+                      ),
+                      if (widget.onManualInput != null)
+                        FilledButton.icon(
+                          onPressed: widget.onManualInput,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: CaslaColors.accentGold,
+                            foregroundColor: CaslaColors.navy900,
+                            minimumSize: const Size(0, 46),
+                          ),
+                          icon: const Icon(Icons.keyboard_alt_outlined),
+                          label: const Text('Nhập bằng tay'),
+                        ),
+                    ],
                   ),
                 ],
               ),
@@ -407,7 +453,8 @@ class _QrScannerViewState extends State<QrScannerView>
 
               // Footer Label
               Text(
-                widget.deviceLabel ?? 'THIẾT BỊ · PDA-CT02-A17 · v1.0.0',
+                widget.deviceLabel ??
+                    'THIẾT BỊ · ${DeviceInfoHelper.deviceId} · v${AppConfig.appVersion}',
                 style: const TextStyle(
                   fontFamily: 'monospace',
                   fontSize: 9.5,
@@ -443,6 +490,26 @@ class _QrScannerViewState extends State<QrScannerView>
               ),
             ),
           ),
+
+        Positioned(
+          top: 12,
+          right: 12,
+          child: SafeArea(
+            child: Material(
+              color: Colors.black45,
+              shape: const CircleBorder(),
+              child: IconButton(
+                tooltip: 'Bật hoặc tắt đèn pin',
+                onPressed: () => unawaited(controller.toggleTorch()),
+                icon: const Icon(
+                  Icons.flashlight_on_outlined,
+                  color: Colors.white,
+                  size: 20,
+                ),
+              ),
+            ),
+          ),
+        ),
       ],
     );
   }

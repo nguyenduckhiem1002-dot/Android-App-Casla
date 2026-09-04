@@ -15,6 +15,7 @@ import '../config/app_config.dart';
 import '../database/casla_database.dart';
 import '../network/connectivity_monitor.dart';
 import '../sync/sync_engine.dart';
+import '../sync/verified_sync_coordinator.dart';
 import '../utils/device_info.dart';
 
 /// App-level state holder (simple ChangeNotifier for MVP, upgrade to Riverpod later)
@@ -27,6 +28,7 @@ class AppState extends ChangeNotifier {
   late final WorkHistoryRepositoryImpl workHistoryRepo;
   late final SapPpOpAllocGateway sapGateway;
   late final SyncEngine syncEngine;
+  late final VerifiedSyncCoordinator verifiedSync;
 
   UserSession? _currentSession;
 
@@ -38,10 +40,19 @@ class AppState extends ChangeNotifier {
       client: SapODataClient(baseUrl: AppConfig.sapPpOpAllocServiceUrl),
       session: _AppStateSapSession(this, authRepo.authController),
     );
+    verifiedSync = VerifiedSyncCoordinator(database: db, gateway: sapGateway);
 
     assignmentRepo = AssignmentRepositoryImpl(db, gateway: sapGateway);
-    productionRepo = ProductionRepositoryImpl(db, gateway: sapGateway);
-    recallRepo = RecallRepositoryImpl(db, gateway: sapGateway);
+    productionRepo = ProductionRepositoryImpl(
+      db,
+      gateway: sapGateway,
+      verifiedSync: verifiedSync,
+    );
+    recallRepo = RecallRepositoryImpl(
+      db,
+      gateway: sapGateway,
+      verifiedSync: verifiedSync,
+    );
     workHistoryRepo = WorkHistoryRepositoryImpl(sapGateway);
 
     // Drains anything a write's immediate push left queued — offline at the

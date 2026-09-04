@@ -11,9 +11,7 @@ import '../../../main.dart';
 Future<void> showChangePasswordDialog(
   BuildContext context, {
   bool isMandatory = false,
-  WidgetRef? ref,
-  String? userUuid,
-  String? accessToken,
+  required WidgetRef ref,
 }) {
   return showDialog(
     context: context,
@@ -22,7 +20,6 @@ Future<void> showChangePasswordDialog(
       hostContext: context,
       isMandatory: isMandatory,
       ref: ref,
-      accessToken: accessToken,
     ),
   );
 }
@@ -32,14 +29,12 @@ class _ChangePasswordDialog extends StatefulWidget {
   /// which must outlive the dialog's own (about-to-be-popped) context.
   final BuildContext hostContext;
   final bool isMandatory;
-  final WidgetRef? ref;
-  final String? accessToken;
+  final WidgetRef ref;
 
   const _ChangePasswordDialog({
     required this.hostContext,
     required this.isMandatory,
-    this.ref,
-    this.accessToken,
+    required this.ref,
   });
 
   @override
@@ -72,9 +67,9 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
   }
 
   Future<void> _submitChangePassword() async {
-    final current = _currentPasswordController.text.trim();
-    final newPwd = _newPasswordController.text.trim();
-    final confirmPwd = _confirmPasswordController.text.trim();
+    final current = _currentPasswordController.text;
+    final newPwd = _newPasswordController.text;
+    final confirmPwd = _confirmPasswordController.text;
     final isFormValid =
         current.isNotEmpty &&
         newPwd.isNotEmpty &&
@@ -89,11 +84,8 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
     });
 
     try {
-      final appSession = widget.ref?.read(appStateProvider).currentSession;
       final finalToken =
-          (widget.accessToken != null && widget.accessToken!.isNotEmpty)
-          ? widget.accessToken!
-          : (appSession?.accessToken ?? '');
+          widget.ref.read(appStateProvider).currentSession?.accessToken ?? '';
 
       if (finalToken.isEmpty) {
         setState(() {
@@ -164,16 +156,23 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
     );
 
     if (!widget.hostContext.mounted) return;
-    await widget.ref?.read(appStateProvider).logout();
+    await widget.ref.read(appStateProvider).logout();
+    if (!widget.hostContext.mounted) return;
+    GoRouter.of(widget.hostContext).go('/login');
+  }
+
+  Future<void> _logoutFromMandatoryDialog() async {
+    Navigator.of(context).pop();
+    await widget.ref.read(appStateProvider).logout();
     if (!widget.hostContext.mounted) return;
     GoRouter.of(widget.hostContext).go('/login');
   }
 
   @override
   Widget build(BuildContext context) {
-    final current = _currentPasswordController.text.trim();
-    final newPwd = _newPasswordController.text.trim();
-    final confirmPwd = _confirmPasswordController.text.trim();
+    final current = _currentPasswordController.text;
+    final newPwd = _newPasswordController.text;
+    final confirmPwd = _confirmPasswordController.text;
     final isFormValid =
         current.isNotEmpty &&
         newPwd.isNotEmpty &&
@@ -271,11 +270,18 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
             const SizedBox(height: 4),
             TextField(
               controller: _currentPasswordController,
+              autofillHints: const [AutofillHints.password],
+              autocorrect: false,
+              enableSuggestions: false,
               obscureText: _obscureCurrent,
+              textInputAction: TextInputAction.next,
               onChanged: (_) => setState(() {}),
               decoration: InputDecoration(
                 hintText: 'Nhập mật khẩu hiện tại',
                 suffixIcon: IconButton(
+                  tooltip: _obscureCurrent
+                      ? 'Hiện mật khẩu hiện tại'
+                      : 'Ẩn mật khẩu hiện tại',
                   icon: Icon(
                     _obscureCurrent
                         ? Icons.visibility_outlined
@@ -301,11 +307,18 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
             const SizedBox(height: 4),
             TextField(
               controller: _newPasswordController,
+              autofillHints: const [AutofillHints.newPassword],
+              autocorrect: false,
+              enableSuggestions: false,
               obscureText: _obscureNew,
+              textInputAction: TextInputAction.next,
               onChanged: (_) => setState(() {}),
               decoration: InputDecoration(
                 hintText: 'Nhập mật khẩu mới',
                 suffixIcon: IconButton(
+                  tooltip: _obscureNew
+                      ? 'Hiện mật khẩu mới'
+                      : 'Ẩn mật khẩu mới',
                   icon: Icon(
                     _obscureNew
                         ? Icons.visibility_outlined
@@ -330,11 +343,19 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
             const SizedBox(height: 4),
             TextField(
               controller: _confirmPasswordController,
+              autofillHints: const [AutofillHints.newPassword],
+              autocorrect: false,
+              enableSuggestions: false,
               obscureText: _obscureConfirm,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => _submitChangePassword(),
               onChanged: (_) => setState(() {}),
               decoration: InputDecoration(
                 hintText: 'Nhập lại mật khẩu mới',
                 suffixIcon: IconButton(
+                  tooltip: _obscureConfirm
+                      ? 'Hiện mật khẩu xác nhận'
+                      : 'Ẩn mật khẩu xác nhận',
                   icon: Icon(
                     _obscureConfirm
                         ? Icons.visibility_outlined
@@ -361,12 +382,15 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
 
             if (_errorText != null) ...[
               const SizedBox(height: 8),
-              Text(
-                _errorText!,
-                style: const TextStyle(
-                  color: CaslaColors.danger,
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w600,
+              Semantics(
+                liveRegion: true,
+                child: Text(
+                  _errorText!,
+                  style: const TextStyle(
+                    color: CaslaColors.danger,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             ],
@@ -374,14 +398,17 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
         ),
       ),
       actions: [
-        if (!widget.isMandatory)
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text(
-              'Hủy',
-              style: TextStyle(color: CaslaColors.muted),
-            ),
+        TextButton(
+          onPressed: _isLoading
+              ? null
+              : widget.isMandatory
+              ? _logoutFromMandatoryDialog
+              : () => Navigator.of(context).pop(),
+          child: Text(
+            widget.isMandatory ? 'Đăng xuất' : 'Hủy',
+            style: const TextStyle(color: CaslaColors.muted),
           ),
+        ),
         ElevatedButton(
           onPressed: (isFormValid && !_isLoading)
               ? _submitChangePassword

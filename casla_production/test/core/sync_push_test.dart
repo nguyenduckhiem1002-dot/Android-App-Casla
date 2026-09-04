@@ -102,6 +102,11 @@ void main() {
       expect(failure?.kind, SyncFailureKind.needsVerification);
       final item = (await db.watchSyncFeed().first).single;
       expect(item['status'], 'NEEDS_VERIFICATION');
+      final markedSource = await db.getSyncSourceRow(
+        'PRODUCTION_RECORD',
+        'prod-push-test',
+      );
+      expect(markedSource!['sync_status'], 'NEEDS_VERIFICATION');
       // No backoff for a state only a human can clear.
       expect(item['next_retry_at_utc'], isNull);
       // getDueSyncItems only ever looks at PENDING — this must not be pickable.
@@ -133,7 +138,50 @@ void main() {
     final item = (await db.watchSyncFeed().first).single;
     expect(item['status'], 'PENDING');
     expect(item['next_retry_at_utc'], isNotNull);
+    final markedSource = await db.getSyncSourceRow(
+      'PRODUCTION_RECORD',
+      'prod-push-test',
+    );
+    expect(markedSource!['sync_status'], 'PENDING');
   });
+
+  test(
+    'a transient foreground failure needs fresh verification for replay',
+    () async {
+      final queueItem = await queueProduction();
+      final source = await db.getSyncSourceRow(
+        'PRODUCTION_RECORD',
+        'prod-push-test',
+      );
+
+      final failure = await pushAndRecord(
+        database: db,
+        gateway: _FakeGateway(
+          onPush: (_) => throw DioException(
+            requestOptions: RequestOptions(path: '/x'),
+            type: DioExceptionType.connectionError,
+          ),
+        ),
+        backoff: SyncBackoff(),
+        queueItem: queueItem,
+        source: source!,
+        workerPassword: 'one-attempt-only',
+      );
+
+      expect(failure?.kind, SyncFailureKind.needsVerification);
+      final item = (await db.watchSyncFeed().first).single;
+      expect(item['status'], 'NEEDS_VERIFICATION');
+      expect(item['next_retry_at_utc'], isNull);
+      expect(item['last_error_message'], contains('xác minh lại'));
+      expect(
+        (await db.getSyncSourceRow(
+          'PRODUCTION_RECORD',
+          'prod-push-test',
+        ))!['sync_status'],
+        'NEEDS_VERIFICATION',
+      );
+    },
+  );
 
   test('a permanent rejection lands FAILED', () async {
     final queueItem = await queueProduction();
@@ -153,6 +201,11 @@ void main() {
     expect(failure?.kind, SyncFailureKind.permanent);
     final item = (await db.watchSyncFeed().first).single;
     expect(item['status'], 'FAILED');
+    final markedSource = await db.getSyncSourceRow(
+      'PRODUCTION_RECORD',
+      'prod-push-test',
+    );
+    expect(markedSource!['sync_status'], 'FAILED');
   });
 
   test(

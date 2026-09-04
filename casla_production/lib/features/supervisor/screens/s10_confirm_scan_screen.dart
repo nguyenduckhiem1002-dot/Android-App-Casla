@@ -1,9 +1,9 @@
 // Screen S10 — Scan Worker QR & Confirm Production Screen
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../app/theme/casla_colors.dart';
+import '../../../core/utils/worker_qr_parser.dart';
 import '../../../main.dart';
 import '../../../presentation/widgets/qr_scanner_view.dart';
 
@@ -30,61 +30,32 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
     setState(() => _isProcessing = true);
 
     try {
-      String code = rawCode.trim();
-      // If code is JSON payload, attempt parsing
-      if (code.startsWith('{') && code.endsWith('}')) {
-        try {
-          final parsed = jsonDecode(code);
-          if (parsed is Map && parsed.containsKey('ma_nv')) {
-            code = parsed['ma_nv'].toString().trim();
-          } else if (parsed is Map && parsed.containsKey('maNv')) {
-            code = parsed['maNv'].toString().trim();
-          }
-        } catch (_) {}
+      final parsed = WorkerQrParser.parse(rawCode);
+      if (!parsed.isValid) {
+        _showError(parsed.error ?? 'Mã QR công nhân không hợp lệ.');
+        return;
       }
 
       final db = ref.read(appStateProvider).db;
-      final worker = await db.getEmployeeByCode(code);
-      if (worker == null) throw Exception('Unknown employee');
+      final worker = await db.getEmployeeByCode(parsed.maNv);
+      if (worker == null) {
+        _showError('Không tìm thấy công nhân có mã ${parsed.maNv}.');
+        return;
+      }
       final session = ref.read(appStateProvider).currentSession;
       final isInScope = await db.isEmployeeInScope(
         worker['id'] as String,
         session?.toIds ?? const [],
       );
-      if (!isInScope) throw Exception('Employee outside supervisor scope');
+      if (!isInScope) {
+        _showError('Công nhân không thuộc phạm vi tổ bạn được phân quyền.');
+        return;
+      }
 
       if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              const Icon(Icons.check_circle, color: Colors.white),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  'Đã khớp công nhân: ${worker['ten']} (${worker['ma_nv']})',
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-              ),
-            ],
-          ),
-          backgroundColor: CaslaColors.success,
-          duration: const Duration(seconds: 2),
-        ),
-      );
-
-      // Redirect to Employee Daily Detail Screen (S06b)
       await context.push('/supervisor/employee_detail', extra: worker);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Không tìm thấy công nhân: $rawCode'),
-            backgroundColor: CaslaColors.danger,
-          ),
-        );
-      }
+    } catch (_) {
+      _showError('Không thể kiểm tra mã công nhân lúc này. Vui lòng thử lại.');
     } finally {
       if (mounted) {
         setState(() => _isProcessing = false);
@@ -92,8 +63,16 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
     }
   }
 
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: CaslaColors.danger),
+    );
+  }
+
   void _showManualInputDialog() {
     _manualController.clear();
+    final formKey = GlobalKey<FormState>();
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -101,7 +80,14 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (context) {
+      builder: (sheetContext) {
+        void submit() {
+          if (formKey.currentState?.validate() != true) return;
+          final text = _manualController.text.trim();
+          Navigator.pop(sheetContext);
+          _handleWorkerCodeScanned(text);
+        }
+
         return Padding(
           padding: EdgeInsets.only(
             left: 20,
@@ -109,74 +95,72 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
             top: 20,
             bottom: MediaQuery.of(context).viewInsets.bottom + 24,
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    'Nhập mã công nhân',
-                    style: TextStyle(
-                      fontFamily: 'Manrope',
-                      fontWeight: FontWeight.w800,
-                      fontSize: 18,
-                      color: CaslaColors.primaryNavy,
+          child: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Nhập mã công nhân',
+                      style: TextStyle(
+                        fontFamily: 'Manrope',
+                        fontWeight: FontWeight.w800,
+                        fontSize: 18,
+                        color: CaslaColors.primaryNavy,
+                      ),
                     ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _manualController,
-                autofocus: true,
-                decoration: InputDecoration(
-                  labelText: 'Mã số nhân viên / tài khoản',
-                  hintText: 'Nhập chính xác mã nhân viên',
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  prefixIcon: const Icon(Icons.badge_outlined),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.pop(sheetContext),
+                    ),
+                  ],
                 ),
-                onSubmitted: (val) {
-                  Navigator.pop(context);
-                  _handleWorkerCodeScanned(val);
-                },
-              ),
-              const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                height: 48,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: CaslaColors.primaryNavy,
-                    shape: RoundedRectangleBorder(
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _manualController,
+                  autofocus: true,
+                  textInputAction: TextInputAction.search,
+                  decoration: InputDecoration(
+                    labelText: 'Mã số nhân viên / tài khoản',
+                    hintText: 'Nhập chính xác mã nhân viên',
+                    border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
+                    prefixIcon: const Icon(Icons.badge_outlined),
                   ),
-                  onPressed: () {
-                    final text = _manualController.text.trim();
-                    if (text.isNotEmpty) {
-                      Navigator.pop(context);
-                      _handleWorkerCodeScanned(text);
-                    }
-                  },
-                  child: const Text(
-                    'Tìm & Mở phân công',
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                      color: Colors.white,
+                  validator: (value) => value?.trim().isNotEmpty == true
+                      ? null
+                      : 'Vui lòng nhập mã công nhân.',
+                  onFieldSubmitted: (_) => submit(),
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: CaslaColors.primaryNavy,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    onPressed: submit,
+                    child: const Text(
+                      'Tìm và mở phân công',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                      ),
                     ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         );
       },
@@ -189,8 +173,9 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
       body: Stack(
         children: [
           QrScannerView(
-            title: 'XÁC NHẬN CÔNG NHÂN',
-            subtitle: 'Quét thẻ / mã QR công nhân để xem chi tiết & xác nhận',
+            title: 'Xác nhận công nhân',
+            subtitle:
+                'Quét thẻ hoặc mã QR công nhân để xem chi tiết và xác nhận.',
             onScan: (code) => _handleWorkerCodeScanned(code),
             onManualInput: _showManualInputDialog,
           ),

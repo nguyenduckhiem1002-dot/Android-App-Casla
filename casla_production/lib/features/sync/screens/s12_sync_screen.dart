@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 import '../../../app/theme/casla_colors.dart';
+import '../../../core/sync/verified_sync_coordinator.dart';
 import '../../../main.dart';
 import '../../../presentation/widgets/status_chip.dart';
+import '../../../presentation/widgets/worker_verification_dialog.dart';
+import '../../../presentation/widgets/casla_empty_state.dart';
+import '../../../presentation/widgets/casla_skeleton.dart';
 
 class S12SyncScreen extends ConsumerStatefulWidget {
   const S12SyncScreen({super.key});
@@ -12,7 +17,199 @@ class S12SyncScreen extends ConsumerStatefulWidget {
 }
 
 class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
-  int _selectedTabIndex = 0; // 0: Tất cả, 1: Đang chờ, 2: Lỗi, 3: Đã xong
+  int _selectedTabIndex = 0;
+  final Set<String> _syncingIds = <String>{};
+
+  bool _isVerifiable(Map<String, dynamic> item) =>
+      item['status'] == 'NEEDS_VERIFICATION' ||
+      item['last_error_code'] == 'WORKER_AUTH_FAILED';
+
+  Future<void> _verify(Map<String, dynamic> item) async {
+    final appState = ref.read(appStateProvider);
+    final workerName = await _workerNameForItem(item);
+    if (!mounted) return;
+
+    final password = await showWorkerVerificationDialog(
+      context,
+      workerName: workerName,
+      actionLabel: 'gửi các giao dịch đang chờ lên SAP',
+    );
+    if (!mounted || password == null) return;
+
+    final id = item['id'] as String;
+    setState(() => _syncingIds.add(id));
+    VerifiedSyncReport report;
+    try {
+      report = await appState.verifiedSync.syncVerifiedWorkerChain(
+        anchorQueueItemId: id,
+        workerPassword: password,
+      );
+    } catch (_) {
+      report = const VerifiedSyncReport(
+        outcome: VerifiedSyncOutcome.blocked,
+        syncedCount: 0,
+        totalCount: 0,
+        message: 'Không thể xử lý lúc này. Giao dịch vẫn được lưu an toàn.',
+      );
+    } finally {
+      if (mounted) setState(() => _syncingIds.remove(id));
+    }
+    if (!mounted) return;
+
+    final color = switch (report.outcome) {
+      VerifiedSyncOutcome.synced => CaslaColors.success,
+      VerifiedSyncOutcome.queued => CaslaColors.pending,
+      VerifiedSyncOutcome.rejected => CaslaColors.danger,
+      VerifiedSyncOutcome.blocked ||
+      VerifiedSyncOutcome.notFound => CaslaColors.gold700,
+    };
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(report.message), backgroundColor: color),
+    );
+  }
+
+  Future<String> _workerNameForItem(Map<String, dynamic> item) async {
+    final db = ref.read(appStateProvider).db;
+    final source = await db.getSyncSourceRow(
+      item['entity_type'] as String,
+      item['entity_id'] as String,
+    );
+    if (source == null) return 'Công nhân';
+    Map<String, dynamic>? assignment;
+    if (item['entity_type'] == 'ASSIGNMENT') {
+      assignment = source;
+    } else {
+      final assignmentId = source['phan_cong_id'] as String?;
+      if (assignmentId != null) {
+        assignment = await db.getAssignmentById(assignmentId);
+      }
+    }
+    final workerId = assignment?['nhan_vien_id'] as String?;
+    if (workerId == null) return 'Công nhân';
+    final employee = await db.getEmployeeById(workerId);
+    return employee?['ten'] as String? ?? 'Công nhân';
+  }
+
+  String _secondaryText(Map<String, dynamic> item, {required bool isPending}) {
+    final error = item['last_error_message']?.toString().trim();
+    if (error != null && error.isNotEmpty) return error;
+    final device = item['device_id']?.toString().trim();
+    if (isPending) {
+      return '${device?.isNotEmpty == true ? '$device · ' : ''}Đã lưu an toàn · sẽ tự động gửi khi có kết nối';
+    }
+    return '${device?.isNotEmpty == true ? '$device · ' : ''}Đã lưu an toàn';
+  }
+
+  Future<void> _showFailureDetails(Map<String, dynamic> item) async {
+    final code = item['last_error_code']?.toString() ?? 'ERR_UNKNOWN';
+    final message =
+        item['last_error_message']?.toString() ??
+        'SAP đã từ chối giao dịch nhưng không trả về mô tả chi tiết.';
+    final summary = item['payload_summary']?.toString() ?? 'Bản ghi';
+    final entityId = item['entity_id']?.toString() ?? '';
+    final device = item['device_id']?.toString() ?? 'Không rõ thiết bị';
+    final diagnostics = [
+      'Giao dịch: $summary',
+      'Mã lỗi: $code',
+      'Mô tả: $message',
+      'Entity ID: $entityId',
+      'Thiết bị: $device',
+    ].join('\n');
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Chi tiết lỗi đồng bộ',
+                style: TextStyle(
+                  fontFamily: 'Manrope',
+                  fontWeight: FontWeight.w800,
+                  fontSize: 18,
+                  color: CaslaColors.primaryNavy,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                summary,
+                style: const TextStyle(color: CaslaColors.muted, fontSize: 13),
+              ),
+              const SizedBox(height: 18),
+              const Text(
+                'Mã lỗi',
+                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+              ),
+              const SizedBox(height: 5),
+              SelectableText(
+                code,
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  color: CaslaColors.danger,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 14),
+              const Text(
+                'SAP phản hồi',
+                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+              ),
+              const SizedBox(height: 5),
+              SelectableText(
+                message,
+                style: const TextStyle(height: 1.45, fontSize: 13.5),
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: CaslaColors.muted100,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.info_outline, size: 18),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Lỗi này cần kiểm tra dữ liệu hoặc cấu hình SAP. Giao dịch vẫn được giữ trên thiết bị.',
+                        style: TextStyle(fontSize: 12.5, height: 1.4),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: () async {
+                    await Clipboard.setData(ClipboardData(text: diagnostics));
+                    if (!sheetContext.mounted) return;
+                    ScaffoldMessenger.of(sheetContext).showSnackBar(
+                      const SnackBar(
+                        content: Text('Đã sao chép thông tin để gửi hỗ trợ.'),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.copy_outlined),
+                  label: const Text('Sao chép thông tin hỗ trợ'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -36,7 +233,7 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
             ),
             SizedBox(height: 2),
             Text(
-              'Quản lý bản ghi pending / failed',
+              'Theo dõi và xử lý giao dịch chưa lên SAP',
               style: TextStyle(
                 fontFamily: 'Inter',
                 fontSize: 12.5,
@@ -50,20 +247,34 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
       body: StreamBuilder<List<Map<String, dynamic>>>(
         stream: appState.db.watchSyncFeed(),
         builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting &&
+              !snapshot.hasData) {
+            return const _SyncSkeleton();
+          }
+          if (snapshot.hasError) {
+            return const CaslaEmptyState(
+              icon: Icons.sync_problem_outlined,
+              title: 'Không tải được hàng đợi đồng bộ',
+              message:
+                  'Các giao dịch vẫn được lưu an toàn trên thiết bị. Hãy mở lại màn hình để thử lại.',
+            );
+          }
           final feedItems = snapshot.data ?? [];
 
           final pendingCount = feedItems
               .where((i) => i['status'] == 'PENDING')
               .length;
           final failedCount = feedItems
-              .where((i) => i['status'] == 'FAILED')
+              .where((i) => i['status'] == 'FAILED' && !_isVerifiable(i))
               .length;
-          final syncedCount = 142; // Demo count
+          final verificationCount = feedItems.where(_isVerifiable).length;
 
           final filteredItems = feedItems.where((i) {
             if (_selectedTabIndex == 1) return i['status'] == 'PENDING';
-            if (_selectedTabIndex == 2) return i['status'] == 'FAILED';
-            if (_selectedTabIndex == 3) return i['status'] == 'SYNCED';
+            if (_selectedTabIndex == 2) return _isVerifiable(i);
+            if (_selectedTabIndex == 3) {
+              return i['status'] == 'FAILED' && !_isVerifiable(i);
+            }
             return true;
           }).toList();
 
@@ -75,18 +286,18 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
                 // Summary Boxes
                 Row(
                   children: [
-                    _buildSummaryBox('$pendingCount', 'PENDING'),
+                    _buildSummaryBox('$pendingCount', 'ĐANG CHỜ'),
                     const SizedBox(width: 8),
                     _buildSummaryBox(
-                      '$failedCount',
-                      'FAILED',
-                      color: CaslaColors.danger,
+                      '$verificationCount',
+                      'CẦN XÁC MINH',
+                      color: CaslaColors.gold700,
                     ),
                     const SizedBox(width: 8),
                     _buildSummaryBox(
-                      '$syncedCount',
-                      'SYNCED',
-                      color: CaslaColors.success,
+                      '$failedCount',
+                      'LỖI',
+                      color: CaslaColors.danger,
                     ),
                   ],
                 ),
@@ -104,8 +315,8 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
                     children: [
                       _buildTab('Tất cả', 0),
                       _buildTab('Đang chờ', 1),
-                      _buildTab('Lỗi', 2),
-                      _buildTab('Đã xong', 3),
+                      _buildTab('Xác minh', 2),
+                      _buildTab('Lỗi', 3),
                     ],
                   ),
                 ),
@@ -141,6 +352,8 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
                       final item = filteredItems[index];
                       final isFailed = item['status'] == 'FAILED';
                       final isPending = item['status'] == 'PENDING';
+                      final isVerifiable = _isVerifiable(item);
+                      final isSyncing = _syncingIds.contains(item['id']);
 
                       return Container(
                         padding: const EdgeInsets.symmetric(vertical: 12),
@@ -154,13 +367,17 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
                                 borderRadius: BorderRadius.circular(10),
                               ),
                               child: Icon(
-                                isFailed
+                                isVerifiable
+                                    ? Icons.lock_outline
+                                    : isFailed
                                     ? Icons.error_outline
                                     : (isPending
                                           ? Icons.access_time
                                           : Icons.check_circle_outline),
                                 size: 20,
-                                color: isFailed
+                                color: isVerifiable
+                                    ? CaslaColors.gold700
+                                    : isFailed
                                     ? CaslaColors.danger
                                     : (isPending
                                           ? CaslaColors.pending
@@ -182,14 +399,13 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
                                   ),
                                   const SizedBox(height: 2),
                                   Text(
-                                    isFailed
-                                        ? (item['last_error_message'] ??
-                                              'Lỗi xác thực')
-                                        : 'PDA-CT02-A17 · Đã lưu offline',
+                                    _secondaryText(item, isPending: isPending),
                                     style: TextStyle(
                                       fontFamily: 'monospace',
                                       fontSize: 11,
-                                      color: isFailed
+                                      color: isVerifiable
+                                          ? CaslaColors.gold700
+                                          : isFailed
                                           ? CaslaColors.danger
                                           : CaslaColors.muted,
                                     ),
@@ -197,32 +413,48 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
                                 ],
                               ),
                             ),
-                            if (isFailed)
+                            if (isVerifiable)
                               ElevatedButton(
-                                onPressed: () async {
-                                  final success = await appState.db
-                                      .retrySyncItem(item['id']);
-                                  if (context.mounted && success) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content: Text(
-                                          'Đã đưa giao dịch vào hàng đợi đồng bộ.',
-                                        ),
-                                        backgroundColor: CaslaColors.success,
-                                      ),
-                                    );
-                                  }
-                                },
+                                onPressed: isSyncing
+                                    ? null
+                                    : () => _verify(item),
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: CaslaColors.primaryNavy,
                                   foregroundColor: Colors.white,
-                                  minimumSize: const Size(64, 32),
+                                  minimumSize: const Size(82, 44),
                                   padding: const EdgeInsets.symmetric(
                                     horizontal: 10,
                                   ),
                                 ),
+                                child: isSyncing
+                                    ? const SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: Colors.white,
+                                        ),
+                                      )
+                                    : const Text(
+                                        'Xác minh',
+                                        style: TextStyle(fontSize: 11),
+                                      ),
+                              )
+                            else if (isFailed)
+                              OutlinedButton(
+                                onPressed: () => _showFailureDetails(item),
+                                style: OutlinedButton.styleFrom(
+                                  minimumSize: const Size(72, 44),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                  ),
+                                  foregroundColor: CaslaColors.danger,
+                                  side: const BorderSide(
+                                    color: CaslaColors.danger,
+                                  ),
+                                ),
                                 child: const Text(
-                                  'Thử lại',
+                                  'Chi tiết',
                                   style: TextStyle(fontSize: 11),
                                 ),
                               )
@@ -307,6 +539,35 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _SyncSkeleton extends StatelessWidget {
+  const _SyncSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(18),
+      children: [
+        const Row(
+          children: [
+            Expanded(child: CaslaSkeleton(height: 62, radius: 8)),
+            SizedBox(width: 8),
+            Expanded(child: CaslaSkeleton(height: 62, radius: 8)),
+            SizedBox(width: 8),
+            Expanded(child: CaslaSkeleton(height: 62, radius: 8)),
+          ],
+        ),
+        const SizedBox(height: 14),
+        const CaslaSkeleton(height: 44, radius: 10),
+        const SizedBox(height: 14),
+        for (var index = 0; index < 4; index++) ...[
+          const CaslaSkeleton(height: 62, radius: 10),
+          const SizedBox(height: 8),
+        ],
+      ],
     );
   }
 }

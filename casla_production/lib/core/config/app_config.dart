@@ -4,6 +4,11 @@
 import 'package:flutter/foundation.dart';
 
 class AppConfig {
+  static const String appVersion = String.fromEnvironment(
+    'APP_VERSION',
+    defaultValue: '1.0.0',
+  );
+
   /// Tên ứng dụng hiển thị
   static const String _appName = String.fromEnvironment(
     'APP_NAME',

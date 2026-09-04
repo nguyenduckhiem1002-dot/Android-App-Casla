@@ -6,6 +6,10 @@ import '../../../app/theme/casla_colors.dart';
 import '../../../domain/entities/entities.dart';
 import '../../../domain/entities/enums.dart';
 import '../../../main.dart';
+import '../../../presentation/widgets/casla_empty_state.dart';
+import '../../../presentation/widgets/casla_skeleton.dart';
+import '../../../presentation/widgets/mutation_feedback.dart';
+import '../../../presentation/widgets/worker_verification_dialog.dart';
 
 class S09RecallScreen extends ConsumerStatefulWidget {
   final Assignment assignment;
@@ -17,9 +21,7 @@ class S09RecallScreen extends ConsumerStatefulWidget {
 }
 
 class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
-  final TextEditingController _qtyController = TextEditingController(
-    text: '80',
-  );
+  final TextEditingController _qtyController = TextEditingController();
   final TextEditingController _noteController = TextEditingController();
 
   /// Single source of truth for reason codes.
@@ -31,6 +33,8 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
   /// no crash, no error, just a business rule that stops firing.
   RecallReason _selectedReason = RecallReason.notFinished;
   bool _isSubmitting = false;
+  String? _quantityError;
+  String? _noteError;
 
   @override
   void dispose() {
@@ -39,41 +43,43 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
     super.dispose();
   }
 
-  Future<void> _submitRecall(double maxRecall, double currentEffective) async {
+  Future<void> _submitRecall(double maxRecall) async {
     final qty = double.tryParse(_qtyController.text) ?? 0.0;
     if (qty <= 0 || qty > maxRecall) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Số lượng thu hồi phải > 0 và <= ${maxRecall.toStringAsFixed(0)}',
-          ),
-          backgroundColor: CaslaColors.danger,
-        ),
-      );
+      setState(() {
+        _quantityError =
+            'Nhập số lượng lớn hơn 0 và không quá ${maxRecall.toStringAsFixed(0)}.';
+      });
       return;
     }
 
     if (_selectedReason == RecallReason.other &&
         _noteController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Vui lòng nhập ghi chú khi chọn lý do Khác'),
-          backgroundColor: CaslaColors.danger,
-        ),
-      );
+      setState(() => _noteError = 'Vui lòng nhập lý do cụ thể.');
       return;
     }
 
-    setState(() => _isSubmitting = true);
+    setState(() {
+      _quantityError = null;
+      _noteError = null;
+    });
 
     final appState = ref.read(appStateProvider);
     final emp = appState.currentSession;
     final supervisorMaNv = emp?.maNv ?? '';
+    final workerPassword = await showWorkerVerificationDialog(
+      context,
+      workerName: widget.assignment.workerName,
+      actionLabel: 'gửi thu hồi lên SAP',
+    );
+    if (!mounted || workerPassword == null) return;
+
+    setState(() => _isSubmitting = true);
 
     // Through the repository so ProductionMath.validateRecallEntry runs — the
     // max-recall ceiling and the mandatory note for "Khác" live there.
     try {
-      await appState.recallRepo.recallAssignment(
+      final receipt = await appState.recallRepo.recallAssignment(
         assignmentId: widget.assignment.id,
         quantity: qty,
         reasonCode: _selectedReason.code,
@@ -83,6 +89,13 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
         businessDate: DateFormat('yyyy-MM-dd').format(DateTime.now()),
         shiftId: widget.assignment.shiftId,
         createdBy: supervisorMaNv,
+        workerPassword: workerPassword,
+      );
+      if (!mounted) return;
+      showMutationFeedback(
+        context,
+        receipt: receipt,
+        successMessage: 'Đã thu hồi ${qty.toStringAsFixed(0)} cái.',
       );
     } on Exception catch (e) {
       if (!mounted) return;
@@ -99,13 +112,6 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
     }
 
     if (!mounted) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Đã thu hồi -${qty.toStringAsFixed(0)} cái thành công'),
-        backgroundColor: CaslaColors.success,
-      ),
-    );
 
     context.pop();
   }
@@ -138,6 +144,8 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
             const SizedBox(height: 2),
             Text(
               '${widget.assignment.orderCode} · ${widget.assignment.workerName}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                 fontFamily: 'Inter',
                 fontSize: 12.5,
@@ -148,20 +156,33 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
           ],
         ),
       ),
-      body: FutureBuilder<List<dynamic>>(
-        future: Future.wait([
-          appState.db.getEffectiveAssigned(asgId),
-          appState.db.getCompletedQuantity(asgId),
-          appState.db.getRemaining(asgId),
-        ]),
+      body: StreamBuilder<Assignment?>(
+        stream: appState.assignmentRepo.watchAssignment(asgId),
         builder: (context, snapshot) {
-          if (!snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
+          if (snapshot.connectionState == ConnectionState.waiting &&
+              !snapshot.hasData) {
+            return const _RecallSkeleton();
+          }
+          if (snapshot.hasError) {
+            return const CaslaEmptyState(
+              icon: Icons.cloud_off_outlined,
+              title: 'Không tải được số lượng thu hồi',
+              message:
+                  'Dữ liệu chưa bị thay đổi. Hãy quay lại và mở màn hình lần nữa.',
+            );
+          }
+          final assignment = snapshot.data;
+          if (assignment == null) {
+            return const CaslaEmptyState(
+              icon: Icons.assignment_late_outlined,
+              title: 'Không tìm thấy phân công',
+              message: 'Phân công có thể đã được thay đổi trên thiết bị.',
+            );
           }
 
-          final effective = snapshot.data![0] as double;
-          final completed = snapshot.data![1] as double;
-          final maxRecall = snapshot.data![2] as double;
+          final effective = assignment.effectiveAssigned;
+          final completed = assignment.completedQuantity;
+          final maxRecall = assignment.maxRecall;
 
           final qtyInput = double.tryParse(_qtyController.text) ?? 0.0;
           final afterEffective = effective - qtyInput;
@@ -217,9 +238,14 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
                       const SizedBox(height: 6),
                       TextField(
                         controller: _qtyController,
-                        keyboardType: TextInputType.number,
-                        onChanged: (v) => setState(() {}),
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        onChanged: (value) => setState(() {
+                          _quantityError = null;
+                        }),
                         decoration: InputDecoration(
+                          errorText: _quantityError,
                           suffixText: '/ ${maxRecall.toStringAsFixed(0)} cái',
                           suffixStyle: const TextStyle(
                             color: CaslaColors.muted,
@@ -244,7 +270,12 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
                         groupValue: _selectedReason,
                         onChanged: (value) {
                           if (value != null) {
-                            setState(() => _selectedReason = value);
+                            setState(() {
+                              _selectedReason = value;
+                              if (value != RecallReason.other) {
+                                _noteError = null;
+                              }
+                            });
                           }
                         },
                         child: Column(
@@ -285,8 +316,14 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
                         const SizedBox(height: 10),
                         TextField(
                           controller: _noteController,
-                          decoration: const InputDecoration(
+                          onChanged: (_) {
+                            if (_noteError != null) {
+                              setState(() => _noteError = null);
+                            }
+                          },
+                          decoration: InputDecoration(
                             hintText: 'Nhập lý do cụ thể...',
+                            errorText: _noteError,
                           ),
                         ),
                       ],
@@ -355,9 +392,9 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
               Padding(
                 padding: const EdgeInsets.all(18),
                 child: ElevatedButton(
-                  onPressed: _isSubmitting
+                  onPressed: _isSubmitting || maxRecall <= 0
                       ? null
-                      : () => _submitRecall(maxRecall, effective),
+                      : () => _submitRecall(maxRecall),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: CaslaColors.danger,
                     foregroundColor: Colors.white,
@@ -398,6 +435,28 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
             color: color ?? CaslaColors.primaryNavy,
           ),
         ),
+      ],
+    );
+  }
+}
+
+class _RecallSkeleton extends StatelessWidget {
+  const _RecallSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(18),
+      children: const [
+        CaslaSkeleton(height: 76, radius: 14),
+        SizedBox(height: 16),
+        CaslaSkeleton(width: 150, height: 16, radius: 6),
+        SizedBox(height: 8),
+        CaslaSkeleton(height: 54, radius: 8),
+        SizedBox(height: 20),
+        CaslaSkeleton(width: 120, height: 16, radius: 6),
+        SizedBox(height: 8),
+        CaslaSkeleton(height: 156, radius: 12),
       ],
     );
   }

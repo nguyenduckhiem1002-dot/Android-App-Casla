@@ -4,6 +4,7 @@
 // Spec: Section 9.1
 
 import '../entities/entities.dart';
+import '../entities/mutation_receipt.dart';
 import '../entities/work_history.dart';
 
 /// Authentication & session management
@@ -16,9 +17,10 @@ abstract class AuthRepository {
 abstract class AssignmentRepository {
   /// [workerPassword] is the worker's own SAP password — required by
   /// `submitInitialAssign` to push this immediately. Omit it (or pass an
-  /// empty string) to write the assignment locally only; it stays queued as
-  /// PENDING until a supervisor supplies the password from the sync screen.
-  Future<String> createAssignment({
+  /// empty string) to write the assignment locally only; it is marked
+  /// NEEDS_VERIFICATION until a supervisor supplies the password from the
+  /// sync screen.
+  Future<MutationReceipt> createAssignment({
     required String workerId,
     required String orderId,
     required String teamId,
@@ -32,6 +34,7 @@ abstract class AssignmentRepository {
 
   Stream<List<Assignment>> watchWorkerAssignments(String workerId);
   Stream<List<Assignment>> watchAllAssignments();
+  Stream<Assignment?> watchAssignment(String id);
   Future<Assignment?> getAssignmentById(String id);
 }
 
@@ -39,7 +42,7 @@ abstract class AssignmentRepository {
 abstract class ProductionRepository {
   /// See [AssignmentRepository.createAssignment] for what [workerPassword]
   /// does and why it's optional.
-  Future<String> recordProduction({
+  Future<MutationReceipt> recordProduction({
     required String assignmentId,
     required double quantity,
     required String businessDate,
@@ -58,7 +61,7 @@ abstract class ProductionRepository {
 abstract class RecallRepository {
   /// See [AssignmentRepository.createAssignment] for what [workerPassword]
   /// does and why it's optional.
-  Future<String> recallAssignment({
+  Future<MutationReceipt> recallAssignment({
     required String assignmentId,
     required double quantity,
     required String reasonCode,

@@ -16,8 +16,9 @@ import 'sync_failure.dart';
 
 /// Attempts one push. On success, stamps the source row SYNCED and removes the
 /// queue item, returning null. On failure, classifies the error and writes the
-/// outcome to `sync_queue` exactly the way the background engine would,
-/// returning the classification so the caller can decide whether to retry.
+/// honest next action to `sync_queue`. A foreground transient failure becomes
+/// verification work because the one-use worker password is not retained;
+/// background transient failures can still use normal backoff.
 Future<SyncFailure?> pushAndRecord({
   required CaslaDatabase database,
   required SapWriteGateway gateway,
@@ -47,18 +48,25 @@ Future<SyncFailure?> pushAndRecord({
     return null;
   } catch (error) {
     final failure = classifySyncError(error);
-    await _writeFailure(database, backoff, id, queueItem, failure);
-    return failure;
+    return _writeFailure(
+      database,
+      backoff,
+      id,
+      queueItem,
+      failure,
+      hadWorkerPassword: workerPassword?.isNotEmpty == true,
+    );
   }
 }
 
-Future<void> _writeFailure(
+Future<SyncFailure> _writeFailure(
   CaslaDatabase database,
   SyncBackoff backoff,
   String id,
   Map<String, dynamic> queueItem,
-  SyncFailure failure,
-) async {
+  SyncFailure failure, {
+  required bool hadWorkerPassword,
+}) async {
   if (failure.kind == SyncFailureKind.permanent) {
     await database.updateSyncQueueError(
       id,
@@ -66,14 +74,14 @@ Future<void> _writeFailure(
       failure.message,
       failureKind: failure.kind.name,
     );
-    return;
+    return failure;
   }
 
   if (failure.kind == SyncFailureKind.needsVerification) {
     // No `next_retry_at_utc`: `getDueSyncItems` only ever picks up `PENDING`,
     // so this status is how the item stays out of the automatic engine's
-    // hands until a human resupplies the password and something calls
-    // `retrySyncItem` (which puts it back to PENDING) on their behalf.
+    // hands until a human resupplies the password to
+    // `VerifiedSyncCoordinator`, which calls this method directly.
     await database.updateSyncQueueError(
       id,
       failure.code,
@@ -81,7 +89,28 @@ Future<void> _writeFailure(
       status: 'NEEDS_VERIFICATION',
       failureKind: failure.kind.name,
     );
-    return;
+    return failure;
+  }
+
+  // The password was intentionally kept in memory for one foreground attempt
+  // only. If that attempt reached a transient delivery error, a future
+  // background retry cannot replay it honestly: the gateway will stop at
+  // WorkerVerificationRequiredException before sending. Move the item straight
+  // to the recoverable human state instead of briefly promising auto-retry.
+  if (failure.kind == SyncFailureKind.transient && hadWorkerPassword) {
+    final verificationFailure = SyncFailure(
+      kind: SyncFailureKind.needsVerification,
+      code: failure.code,
+      message: _freshVerificationMessage(failure),
+    );
+    await database.updateSyncQueueError(
+      id,
+      verificationFailure.code,
+      verificationFailure.message,
+      status: 'NEEDS_VERIFICATION',
+      failureKind: verificationFailure.kind.name,
+    );
+    return verificationFailure;
   }
 
   // Transient and unresolved-auth failures both stay PENDING: the record is
@@ -95,4 +124,19 @@ Future<void> _writeFailure(
     failureKind: failure.kind.name,
     nextRetryAtUtc: backoff.nextRetryAtUtc(retryCount),
   );
+  return failure;
+}
+
+String _freshVerificationMessage(SyncFailure failure) {
+  if (failure.code == 'ERR_NETWORK') {
+    return 'Không có kết nối tới SAP. Khi có mạng, hãy xác minh lại công nhân để gửi tiếp.';
+  }
+  if (failure.code == 'ERR_TIMEOUT') {
+    return 'SAP không phản hồi kịp. Hãy xác minh lại công nhân để kiểm tra và gửi tiếp.';
+  }
+  if (failure.code == 'SYNC_RECEIPT_NOT_FOUND' ||
+      failure.code == 'SYNC_RECEIPT_DUPLICATE') {
+    return 'SAP chưa xác nhận được giao dịch. Hãy xác minh lại công nhân để kiểm tra và gửi tiếp.';
+  }
+  return 'Chưa gửi được giao dịch lên SAP. Hãy xác minh lại công nhân để thử tiếp.';
 }

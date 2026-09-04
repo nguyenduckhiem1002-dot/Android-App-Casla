@@ -8,6 +8,7 @@
 import 'dart:io';
 
 import 'package:casla_production/core/database/casla_database.dart';
+import 'package:casla_production/core/sync/verified_sync_coordinator.dart';
 import 'package:casla_production/data/repositories/repositories_impl.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
@@ -33,10 +34,15 @@ void main() {
 
   test('a queued production record survives closing and reopening', () async {
     final first = CaslaDatabase.instance;
-    final repo = ProductionRepositoryImpl(first, gateway: NoopSapGateway());
+    final gateway = NoopSapGateway();
+    final repo = ProductionRepositoryImpl(
+      first,
+      gateway: gateway,
+      verifiedSync: VerifiedSyncCoordinator(database: first, gateway: gateway),
+    );
 
     // asg-001 is seeded with 650 assigned and 436 already recorded.
-    final recordId = await repo.recordProduction(
+    final receipt = await repo.recordProduction(
       assignmentId: 'asg-001',
       quantity: 30.0,
       businessDate: '2026-08-20',
@@ -50,7 +56,7 @@ void main() {
     // whatever its status.
     final queueBefore = await first.watchSyncQueue().first;
     final itemBefore = queueBefore.firstWhere(
-      (i) => i['entity_id'] == recordId,
+      (i) => i['entity_id'] == receipt.id,
     );
     expect(itemBefore['status'], 'FAILED');
 
@@ -62,7 +68,9 @@ void main() {
     expect(await reopened.getCompletedQuantity('asg-001'), 466.0);
 
     final queueAfter = await reopened.watchSyncQueue().first;
-    final itemAfter = queueAfter.firstWhere((i) => i['entity_id'] == recordId);
+    final itemAfter = queueAfter.firstWhere(
+      (i) => i['entity_id'] == receipt.id,
+    );
     expect(itemAfter['status'], 'FAILED');
   });
 
