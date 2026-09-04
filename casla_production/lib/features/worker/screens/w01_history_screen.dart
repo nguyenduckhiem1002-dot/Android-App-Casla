@@ -83,13 +83,6 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
             ),
           ],
         ),
-        actions: [
-          IconButton(
-            tooltip: 'Đăng xuất',
-            icon: const Icon(Icons.logout),
-            onPressed: () => ref.read(appStateProvider).logout(),
-          ),
-        ],
       ),
       body: RefreshIndicator(
         onRefresh: _refresh,
