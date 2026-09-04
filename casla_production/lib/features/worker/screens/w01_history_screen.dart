@@ -6,9 +6,11 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../../app/theme/casla_colors.dart';
+import '../../../core/sync/sync_failure.dart';
 import '../../../domain/entities/work_history.dart';
 import '../../../main.dart';
 
@@ -168,6 +170,13 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
   }
 
   Widget _buildError(Object error) {
+    // getWorkHistory already tried a silent token refresh before this reached
+    // here (see SapPpOpAllocGateway.getWorkHistory) — a session that still
+    // classifies as `auth` at this point didn't just expire, it's dead
+    // (e.g. revoked by a password change). "Thử lại" would only repeat the
+    // same failure; the only way forward is a fresh login.
+    final needsReLogin = classifySyncError(error).kind == SyncFailureKind.auth;
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(20),
@@ -179,13 +188,19 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
-              Icon(Icons.error_outline, color: CaslaColors.danger, size: 18),
-              SizedBox(width: 8),
+              const Icon(
+                Icons.error_outline,
+                color: CaslaColors.danger,
+                size: 18,
+              ),
+              const SizedBox(width: 8),
               Text(
-                'Không tải được lịch sử',
-                style: TextStyle(
+                needsReLogin
+                    ? 'Phiên đăng nhập đã hết hạn'
+                    : 'Không tải được lịch sử',
+                style: const TextStyle(
                   color: CaslaColors.danger,
                   fontWeight: FontWeight.w700,
                   fontSize: 13,
@@ -195,21 +210,29 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
           ),
           const SizedBox(height: 6),
           Text(
-            error.toString().replaceAll('Exception: ', ''),
+            needsReLogin
+                ? 'Vui lòng đăng nhập lại để tiếp tục.'
+                : error.toString().replaceAll('Exception: ', ''),
             style: const TextStyle(color: CaslaColors.danger, fontSize: 12.5),
           ),
           const SizedBox(height: 12),
           ElevatedButton(
-            onPressed: _refresh,
+            onPressed: needsReLogin ? _reLogin : _refresh,
             style: ElevatedButton.styleFrom(
               backgroundColor: CaslaColors.primaryNavy,
               foregroundColor: Colors.white,
             ),
-            child: const Text('Thử lại'),
+            child: Text(needsReLogin ? 'Đăng nhập lại' : 'Thử lại'),
           ),
         ],
       ),
     );
+  }
+
+  Future<void> _reLogin() async {
+    await ref.read(appStateProvider).logout();
+    if (!mounted) return;
+    context.go('/login');
   }
 
   Widget _buildContent(WorkHistoryResult result) {

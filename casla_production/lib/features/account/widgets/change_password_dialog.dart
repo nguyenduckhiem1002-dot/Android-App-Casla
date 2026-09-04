@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../../app/theme/casla_colors.dart';
 import '../../../core/config/app_config.dart';
 import '../../../core/utils/device_info.dart';
@@ -115,14 +116,7 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
 
       if (!mounted) return;
       Navigator.of(context).pop();
-
-      if (!widget.hostContext.mounted) return;
-      ScaffoldMessenger.of(widget.hostContext).showSnackBar(
-        const SnackBar(
-          content: Text('Cập nhật mật khẩu SAP thành công!'),
-          backgroundColor: CaslaColors.success,
-        ),
-      );
+      await _onPasswordChanged();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -130,6 +124,49 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
         _errorText = e.toString().replaceAll('Exception: ', '');
       });
     }
+  }
+
+  /// SAP revokes the active session's token as part of a successful password
+  /// change (confirmed against a real device — every call afterward on the
+  /// old token fails TOKEN_INVALID_OR_EXPIRED), so continuing to hold this
+  /// screen open would just walk the user into that error. Tell them plainly
+  /// and force a fresh login instead of a SnackBar that leaves them stuck.
+  Future<void> _onPasswordChanged() async {
+    if (!widget.hostContext.mounted) return;
+    await showDialog<void>(
+      context: widget.hostContext,
+      barrierDismissible: false,
+      builder: (dialogCtx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text(
+          'Đổi mật khẩu thành công',
+          style: TextStyle(
+            fontFamily: 'Manrope',
+            fontWeight: FontWeight.w800,
+            fontSize: 16,
+            color: CaslaColors.primaryNavy,
+          ),
+        ),
+        content: const Text(
+          'Mật khẩu đã được cập nhật trên SAP. Vui lòng đăng nhập lại bằng mật khẩu mới.',
+        ),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: CaslaColors.primaryNavy,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(dialogCtx).pop(),
+            child: const Text('Đăng nhập lại'),
+          ),
+        ],
+      ),
+    );
+
+    if (!widget.hostContext.mounted) return;
+    await widget.ref?.read(appStateProvider).logout();
+    if (!widget.hostContext.mounted) return;
+    GoRouter.of(widget.hostContext).go('/login');
   }
 
   @override
