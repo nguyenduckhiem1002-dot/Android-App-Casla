@@ -36,8 +36,8 @@ class FieldTelemetry {
   }
 
   FieldTelemetrySnapshot snapshot() => FieldTelemetrySnapshot._(
-    counts: Map<FieldMetric, int>.unmodifiable(_counts),
-    totalDurationMs: Map<FieldMetric, int>.unmodifiable(_totalDurationMs),
+    _counts: Map<FieldMetric, int>.unmodifiable(_counts),
+    _totalDurationMs: Map<FieldMetric, int>.unmodifiable(_totalDurationMs),
   );
 
   void reset() {
@@ -51,10 +51,9 @@ class FieldTelemetrySnapshot {
   final Map<FieldMetric, int> _totalDurationMs;
 
   const FieldTelemetrySnapshot._({
-    required Map<FieldMetric, int> counts,
-    required Map<FieldMetric, int> totalDurationMs,
-  }) : _counts = counts,
-       _totalDurationMs = totalDurationMs;
+    required this._counts,
+    required this._totalDurationMs,
+  });
 
   int count(FieldMetric metric) => _counts[metric] ?? 0;
 
