@@ -1,0 +1,196 @@
+name: Apply Phase 5 Instrumentation
+
+on:
+  push:
+    branches:
+      - chatgpt/phase5-performance-telemetry
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ github.event.head_commit.message == 'chore: apply Phase 5 instrumentation' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.8'
+          channel: stable
+          cache: true
+
+      - name: Apply deterministic Phase 5 patch
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new):
+              p = Path(path)
+              data = p.read_text()
+              count = data.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one match, found {count}')
+              p.write_text(data.replace(old, new))
+
+          repo = 'casla_production/lib/data/repositories/repositories_impl.dart'
+          replace(
+              repo,
+              "import '../../core/database/casla_database.dart';\n",
+              "import '../../core/database/casla_database.dart';\nimport '../../core/telemetry/field_telemetry.dart';\n",
+          )
+          replace(
+              repo,
+              """  final WorkHistoryLoader loadRemote;\n  final String? Function() cacheSubject;\n  final Duration freshFor;\n  final DateTime Function() _now;\n\n  final Map<String, Future<WorkHistoryResult>> _inFlight = {};\n\n  WorkHistoryRepositoryImpl(\n    this.db, {\n    required this.loadRemote,\n    required this.cacheSubject,\n    this.freshFor = const Duration(minutes: 2),\n    DateTime Function()? now,\n  }) : _now = now ?? DateTime.now;\n""",
+              """  final WorkHistoryLoader loadRemote;\n  final String? Function() cacheSubject;\n  final Duration freshFor;\n  final FieldTelemetry telemetry;\n  final DateTime Function() _now;\n\n  final Map<String, Future<WorkHistoryResult>> _inFlight = {};\n\n  WorkHistoryRepositoryImpl(\n    this.db, {\n    required this.loadRemote,\n    required this.cacheSubject,\n    this.freshFor = const Duration(minutes: 2),\n    FieldTelemetry? telemetry,\n    DateTime Function()? now,\n  }) : telemetry = telemetry ?? FieldTelemetry.instance,\n       _now = now ?? DateTime.now;\n""",
+          )
+          replace(
+              repo,
+              """    if (subject == null || subject.isEmpty) {\n      return loadRemote(range: range, dateFrom: dateFrom, dateTo: dateTo);\n    }\n""",
+              """    if (subject == null || subject.isEmpty) {\n      final stopwatch = Stopwatch()..start();\n      try {\n        final result = await loadRemote(\n          range: range,\n          dateFrom: dateFrom,\n          dateTo: dateTo,\n        );\n        stopwatch.stop();\n        telemetry.recordDuration(\n          FieldMetric.workHistoryRemoteSuccess,\n          stopwatch.elapsed,\n        );\n        return result;\n      } catch (_) {\n        stopwatch.stop();\n        telemetry.recordDuration(\n          FieldMetric.workHistoryRemoteFailure,\n          stopwatch.elapsed,\n        );\n        rethrow;\n      }\n    }\n""",
+          )
+          replace(
+              repo,
+              """    final cached = await _readCache(cacheKey);\n    if (cached != null) {\n      final age = _now().difference(cached.fetchedAt);\n      if (age >= freshFor) {\n        unawaited(\n          _ignoreRefreshFailure(\n            _refresh(\n              cacheKey: cacheKey,\n              subject: subject,\n              range: range,\n              dateFrom: dateFrom,\n              dateTo: dateTo,\n            ),\n          ),\n        );\n      }\n      return cached.result;\n    }\n\n    return _refresh(\n""",
+              """    final cached = await _readCache(cacheKey);\n    if (cached != null) {\n      final age = _now().difference(cached.fetchedAt);\n      if (age >= freshFor) {\n        telemetry.increment(FieldMetric.workHistoryStaleHit);\n        unawaited(\n          _ignoreRefreshFailure(\n            _refresh(\n              cacheKey: cacheKey,\n              subject: subject,\n              range: range,\n              dateFrom: dateFrom,\n              dateTo: dateTo,\n            ),\n          ),\n        );\n      } else {\n        telemetry.increment(FieldMetric.workHistoryCacheHit);\n      }\n      return cached.result;\n    }\n\n    telemetry.increment(FieldMetric.workHistoryCacheMiss);\n    return _refresh(\n""",
+          )
+          replace(
+              repo,
+              """    final result = await loadRemote(\n      range: range,\n      dateFrom: dateFrom,\n      dateTo: dateTo,\n    );\n    final fetchedAt = _now();\n""",
+              """    final stopwatch = Stopwatch()..start();\n    late final WorkHistoryResult result;\n    try {\n      result = await loadRemote(\n        range: range,\n        dateFrom: dateFrom,\n        dateTo: dateTo,\n      );\n      stopwatch.stop();\n      telemetry.recordDuration(\n        FieldMetric.workHistoryRemoteSuccess,\n        stopwatch.elapsed,\n      );\n    } catch (_) {\n      stopwatch.stop();\n      telemetry.recordDuration(\n        FieldMetric.workHistoryRemoteFailure,\n        stopwatch.elapsed,\n      );\n      rethrow;\n    }\n    final fetchedAt = _now();\n""",
+          )
+
+          scanner = 'casla_production/lib/presentation/widgets/adaptive_barcode_scanner_view.dart'
+          replace(
+              scanner,
+              "import '../../core/scanner/scan_deduplicator.dart';\n",
+              "import '../../core/scanner/scan_deduplicator.dart';\nimport '../../core/telemetry/field_telemetry.dart';\n",
+          )
+          replace(
+              scanner,
+              """  final FutureOr<void> Function(String code) onScan;\n  final BarcodeScanner? hardwareScanner;\n\n  const AdaptiveBarcodeScannerView({\n""",
+              """  final FutureOr<void> Function(String code) onScan;\n  final BarcodeScanner? hardwareScanner;\n  final FieldTelemetry? telemetry;\n\n  const AdaptiveBarcodeScannerView({\n""",
+          )
+          replace(
+              scanner,
+              """    this.onManualInput,\n    this.hardwareScanner,\n  });\n""",
+              """    this.onManualInput,\n    this.hardwareScanner,\n    this.telemetry,\n  });\n""",
+          )
+          replace(
+              scanner,
+              """  final ScanDeduplicator _deduplicator = ScanDeduplicator();\n\n  StreamSubscription<BarcodeScanEvent>? _scanSubscription;\n""",
+              """  final ScanDeduplicator _deduplicator = ScanDeduplicator();\n\n  FieldTelemetry get _telemetry => widget.telemetry ?? FieldTelemetry.instance;\n\n  StreamSubscription<BarcodeScanEvent>? _scanSubscription;\n""",
+          )
+          replace(
+              scanner,
+              """    final code = event.rawValue.trim();\n    if (code.isEmpty || !_deduplicator.shouldAccept(code)) return;\n\n    _isHandlingScan = true;\n""",
+              """    final code = event.rawValue.trim();\n    if (code.isEmpty) return;\n    if (!_deduplicator.shouldAccept(code)) {\n      _telemetry.increment(FieldMetric.hardwareScanDuplicate);\n      return;\n    }\n\n    _telemetry.increment(FieldMetric.hardwareScanAccepted);\n    _isHandlingScan = true;\n""",
+          )
+
+          history = 'casla_production/lib/features/worker/screens/w01_history_screen.dart'
+          replace(
+              history,
+              """class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {\n  HistoryRange _range = HistoryRange.month;\n""",
+              """class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {\n  static const int _historyEntryPageSize = 50;\n\n  HistoryRange _range = HistoryRange.month;\n""",
+          )
+          replace(
+              history,
+              """  DateTime? _customDateTo;\n  late Future<WorkHistoryResult> _future;\n""",
+              """  DateTime? _customDateTo;\n  late Future<WorkHistoryResult> _future;\n  int _visibleEntryCount = _historyEntryPageSize;\n""",
+          )
+          replace(
+              history,
+              """    setState(() {\n      _range = range;\n      _future = _load();\n    });\n""",
+              """    setState(() {\n      _range = range;\n      _visibleEntryCount = _historyEntryPageSize;\n      _future = _load();\n    });\n""",
+          )
+          replace(
+              history,
+              """      if (!mounted) return;\n      setState(() => _future = Future.value(result));\n""",
+              """      if (!mounted) return;\n      setState(() {\n        _visibleEntryCount = _historyEntryPageSize;\n        _future = Future.value(result);\n      });\n""",
+          )
+          replace(
+              history,
+              """      _customDateFrom = DateTime(picked.year, picked.month, picked.day);\n      _customDateTo = DateTime(picked.year, picked.month, picked.day);\n      _future = _load();\n""",
+              """      _customDateFrom = DateTime(picked.year, picked.month, picked.day);\n      _customDateTo = DateTime(picked.year, picked.month, picked.day);\n      _visibleEntryCount = _historyEntryPageSize;\n      _future = _load();\n""",
+          )
+          replace(
+              history,
+              """      _customDateTo = DateTime(\n        picked.end.year,\n        picked.end.month,\n        picked.end.day,\n      );\n      _future = _load();\n""",
+              """      _customDateTo = DateTime(\n        picked.end.year,\n        picked.end.month,\n        picked.end.day,\n      );\n      _visibleEntryCount = _historyEntryPageSize;\n      _future = _load();\n""",
+          )
+          replace(
+              history,
+              """  Widget _buildContent(WorkHistoryResult result) {\n    return Column(\n""",
+              """  Widget _buildContent(WorkHistoryResult result) {\n    final visibleCount = _visibleEntryCount < result.entries.length\n        ? _visibleEntryCount\n        : result.entries.length;\n    final visibleEntries = result.entries.take(visibleCount).toList(\n      growable: false,\n    );\n\n    return Column(\n""",
+          )
+          replace(
+              history,
+              """              itemCount: result.entries.length,\n              separatorBuilder: (_, _) => const Divider(height: 1),\n              itemBuilder: (context, index) =>\n                  _buildEntryTile(result.entries[index]),\n            ),\n          ),\n      ],\n""",
+              """              itemCount: visibleEntries.length,\n              separatorBuilder: (_, _) => const Divider(height: 1),\n              itemBuilder: (context, index) =>\n                  _buildEntryTile(visibleEntries[index]),\n            ),\n          ),\n        if (visibleEntries.length < result.entries.length) ...[\n          const SizedBox(height: 10),\n          SizedBox(\n            width: double.infinity,\n            height: 52,\n            child: OutlinedButton.icon(\n              key: const Key('history-load-more'),\n              onPressed: () {\n                setState(() {\n                  final next = _visibleEntryCount + _historyEntryPageSize;\n                  _visibleEntryCount = next < result.entries.length\n                      ? next\n                      : result.entries.length;\n                });\n              },\n              icon: const Icon(Icons.expand_more_rounded),\n              label: Text(\n                'Xem thêm • ${visibleEntries.length}/${result.entries.length} giao dịch',\n              ),\n            ),\n          ),\n        ],\n      ],\n""",
+          )
+
+          scanner_test = 'casla_production/test/presentation/adaptive_barcode_scanner_view_test.dart'
+          replace(
+              scanner_test,
+              "import 'package:casla_production/core/scanner/barcode_scanner.dart';\n",
+              "import 'package:casla_production/core/scanner/barcode_scanner.dart';\nimport 'package:casla_production/core/telemetry/field_telemetry.dart';\n",
+          )
+          replace(
+              scanner_test,
+              """    final scanner = _FakeScanner(available: true);\n    addTearDown(scanner.close);\n    final accepted = <String>[];\n""",
+              """    final scanner = _FakeScanner(available: true);\n    final telemetry = FieldTelemetry();\n    addTearDown(scanner.close);\n    final accepted = <String>[];\n""",
+          )
+          replace(
+              scanner_test,
+              """            hardwareScanner: scanner,\n            onScan: accepted.add,\n""",
+              """            hardwareScanner: scanner,\n            telemetry: telemetry,\n            onScan: accepted.add,\n""",
+          )
+          replace(
+              scanner_test,
+              """    expect(accepted, ['MNV00123']);\n    expect(find.text('ĐÃ NHẬN MÃ'), findsOneWidget);\n    expect(find.text('Đã nhận mã • đang kiểm tra dữ liệu'), findsOneWidget);\n\n    scanner.emit('MNV00123');\n    await tester.pump();\n    expect(accepted, ['MNV00123']);\n\n    await tester.pump(const Duration(milliseconds: 650));\n    expect(find.text('SẴN SÀNG QUÉT'), findsOneWidget);\n    expect(find.text('Sẵn sàng cho lượt quét tiếp theo'), findsOneWidget);\n""",
+              """    expect(accepted, ['MNV00123']);\n    expect(telemetry.snapshot().count(FieldMetric.hardwareScanAccepted), 1);\n    expect(find.text('ĐÃ NHẬN MÃ'), findsOneWidget);\n    expect(find.text('Đã nhận mã • đang kiểm tra dữ liệu'), findsOneWidget);\n\n    await tester.pump(const Duration(milliseconds: 650));\n    expect(find.text('SẴN SÀNG QUÉT'), findsOneWidget);\n    expect(find.text('Sẵn sàng cho lượt quét tiếp theo'), findsOneWidget);\n\n    scanner.emit('MNV00123');\n    await tester.pump();\n    expect(accepted, ['MNV00123']);\n    expect(telemetry.snapshot().count(FieldMetric.hardwareScanDuplicate), 1);\n""",
+          )
+
+          cache_test = 'casla_production/test/data/work_history_cache_repository_test.dart'
+          replace(
+              cache_test,
+              "import 'package:casla_production/core/database/casla_database.dart';\n",
+              "import 'package:casla_production/core/database/casla_database.dart';\nimport 'package:casla_production/core/telemetry/field_telemetry.dart';\n",
+          )
+          replace(
+              cache_test,
+              """  test('fresh cache avoids a second SAP call', () async {\n    var calls = 0;\n    final now = DateTime(2026, 9, 4, 12);\n    final repo = WorkHistoryRepositoryImpl(\n      db,\n      cacheSubject: () => 'user-a:self',\n""",
+              """  test('fresh cache avoids a second SAP call', () async {\n    var calls = 0;\n    final now = DateTime(2026, 9, 4, 12);\n    final telemetry = FieldTelemetry();\n    final repo = WorkHistoryRepositoryImpl(\n      db,\n      cacheSubject: () => 'user-a:self',\n      telemetry: telemetry,\n""",
+          )
+          replace(
+              cache_test,
+              """    expect(calls, 1);\n    expect(first.workers.single.workerName, 'Nguyễn Văn A');\n    expect(second.workers.single.workerName, 'Nguyễn Văn A');\n  });\n""",
+              """    expect(calls, 1);\n    expect(first.workers.single.workerName, 'Nguyễn Văn A');\n    expect(second.workers.single.workerName, 'Nguyễn Văn A');\n    final metrics = telemetry.snapshot();\n    expect(metrics.count(FieldMetric.workHistoryCacheMiss), 1);\n    expect(metrics.count(FieldMetric.workHistoryCacheHit), 1);\n    expect(metrics.count(FieldMetric.workHistoryRemoteSuccess), 1);\n  });\n""",
+          )
+          replace(
+              cache_test,
+              """  test('cache namespace prevents cross-account history reuse', () async {\n""",
+              """  test('remote failures are counted without recording request data', () async {\n    final telemetry = FieldTelemetry();\n    final repo = WorkHistoryRepositoryImpl(\n      db,\n      cacheSubject: () => 'user-a:self',\n      telemetry: telemetry,\n      loadRemote: ({required range, dateFrom, dateTo}) async {\n        throw Exception('offline');\n      },\n    );\n\n    await expectLater(\n      repo.getWorkHistory(range: HistoryRange.day),\n      throwsException,\n    );\n\n    final diagnostics = telemetry.snapshot().toDiagnosticMap();\n    expect(telemetry.snapshot().count(FieldMetric.workHistoryCacheMiss), 1);\n    expect(telemetry.snapshot().count(FieldMetric.workHistoryRemoteFailure), 1);\n    expect(diagnostics.toString(), isNot(contains('user-a')));\n    expect(diagnostics.toString(), isNot(contains('offline')));\n  });\n\n  test('cache namespace prevents cross-account history reuse', () async {\n""",
+          )
+          PY
+
+      - name: Format modified Dart sources
+        working-directory: casla_production
+        run: >-
+          dart format
+          lib/data/repositories/repositories_impl.dart
+          lib/presentation/widgets/adaptive_barcode_scanner_view.dart
+          lib/features/worker/screens/w01_history_screen.dart
+          test/presentation/adaptive_barcode_scanner_view_test.dart
+          test/data/work_history_cache_repository_test.dart
+          lib/core/telemetry/field_telemetry.dart
+          test/core/field_telemetry_test.dart
+
+      - name: Commit Phase 5 patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add casla_production
+          git commit -m "feat: complete Phase 5 performance telemetry [phase5-applied]"
+          git push origin HEAD:${GITHUB_REF_NAME}
