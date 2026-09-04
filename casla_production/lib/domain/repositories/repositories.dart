@@ -80,5 +80,9 @@ abstract class RecallRepository {
 /// Scope (self vs. team) is decided entirely server-side from the account's
 /// RBAC functions; this repository never sends a worker id to filter by.
 abstract class WorkHistoryRepository {
-  Future<WorkHistoryResult> getWorkHistory({required HistoryRange range});
+  Future<WorkHistoryResult> getWorkHistory({
+    required HistoryRange range,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+  });
 }

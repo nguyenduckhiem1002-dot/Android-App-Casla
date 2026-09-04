@@ -311,25 +311,46 @@ class SapPpOpAllocGateway implements SapWriteGateway {
   /// ordinary expiry — refreshed once, transparently, before giving up.
   Future<WorkHistoryResult> getWorkHistory({
     required HistoryRange range,
+    DateTime? dateFrom,
+    DateTime? dateTo,
   }) async {
     try {
-      return await _getWorkHistoryOnce(range);
+      return await _getWorkHistoryOnce(
+        range,
+        dateFrom: dateFrom,
+        dateTo: dateTo,
+      );
     } catch (error) {
       if (classifySyncError(error).kind != SyncFailureKind.auth) rethrow;
       // A revoked session (e.g. right after a password change) fails the
       // refresh too; that failure — not the original one — is what the
       // caller should see and act on ("phiên đăng nhập đã hết hạn").
       if (!await refreshSession()) rethrow;
-      return _getWorkHistoryOnce(range);
+      return _getWorkHistoryOnce(
+        range,
+        dateFrom: dateFrom,
+        dateTo: dateTo,
+      );
     }
   }
 
-  Future<WorkHistoryResult> _getWorkHistoryOnce(HistoryRange range) async {
+  Future<WorkHistoryResult> _getWorkHistoryOnce(
+    HistoryRange range, {
+    DateTime? dateFrom,
+    DateTime? dateTo,
+  }) async {
     final accessToken = session.accessToken;
     if (accessToken == null || accessToken.isEmpty) {
       throw const SapBusinessError('TOKEN_INVALID_OR_EXPIRED');
     }
     final deviceId = DeviceInfoHelper.deviceId;
+
+    final dateFromStr = dateFrom != null
+        ? '${dateFrom.year.toString().padLeft(4, '0')}-${dateFrom.month.toString().padLeft(2, '0')}-${dateFrom.day.toString().padLeft(2, '0')}'
+        : null;
+    final dateToStr = dateTo != null
+        ? '${dateTo.year.toString().padLeft(4, '0')}-${dateTo.month.toString().padLeft(2, '0')}-${dateTo.day.toString().padLeft(2, '0')}'
+        : null;
 
     try {
       await client.fetchCsrfToken();
@@ -339,6 +360,8 @@ class SapPpOpAllocGateway implements SapWriteGateway {
           'AccessToken': accessToken,
           'DeviceID': deviceId,
           'RangeCode': range.code,
+          if (dateFromStr != null) 'DateFrom': dateFromStr,
+          if (dateToStr != null) 'DateTo': dateToStr,
           'WorkerID': '',
           'SummaryOnly': false,
         },

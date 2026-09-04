@@ -91,6 +91,9 @@ class SapLoginResult {
   final DateTime? expiresAt;
   final String status;
   final bool passwordChangeRequired;
+  final String fullName;
+  final String email;
+  final String workerId;
   final List<SapPermission> permissions;
   final List<SapWorkContext> workContexts;
 
@@ -102,6 +105,9 @@ class SapLoginResult {
     required this.expiresAt,
     required this.status,
     required this.passwordChangeRequired,
+    this.fullName = '',
+    this.email = '',
+    this.workerId = '',
     required this.permissions,
     required this.workContexts,
   });
@@ -126,6 +132,9 @@ class SapLoginResult {
       expiresAt: DateTime.tryParse((json['ExpiresAt'] ?? '').toString()),
       status: (json['Status'] ?? '').toString(),
       passwordChangeRequired: json['PasswordChangeRequired'] == true,
+      fullName: (json['FullName'] ?? '').toString(),
+      email: (json['Email'] ?? '').toString(),
+      workerId: (json['WorkerID'] ?? '').toString(),
       permissions: permissionRows,
       workContexts: workContextRows,
     );

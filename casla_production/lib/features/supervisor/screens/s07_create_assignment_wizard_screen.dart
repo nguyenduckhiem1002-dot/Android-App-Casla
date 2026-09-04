@@ -27,6 +27,7 @@ class _S07CreateAssignmentWizardScreenState
   DateTime _startDate = DateTime.now();
   bool _isSubmitting = false;
   String? _quantityError;
+  bool _keepProductAfterSubmit = true;
 
   @override
   void dispose() {
@@ -336,8 +337,26 @@ class _S07CreateAssignmentWizardScreenState
 
     setState(() => _isSubmitting = false);
 
-    if (Navigator.canPop(context)) {
-      context.pop();
+    if (_keepProductAfterSubmit) {
+      setState(() {
+        _selectedWorker = null;
+        _qtyController.clear();
+        _noteController.clear();
+        _quantityError = null;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Đã giữ sản phẩm "${_selectedOrder?['ten_sp']}". Tiếp tục chọn công nhân tiếp theo.',
+          ),
+          backgroundColor: CaslaColors.primaryNavy,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } else {
+      if (Navigator.canPop(context)) {
+        context.pop();
+      }
     }
   }
 
@@ -395,7 +414,75 @@ class _S07CreateAssignmentWizardScreenState
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // 1. Công nhân Field
+                  // 1. Sản phẩm (Quét mã QR) Field
+                  RichText(
+                    text: const TextSpan(
+                      text: 'Sản phẩm ',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: CaslaColors.primaryNavy,
+                      ),
+                      children: [
+                        TextSpan(
+                          text: '*',
+                          style: TextStyle(color: CaslaColors.danger),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  InkWell(
+                    onTap: _scanProductQR,
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 13,
+                        vertical: 12,
+                      ),
+                      decoration: BoxDecoration(
+                        color: CaslaColors.surface,
+                        border: Border.all(
+                          color: _selectedOrder != null
+                              ? CaslaColors.gold700
+                              : CaslaColors.line,
+                          width: 1.5,
+                          style: BorderStyle.solid,
+                        ),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              productDisplayName,
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: _selectedOrder != null
+                                    ? CaslaColors.primaryNavy
+                                    : CaslaColors.muted,
+                              ),
+                            ),
+                          ),
+                          const Icon(
+                            Icons.qr_code_scanner,
+                            size: 20,
+                            color: CaslaColors.gold700,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  const Text(
+                    'Quét mã QR trên lệnh sản xuất hoặc nhãn sản phẩm / NVL.',
+                    style: TextStyle(fontSize: 10.5, color: CaslaColors.muted),
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // 2. Công nhân Field
                   RichText(
                     text: const TextSpan(
                       text: 'Công nhân ',
@@ -457,71 +544,6 @@ class _S07CreateAssignmentWizardScreenState
                   const Text(
                     'Chọn trong danh sách hoặc quét QR trên thẻ nhân viên.',
                     style: TextStyle(fontSize: 10.5, color: CaslaColors.muted),
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // 2. Sản phẩm (Quét mã QR) Field
-                  RichText(
-                    text: const TextSpan(
-                      text: 'Sản phẩm ',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: CaslaColors.primaryNavy,
-                      ),
-                      children: [
-                        TextSpan(
-                          text: '*',
-                          style: TextStyle(color: CaslaColors.danger),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  InkWell(
-                    onTap: _scanProductQR,
-                    borderRadius: BorderRadius.circular(8),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 13,
-                        vertical: 12,
-                      ),
-                      decoration: BoxDecoration(
-                        color: CaslaColors.surface,
-                        border: Border.all(
-                          color: _selectedOrder != null
-                              ? CaslaColors.gold700
-                              : CaslaColors.line,
-                          width: 1.5,
-                          style: _selectedOrder == null
-                              ? BorderStyle.solid
-                              : BorderStyle.solid,
-                        ),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              productDisplayName,
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: _selectedOrder != null
-                                    ? CaslaColors.primaryNavy
-                                    : CaslaColors.muted,
-                              ),
-                            ),
-                          ),
-                          const Icon(
-                            Icons.qr_code_scanner,
-                            size: 20,
-                            color: CaslaColors.gold700,
-                          ),
-                        ],
-                      ),
-                    ),
                   ),
 
                   const SizedBox(height: 16),
@@ -657,6 +679,51 @@ class _S07CreateAssignmentWizardScreenState
                       hintStyle: TextStyle(
                         color: CaslaColors.muted,
                         fontSize: 13,
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // 6. Giữ lại sản phẩm để tiếp tục giao
+                  InkWell(
+                    onTap: () {
+                      setState(() {
+                        _keepProductAfterSubmit = !_keepProductAfterSubmit;
+                      });
+                    },
+                    borderRadius: BorderRadius.circular(8),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Row(
+                        children: [
+                          SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: Checkbox(
+                              value: _keepProductAfterSubmit,
+                              activeColor: CaslaColors.primaryNavy,
+                              materialTapTargetSize:
+                                  MaterialTapTargetSize.shrinkWrap,
+                              onChanged: (val) {
+                                setState(() {
+                                  _keepProductAfterSubmit = val ?? false;
+                                });
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          const Expanded(
+                            child: Text(
+                              'Giữ sản phẩm để tiếp tục giao cho công nhân khác',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: CaslaColors.primaryNavy,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),

@@ -24,6 +24,8 @@ class W01HistoryScreen extends ConsumerStatefulWidget {
 
 class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
   HistoryRange _range = HistoryRange.month;
+  DateTime? _customDateFrom;
+  DateTime? _customDateTo;
   late Future<WorkHistoryResult> _future;
 
   @override
@@ -36,10 +38,18 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
     return ref
         .read(appStateProvider)
         .workHistoryRepo
-        .getWorkHistory(range: _range);
+        .getWorkHistory(
+          range: _range,
+          dateFrom: _range == HistoryRange.custom ? _customDateFrom : null,
+          dateTo: _range == HistoryRange.custom ? _customDateTo : null,
+        );
   }
 
   void _selectRange(HistoryRange range) {
+    if (range == HistoryRange.custom) {
+      _showCustomDatePickerSheet();
+      return;
+    }
     if (range == _range) return;
     setState(() {
       _range = range;
@@ -51,6 +61,240 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
     final next = _load();
     setState(() => _future = next);
     await next;
+  }
+
+  Future<void> _pickSingleDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _customDateFrom ?? now,
+      firstDate: DateTime(2020),
+      lastDate: now.add(const Duration(days: 365)),
+      helpText: 'CHỌN NGÀY',
+      cancelText: 'HỦY',
+      confirmText: 'CHỌN',
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: CaslaColors.primaryNavy,
+              onPrimary: Colors.white,
+              surface: CaslaColors.surface,
+              onSurface: CaslaColors.navy900,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (picked == null || !mounted) return;
+
+    setState(() {
+      _range = HistoryRange.custom;
+      _customDateFrom = DateTime(picked.year, picked.month, picked.day);
+      _customDateTo = DateTime(picked.year, picked.month, picked.day);
+      _future = _load();
+    });
+  }
+
+  Future<void> _pickDateRange() async {
+    final now = DateTime.now();
+    final initialRange = (_customDateFrom != null &&
+            _customDateTo != null &&
+            !_customDateFrom!.isAtSameMomentAs(_customDateTo!))
+        ? DateTimeRange(start: _customDateFrom!, end: _customDateTo!)
+        : DateTimeRange(
+            start: now.subtract(const Duration(days: 7)),
+            end: now,
+          );
+
+    final picked = await showDateRangePicker(
+      context: context,
+      initialDateRange: initialRange,
+      firstDate: DateTime(2020),
+      lastDate: now.add(const Duration(days: 365)),
+      helpText: 'CHỌN KHOẢNG NGÀY (TỐI ĐA 1 THÁNG)',
+      cancelText: 'HỦY',
+      confirmText: 'CHỌN',
+      saveText: 'CHỌN',
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: CaslaColors.primaryNavy,
+              onPrimary: Colors.white,
+              surface: CaslaColors.surface,
+              onSurface: CaslaColors.navy900,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (picked == null || !mounted) return;
+
+    final diffDays = picked.end.difference(picked.start).inDays;
+    if (diffDays > 31) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Khoảng thời gian không được vượt quá 1 tháng (tối đa 31 ngày)',
+          ),
+          backgroundColor: CaslaColors.danger,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _range = HistoryRange.custom;
+      _customDateFrom = DateTime(picked.start.year, picked.start.month, picked.start.day);
+      _customDateTo = DateTime(picked.end.year, picked.end.month, picked.end.day);
+      _future = _load();
+    });
+  }
+
+  void _showCustomDatePickerSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        return Container(
+          decoration: const BoxDecoration(
+            color: CaslaColors.surface,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 38,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: CaslaColors.line,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Tùy chọn thời gian',
+                style: TextStyle(
+                  fontFamily: 'Manrope',
+                  fontSize: 17,
+                  fontWeight: FontWeight.w800,
+                  color: CaslaColors.primaryNavy,
+                ),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Chọn ngày cụ thể hoặc khoảng ngày (tối đa 1 tháng)',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: CaslaColors.muted,
+                ),
+              ),
+              const SizedBox(height: 18),
+              _buildOptionTile(
+                icon: Icons.today_rounded,
+                title: 'Chọn 1 ngày cụ thể',
+                subtitle: 'Xem lịch sử sản xuất trong một ngày',
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _pickSingleDate();
+                },
+              ),
+              const SizedBox(height: 10),
+              _buildOptionTile(
+                icon: Icons.date_range_rounded,
+                title: 'Chọn khoảng ngày',
+                subtitle: 'Tối đa 31 ngày (1 tháng)',
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _pickDateRange();
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildOptionTile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: CaslaColors.muted100.withValues(alpha: 0.5),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: CaslaColors.line),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: CaslaColors.primaryNavy.withValues(alpha: 0.08),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, color: CaslaColors.primaryNavy, size: 22),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: CaslaColors.primaryNavy,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: CaslaColors.muted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right, color: CaslaColors.muted, size: 20),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String get _customDateLabel {
+    if (_customDateFrom == null || _customDateTo == null) {
+      return 'Chọn ngày';
+    }
+    final df = DateFormat('dd/MM/yyyy');
+    if (_customDateFrom!.year == _customDateTo!.year &&
+        _customDateFrom!.month == _customDateTo!.month &&
+        _customDateFrom!.day == _customDateTo!.day) {
+      return 'Ngày: ${df.format(_customDateFrom!)}';
+    }
+    return '${df.format(_customDateFrom!)} - ${df.format(_customDateTo!)}';
   }
 
   @override
@@ -116,19 +360,91 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
   }
 
   Widget _buildRangeTabs() {
-    return Container(
-      padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        color: CaslaColors.muted100,
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
-        children: [
-          _rangeTab('Hôm nay', HistoryRange.day),
-          _rangeTab('Tuần này', HistoryRange.week),
-          _rangeTab('Tháng này', HistoryRange.month),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(4),
+          decoration: BoxDecoration(
+            color: CaslaColors.muted100,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            children: [
+              _rangeTab('Hôm nay', HistoryRange.day),
+              _rangeTab('Tuần này', HistoryRange.week),
+              _rangeTab('Tháng này', HistoryRange.month),
+              _rangeTab('Tùy chọn', HistoryRange.custom),
+            ],
+          ),
+        ),
+        if (_range == HistoryRange.custom && _customDateFrom != null) ...[
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: CaslaColors.primaryNavy.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: CaslaColors.primaryNavy.withValues(alpha: 0.2),
+              ),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.event_available_outlined,
+                  size: 16,
+                  color: CaslaColors.primaryNavy,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _customDateLabel,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 12.5,
+                      color: CaslaColors.primaryNavy,
+                    ),
+                  ),
+                ),
+                InkWell(
+                  onTap: _showCustomDatePickerSheet,
+                  borderRadius: BorderRadius.circular(6),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: CaslaColors.primaryNavy,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.edit_calendar_outlined,
+                          size: 13,
+                          color: Colors.white,
+                        ),
+                        SizedBox(width: 4),
+                        Text(
+                          'Đổi',
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
-      ),
+      ],
     );
   }
 
@@ -157,7 +473,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
             label,
             textAlign: TextAlign.center,
             style: TextStyle(
-              fontSize: 12.5,
+              fontSize: 12,
               fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
               color: selected ? CaslaColors.primaryNavy : CaslaColors.muted,
             ),

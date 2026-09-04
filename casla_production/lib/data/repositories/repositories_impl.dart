@@ -63,14 +63,30 @@ class AuthRepositoryImpl implements AuthRepository {
       workContexts: result.workContexts,
     );
 
-    // Display-only; a failed lookup must not fail the login itself.
-    final detail = await _sapAuth.getUserDetail(result.userUuid);
+    // Priority 1: Check if LoginResult already contains profile fields (fast & immune to DCL).
+    // Priority 2: Fallback to getUserDetail (if backend hasn't enriched LoginResult yet).
+    String fullName = result.fullName;
+    String email = result.email;
+    String maNv = result.workerId.isNotEmpty ? result.workerId : username;
+
+    if (fullName.isEmpty || email.isEmpty) {
+      final detail = await _sapAuth.getUserDetail(result.userUuid);
+      if (fullName.isEmpty) {
+        fullName = (detail?['FullName'] ?? username).toString();
+      }
+      if (email.isEmpty) {
+        email = (detail?['Email'] ?? '').toString();
+      }
+      if (maNv == username && detail?['WorkerID'] != null && detail!['WorkerID'].toString().isNotEmpty) {
+        maNv = detail['WorkerID'].toString();
+      }
+    }
 
     final session = UserSession(
       id: result.userUuid,
-      maNv: username,
-      fullName: (detail?['FullName'] ?? username).toString(),
-      email: (detail?['Email'] ?? '').toString(),
+      maNv: maNv,
+      fullName: fullName.isNotEmpty ? fullName : username,
+      email: email,
       teamName: authorization.workContexts.isNotEmpty
           ? authorization.workContexts.first.workName
           : '',
@@ -671,8 +687,16 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
   WorkHistoryRepositoryImpl(this.gateway);
 
   @override
-  Future<WorkHistoryResult> getWorkHistory({required HistoryRange range}) =>
-      gateway.getWorkHistory(range: range);
+  Future<WorkHistoryResult> getWorkHistory({
+    required HistoryRange range,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+  }) =>
+      gateway.getWorkHistory(
+        range: range,
+        dateFrom: dateFrom,
+        dateTo: dateTo,
+      );
 }
 
 MutationReceipt _mutationReceipt(String id, SyncFailure? failure) {
