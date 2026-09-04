@@ -303,9 +303,28 @@ class SapPpOpAllocGateway implements SapWriteGateway {
   /// (self/team) is decided entirely server-side from the account's RBAC
   /// functions (`zcl_pp_work_history`); a worker-only account always gets its
   /// own rows back no matter what, so there is no worker id to pass here.
+  ///
+  /// The access token is short-lived (30 minutes — see `ZA_MOB_LoginResult`'s
+  /// `ExpiresAt`), and unlike a queued mutation this call has no engine
+  /// wrapping it with a refresh-and-retry. Without doing that here, the
+  /// history screen would show a raw TOKEN_INVALID_OR_EXPIRED error on every
+  /// ordinary expiry — refreshed once, transparently, before giving up.
   Future<WorkHistoryResult> getWorkHistory({
     required HistoryRange range,
   }) async {
+    try {
+      return await _getWorkHistoryOnce(range);
+    } catch (error) {
+      if (classifySyncError(error).kind != SyncFailureKind.auth) rethrow;
+      // A revoked session (e.g. right after a password change) fails the
+      // refresh too; that failure — not the original one — is what the
+      // caller should see and act on ("phiên đăng nhập đã hết hạn").
+      if (!await refreshSession()) rethrow;
+      return _getWorkHistoryOnce(range);
+    }
+  }
+
+  Future<WorkHistoryResult> _getWorkHistoryOnce(HistoryRange range) async {
     final accessToken = session.accessToken;
     if (accessToken == null || accessToken.isEmpty) {
       throw const SapBusinessError('TOKEN_INVALID_OR_EXPIRED');
