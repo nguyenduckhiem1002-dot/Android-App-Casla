@@ -36,8 +36,8 @@ class FieldTelemetry {
   }
 
   FieldTelemetrySnapshot snapshot() => FieldTelemetrySnapshot._(
-    _counts: Map<FieldMetric, int>.unmodifiable(_counts),
-    _totalDurationMs: Map<FieldMetric, int>.unmodifiable(_totalDurationMs),
+    counts: Map<FieldMetric, int>.unmodifiable(_counts),
+    totalDurationMs: Map<FieldMetric, int>.unmodifiable(_totalDurationMs),
   );
 
   void reset() {
