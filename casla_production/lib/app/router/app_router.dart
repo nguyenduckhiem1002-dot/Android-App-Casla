@@ -14,7 +14,7 @@ import '../../features/supervisor/screens/s08_assignment_detail_screen.dart';
 import '../../features/supervisor/screens/s09_recall_screen.dart';
 import '../../features/supervisor/screens/s10_confirm_scan_screen.dart';
 import '../../features/sync/screens/s12_sync_screen.dart';
-import '../../features/worker/screens/w01_history_screen.dart';
+import '../../features/shared/screens/worker_shell.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
   // `refreshListenable` below re-evaluates redirects on session changes, so the
@@ -118,7 +118,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: '/history',
-        builder: (context, state) => const W01HistoryScreen(),
+        builder: (context, state) => const WorkerShell(),
       ),
     ],
   );
