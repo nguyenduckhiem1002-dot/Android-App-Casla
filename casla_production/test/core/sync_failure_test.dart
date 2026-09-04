@@ -7,6 +7,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:casla_production/core/sync/sync_failure.dart';
+import 'package:casla_production/data/sap/odata_error.dart';
 import 'package:casla_production/data/sap/sap_odata_client.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -167,6 +168,71 @@ void main() {
       );
 
       expect(failure.message, contains('400'));
+    });
+  });
+
+  group('ZUI_PP_OPALLOC / ZUI_MOB_AUTH business codes', () {
+    test('TOKEN_INVALID_OR_EXPIRED is refreshable, not permanent', () {
+      final failure = classifySyncError(
+        const SapBusinessError('TOKEN_INVALID_OR_EXPIRED'),
+      );
+
+      expect(failure.kind, SyncFailureKind.auth);
+      expect(failure.isRetryable, isTrue);
+    });
+
+    test('WORKER_AUTH_FAILED is a permanent, explained rejection', () {
+      final failure = classifySyncError(
+        const SapBusinessError('WORKER_AUTH_FAILED'),
+      );
+
+      expect(failure.kind, SyncFailureKind.permanent);
+      expect(failure.message, contains('Mật khẩu xác nhận'));
+    });
+
+    test(
+      'BUSINESS_VALIDATION_FAILED is permanent with an explained message',
+      () {
+        final failure = classifySyncError(
+          const SapBusinessError('BUSINESS_VALIDATION_FAILED'),
+        );
+
+        expect(failure.kind, SyncFailureKind.permanent);
+        expect(failure.message, isNot(contains('BUSINESS_VALIDATION_FAILED')));
+      },
+    );
+
+    test(
+      'an unrecognized code still fails permanent, code visible for support',
+      () {
+        final failure = classifySyncError(
+          const SapBusinessError('SOME_NEW_CODE_NOT_IN_THE_TABLE'),
+        );
+
+        expect(failure.kind, SyncFailureKind.permanent);
+        expect(failure.message, contains('SOME_NEW_CODE_NOT_IN_THE_TABLE'));
+      },
+    );
+
+    test(
+      'a SYNC_RECEIPT ambiguity SAP could not resolve stays queued, not FAILED',
+      () {
+        final failure = classifySyncError(
+          const SapReceiptUnconfirmedException('SYNC_RECEIPT_NOT_FOUND'),
+        );
+
+        expect(failure.kind, SyncFailureKind.transient);
+        expect(failure.isRetryable, isTrue);
+      },
+    );
+
+    test('a missing worker password needs a human, not an automatic retry', () {
+      final failure = classifySyncError(
+        const WorkerVerificationRequiredException(),
+      );
+
+      expect(failure.kind, SyncFailureKind.needsVerification);
+      expect(failure.isRetryable, isFalse);
     });
   });
 

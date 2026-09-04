@@ -9,9 +9,38 @@ class AppConfig {
   );
   static String get appName => _normalizeEnvValue(_appName);
 
-  /// SAP OData ZUI_USER_QR_API Base URL
+  /// Legacy OData V2 base URL (`ZUI_USER_QR_API`).
+  ///
+  /// That service does not exist in the real backend — the actual mobile
+  /// surface is the two RAP OData V4 services below (`ZUI_MOB_AUTH`,
+  /// `ZUI_PP_OPALLOC`). Kept only so existing config/tests that read it don't
+  /// break; nothing in the app calls it anymore.
+  @Deprecated('Use sapAuthServiceUrl / sapPpOpAllocServiceUrl instead.')
   static const String _sapBaseUrl = String.fromEnvironment('SAP_BASE_URL');
+  @Deprecated('Use sapAuthServiceUrl / sapPpOpAllocServiceUrl instead.')
   static String get sapBaseUrl => _normalizeEnvValue(_sapBaseUrl);
+
+  /// Full service root for `ZUI_MOB_AUTH` (login/refresh/logout/changePassword).
+  ///
+  /// ABAP Cloud OData V4 service roots typically look like
+  /// `/sap/opu/odata4/sap/<binding>/srvd_a2x/sap/<service_definition>/0001/`,
+  /// but the exact binding name is assigned when the service is published on
+  /// the target tenant and isn't fixed by the service definition alone — copy
+  /// it from the tenant's Communication Arrangement / Service Binding, not
+  /// from this default.
+  static const String _sapAuthServiceUrl = String.fromEnvironment(
+    'SAP_AUTH_SERVICE_URL',
+  );
+  static String get sapAuthServiceUrl => _normalizeEnvValue(_sapAuthServiceUrl);
+
+  /// Full service root for `ZUI_PP_OPALLOC` (submitInitialAssign/
+  /// submitConfirm/submitRecall/submitReverse/getSyncStatus/getWorkHistory).
+  /// See [sapAuthServiceUrl] for the URL-shape caveat.
+  static const String _sapPpOpAllocServiceUrl = String.fromEnvironment(
+    'SAP_PP_OPALLOC_SERVICE_URL',
+  );
+  static String get sapPpOpAllocServiceUrl =>
+      _normalizeEnvValue(_sapPpOpAllocServiceUrl);
 
   /// SAP Basic Authentication User
   static const String _sapBasicAuthUser = String.fromEnvironment(

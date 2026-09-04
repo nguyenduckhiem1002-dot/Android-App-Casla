@@ -140,6 +140,11 @@ class UserSession {
   final String teamName;
   final String email;
   final String accessToken;
+
+  /// Rotates on every `refresh` call — SyncSessionAdapter overwrites this
+  /// after each successful refresh, since the old value is single-use and
+  /// rejected on the next attempt.
+  final String refreshToken;
   final bool passwordChangeRequired;
   final UserRole role;
   final Set<Permission> permissions;
@@ -152,11 +157,29 @@ class UserSession {
     required this.teamName,
     this.email = '',
     this.accessToken = '',
+    this.refreshToken = '',
     this.passwordChangeRequired = false,
     required this.role,
     required this.permissions,
     this.toIds = const [],
   });
+
+  UserSession copyWithTokens({
+    required String accessToken,
+    required String refreshToken,
+  }) => UserSession(
+    id: id,
+    maNv: maNv,
+    fullName: fullName,
+    teamName: teamName,
+    email: email,
+    accessToken: accessToken,
+    refreshToken: refreshToken,
+    passwordChangeRequired: passwordChangeRequired,
+    role: role,
+    permissions: permissions,
+    toIds: toIds,
+  );
 
   String get userName => fullName;
 
