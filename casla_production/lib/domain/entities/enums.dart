@@ -78,7 +78,14 @@ enum Permission {
   viewTeamProduction,
   viewEmployeeHistory,
   viewSyncStatus,
-  switchUser;
+  switchUser,
+  // Real FuncIDs from ZUI_PP_OPALLOC's getWorkHistory (zcl_pp_work_history) —
+  // a separate RBAC axis from the write permissions above. An account can
+  // hold either without the other: PP_HIST_SELF only ever returns that
+  // account's own rows (WorkerID sent from the app is ignored server-side),
+  // PP_HIST_TEAM returns whoever the account booked as a supervisor.
+  viewOwnProductionHistory,
+  viewTeamProductionHistory;
 
   String get code {
     switch (this) {
@@ -98,6 +105,10 @@ enum Permission {
         return 'VIEW_SYNC_STATUS';
       case Permission.switchUser:
         return 'SWITCH_USER';
+      case Permission.viewOwnProductionHistory:
+        return 'PP_HIST_SELF';
+      case Permission.viewTeamProductionHistory:
+        return 'PP_HIST_TEAM';
     }
   }
 }

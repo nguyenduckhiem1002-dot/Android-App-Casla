@@ -4,6 +4,7 @@
 // Spec: Section 9.1
 
 import '../entities/entities.dart';
+import '../entities/work_history.dart';
 
 /// Authentication & session management
 abstract class AuthRepository {
@@ -69,4 +70,12 @@ abstract class RecallRepository {
   });
 
   Future<double> getRecalledQuantity(String assignmentId);
+}
+
+/// Read-only production history — `ZUI_PP_OPALLOC.getWorkHistory`.
+///
+/// Scope (self vs. team) is decided entirely server-side from the account's
+/// RBAC functions; this repository never sends a worker id to filter by.
+abstract class WorkHistoryRepository {
+  Future<WorkHistoryResult> getWorkHistory({required HistoryRange range});
 }

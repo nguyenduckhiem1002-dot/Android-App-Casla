@@ -24,6 +24,7 @@ class AppState extends ChangeNotifier {
   late final AssignmentRepositoryImpl assignmentRepo;
   late final ProductionRepositoryImpl productionRepo;
   late final RecallRepositoryImpl recallRepo;
+  late final WorkHistoryRepositoryImpl workHistoryRepo;
   late final SapPpOpAllocGateway sapGateway;
   late final SyncEngine syncEngine;
 
@@ -41,6 +42,7 @@ class AppState extends ChangeNotifier {
     assignmentRepo = AssignmentRepositoryImpl(db, gateway: sapGateway);
     productionRepo = ProductionRepositoryImpl(db, gateway: sapGateway);
     recallRepo = RecallRepositoryImpl(db, gateway: sapGateway);
+    workHistoryRepo = WorkHistoryRepositoryImpl(sapGateway);
 
     // Drains anything a write's immediate push left queued — offline at the
     // moment of write, a transient SAP error, or a token that needed a
