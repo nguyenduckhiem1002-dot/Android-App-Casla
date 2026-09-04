@@ -61,6 +61,8 @@ val productionKeyPassword = configuredValue(
     gradlePropertyName = "CASLA_ANDROID_KEY_PASSWORD",
     localPropertyName = "keyPassword",
 )
+val productionDemoDataEnabled =
+    dartDefines["ENABLE_DEMO_DATA"]?.equals("true", ignoreCase = true) == true
 
 val productionSigningReady = listOf(
     productionStoreFile,
@@ -144,7 +146,7 @@ android {
 
 val verifyCaslaSigning by tasks.registering {
     group = "verification"
-    description = "Fail closed unless the production Android identity and signing inputs are configured."
+    description = "Fail closed unless the production Android identity, signing inputs and data mode are configured."
 
     doLast {
         val problems = mutableListOf<String>()
@@ -164,6 +166,9 @@ val verifyCaslaSigning by tasks.registering {
         }
         if (productionKeyPassword.isNullOrBlank()) {
             problems += "CASLA_ANDROID_KEY_PASSWORD/keyPassword is missing"
+        }
+        if (productionDemoDataEnabled) {
+            problems += "ENABLE_DEMO_DATA must not be true for a production release"
         }
 
         if (problems.isNotEmpty()) {
