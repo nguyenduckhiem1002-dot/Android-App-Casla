@@ -37,12 +37,11 @@ Future<void> showChangePasswordDialog(
 
             // Validation Rules:
             // 1. All fields non-empty
-            // 2. newPassword >= 8 characters
-            // 3. confirmPassword == newPassword
-            // 4. newPassword != current (new password cannot match old password)
+            // 2. confirmPassword == newPassword
+            // 3. newPassword != current (new password cannot match old password)
             final isFormValid =
                 current.isNotEmpty &&
-                newPwd.length >= 8 &&
+                newPwd.isNotEmpty &&
                 confirmPwd == newPwd &&
                 newPwd != current;
 
@@ -104,8 +103,6 @@ Future<void> showChangePasswordDialog(
             if (current.isNotEmpty && newPwd.isNotEmpty) {
               if (newPwd == current) {
                 helperWarning = 'Mật khẩu mới không được trùng với mật khẩu cũ';
-              } else if (newPwd.length < 8) {
-                helperWarning = 'Mật khẩu mới phải có ít nhất 8 ký tự';
               } else if (confirmPwd.isNotEmpty && confirmPwd != newPwd) {
                 helperWarning = 'Mật khẩu xác nhận không khớp';
               }
@@ -230,7 +227,7 @@ Future<void> showChangePasswordDialog(
                       obscureText: obscureNew,
                       onChanged: (_) => setState(() {}),
                       decoration: InputDecoration(
-                        hintText: 'Tối thiểu 8 ký tự',
+                        hintText: 'Nhập mật khẩu mới',
                         suffixIcon: IconButton(
                           icon: Icon(
                             obscureNew
