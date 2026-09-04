@@ -9,7 +9,7 @@
 import 'package:sqflite/sqflite.dart';
 
 /// Bump on every schema change and add the matching step to [migrate].
-const int schemaVersion = 2;
+const int schemaVersion = 3;
 
 /// Tables holding transactions that must survive a restart until SAP confirms
 /// them. The retention policy in Spec 4.7 forbids clearing these.
@@ -20,6 +20,59 @@ const Set<String> durableTransactionTables = {
   'sync_queue',
   'audit_log',
 };
+
+const List<String> _workHistoryCacheStatements = [
+  '''
+  CREATE TABLE work_history_cache_meta (
+    cache_key TEXT PRIMARY KEY,
+    subject_id TEXT NOT NULL,
+    range_code TEXT NOT NULL,
+    request_date_from TEXT,
+    request_date_to TEXT,
+    scope_code TEXT NOT NULL,
+    result_date_from TEXT NOT NULL,
+    result_date_to TEXT NOT NULL,
+    is_truncated INTEGER NOT NULL DEFAULT 0,
+    fetched_at_utc INTEGER NOT NULL
+  )
+  ''',
+  'CREATE INDEX idx_work_history_meta_subject ON work_history_cache_meta(subject_id, fetched_at_utc)',
+  '''
+  CREATE TABLE work_history_cache_entries (
+    cache_key TEXT NOT NULL REFERENCES work_history_cache_meta(cache_key) ON DELETE CASCADE,
+    sequence_no INTEGER NOT NULL,
+    transaction_uuid TEXT NOT NULL,
+    execution_date TEXT NOT NULL,
+    worker_id TEXT NOT NULL,
+    worker_name TEXT NOT NULL,
+    production_order TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    plant TEXT NOT NULL,
+    work_center TEXT NOT NULL,
+    transaction_type TEXT NOT NULL,
+    quantity REAL NOT NULL,
+    unit_of_measure TEXT NOT NULL,
+    transaction_status TEXT NOT NULL,
+    PRIMARY KEY(cache_key, sequence_no)
+  )
+  ''',
+  'CREATE INDEX idx_work_history_entries_lookup ON work_history_cache_entries(cache_key, execution_date)',
+  '''
+  CREATE TABLE work_history_cache_workers (
+    cache_key TEXT NOT NULL REFERENCES work_history_cache_meta(cache_key) ON DELETE CASCADE,
+    sequence_no INTEGER NOT NULL,
+    worker_id TEXT NOT NULL,
+    worker_name TEXT NOT NULL,
+    assigned_quantity REAL NOT NULL,
+    completed_quantity REAL NOT NULL,
+    remaining_quantity REAL NOT NULL,
+    unit_of_measure TEXT NOT NULL,
+    transaction_count INTEGER NOT NULL,
+    PRIMARY KEY(cache_key, sequence_no)
+  )
+  ''',
+  'CREATE INDEX idx_work_history_workers_lookup ON work_history_cache_workers(cache_key, worker_id)',
+];
 
 const List<String> _createStatements = [
   // ─── Master data ────────────────────────────────────────────────────
@@ -140,6 +193,10 @@ const List<String> _createStatements = [
   ''',
   'CREATE INDEX idx_recall_assignment ON recall_records(phan_cong_id)',
 
+  // Read-only SAP report cache. It is intentionally not part of
+  // durableTransactionTables: a cache can be rebuilt, queued writes cannot.
+  ..._workHistoryCacheStatements,
+
   // ─── Sync queue ─────────────────────────────────────────────────────
   // `status` is stored rather than derived from `last_error_code`, because a
   // transient network failure must stay PENDING (the engine retries it) while a
@@ -201,6 +258,7 @@ Future<void> createSchema(Database db) async {
 /// Adding `2` here means "run this to go from version 1 to version 2".
 const Map<int, Future<void> Function(Database)> _migrations = {
   1: _upgradeV1ToV2,
+  2: _upgradeV2ToV3,
 };
 
 /// v2 — SAP live keys on `orders`.
@@ -213,6 +271,16 @@ const Map<int, Future<void> Function(Database)> _migrations = {
 Future<void> _upgradeV1ToV2(Database db) async {
   await db.execute('ALTER TABLE orders ADD COLUMN production_order TEXT');
   await db.execute('ALTER TABLE orders ADD COLUMN operation TEXT');
+}
+
+/// v3 — account-isolated WorkHistory cache.
+///
+/// The cache is additive only. No durable transaction table is rebuilt or
+/// copied, so upgrading a PDA cannot drop queued production writes.
+Future<void> _upgradeV2ToV3(Database db) async {
+  for (final statement in _workHistoryCacheStatements) {
+    await db.execute(statement);
+  }
 }
 
 /// Walks a database from [from] up to [to], one version at a time.

@@ -78,17 +78,23 @@ class _S06SupervisorOverviewScreenState
 
   Future<WorkHistoryResult> _fetchHistory() async {
     try {
-      final res = await ref.read(appStateProvider).workHistoryRepo.getWorkHistory(
-        range: HistoryRange.custom,
-        dateFrom: _selectedDate,
-        dateTo: _selectedDate,
-      );
+      final res = await ref
+          .read(appStateProvider)
+          .workHistoryRepo
+          .getWorkHistory(
+            range: HistoryRange.custom,
+            dateFrom: _selectedDate,
+            dateTo: _selectedDate,
+          );
       for (final w in res.workers) {
-        await ref.read(appStateProvider).db.ensureEmployeeExists(
-          id: w.workerId,
-          maNv: w.workerId,
-          name: w.workerName.isNotEmpty ? w.workerName : w.workerId,
-        );
+        await ref
+            .read(appStateProvider)
+            .db
+            .ensureEmployeeExists(
+              id: w.workerId,
+              maNv: w.workerId,
+              name: w.workerName.isNotEmpty ? w.workerName : w.workerId,
+            );
       }
       return res;
     } catch (e) {
@@ -469,7 +475,8 @@ class _S06SupervisorOverviewScreenState
                             orElse: () => null,
                           );
 
-                      final matchingLocal = byWorkerLocal[sw.workerId] ??
+                      final matchingLocal =
+                          byWorkerLocal[sw.workerId] ??
                           (localEmp != null
                               ? byWorkerLocal[localEmp['id']]
                               : null) ??
@@ -508,7 +515,8 @@ class _S06SupervisorOverviewScreenState
                         continue;
                       }
 
-                      final matchingLocal = byWorkerLocal[empId] ??
+                      final matchingLocal =
+                          byWorkerLocal[empId] ??
                           byWorkerLocal[empCode] ??
                           const <Assignment>[];
 
@@ -526,28 +534,27 @@ class _S06SupervisorOverviewScreenState
                             workerAssigned,
                             recalledQty,
                           );
-                      final remainingQty =
-                          ProductionMath.calculateRemaining(
-                            effectiveQty,
-                            completedQty,
-                          );
+                      final remainingQty = ProductionMath.calculateRemaining(
+                        effectiveQty,
+                        completedQty,
+                      );
 
-                      workerMap[empCode.isNotEmpty ? empCode : empId] =
-                          _WorkerOverviewData(
-                            id: empId,
-                            code: empCode,
-                            name: emp['ten'] ?? 'Nhân viên',
-                            department:
-                                emp['bo_phan'] ?? 'Công nhân sản xuất',
-                            assignedQty: effectiveQty,
-                            completedQty: completedQty,
-                            remainingQty: remainingQty,
-                            uom: matchingLocal.isNotEmpty
-                                ? matchingLocal.first.uom
-                                : 'cái',
-                            sapEntries: const [],
-                            localAssignments: matchingLocal,
-                          );
+                      workerMap[empCode.isNotEmpty
+                          ? empCode
+                          : empId] = _WorkerOverviewData(
+                        id: empId,
+                        code: empCode,
+                        name: emp['ten'] ?? 'Nhân viên',
+                        department: emp['bo_phan'] ?? 'Công nhân sản xuất',
+                        assignedQty: effectiveQty,
+                        completedQty: completedQty,
+                        remainingQty: remainingQty,
+                        uom: matchingLocal.isNotEmpty
+                            ? matchingLocal.first.uom
+                            : 'cái',
+                        sapEntries: const [],
+                        localAssignments: matchingLocal,
+                      );
                     }
 
                     // Calculate KPIs
@@ -692,12 +699,10 @@ class _S06SupervisorOverviewScreenState
                                         _workerStatusBadge(worker);
 
                                     return Container(
-                                      margin:
-                                          const EdgeInsets.only(bottom: 10),
+                                      margin: const EdgeInsets.only(bottom: 10),
                                       child: Material(
                                         color: CaslaColors.surface,
-                                        borderRadius:
-                                            BorderRadius.circular(12),
+                                        borderRadius: BorderRadius.circular(12),
                                         child: InkWell(
                                           onTap: () {
                                             context.push(
@@ -720,8 +725,9 @@ class _S06SupervisorOverviewScreenState
                                               },
                                             );
                                           },
-                                          borderRadius:
-                                              BorderRadius.circular(12),
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
                                           child: Container(
                                             padding: const EdgeInsets.all(14),
                                             decoration: BoxDecoration(
@@ -752,8 +758,7 @@ class _S06SupervisorOverviewScreenState
                                                             overflow:
                                                                 TextOverflow
                                                                     .ellipsis,
-                                                            style:
-                                                                const TextStyle(
+                                                            style: const TextStyle(
                                                               fontFamily:
                                                                   'Manrope',
                                                               fontWeight:
@@ -773,8 +778,7 @@ class _S06SupervisorOverviewScreenState
                                                             overflow:
                                                                 TextOverflow
                                                                     .ellipsis,
-                                                            style:
-                                                                const TextStyle(
+                                                            style: const TextStyle(
                                                               fontFamily:
                                                                   'monospace',
                                                               fontSize: 11.5,
@@ -798,8 +802,7 @@ class _S06SupervisorOverviewScreenState
                                                 ClipRRect(
                                                   borderRadius:
                                                       BorderRadius.circular(8),
-                                                  child:
-                                                      LinearProgressIndicator(
+                                                  child: LinearProgressIndicator(
                                                     value:
                                                         worker.completionRate,
                                                     minHeight: 7,
@@ -809,8 +812,9 @@ class _S06SupervisorOverviewScreenState
                                                         const AlwaysStoppedAnimation<
                                                           Color
                                                         >(
-                                                      CaslaColors.accentGold,
-                                                    ),
+                                                          CaslaColors
+                                                              .accentGold,
+                                                        ),
                                                   ),
                                                 ),
                                                 const SizedBox(height: 10),

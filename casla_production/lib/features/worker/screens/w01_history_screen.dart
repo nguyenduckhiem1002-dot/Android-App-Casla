@@ -34,7 +34,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
     _future = _load();
   }
 
-  Future<WorkHistoryResult> _load() {
+  Future<WorkHistoryResult> _load({bool forceRefresh = false}) {
     return ref
         .read(appStateProvider)
         .workHistoryRepo
@@ -42,6 +42,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
           range: _range,
           dateFrom: _range == HistoryRange.custom ? _customDateFrom : null,
           dateTo: _range == HistoryRange.custom ? _customDateTo : null,
+          forceRefresh: forceRefresh,
         );
   }
 
@@ -58,9 +59,27 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
   }
 
   Future<void> _refresh() async {
-    final next = _load();
-    setState(() => _future = next);
-    await next;
+    try {
+      final result = await _load(forceRefresh: true);
+      if (!mounted) return;
+      setState(() => _future = Future.value(result));
+    } catch (_) {
+      if (!mounted) return;
+      final cached = _load();
+      setState(() => _future = cached);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Không thể làm mới từ SAP. Đang hiển thị dữ liệu gần nhất trên máy.',
+          ),
+        ),
+      );
+      try {
+        await cached;
+      } catch (_) {
+        // No cached snapshot exists; FutureBuilder will render its normal error.
+      }
+    }
   }
 
   Future<void> _pickSingleDate() async {
@@ -100,14 +119,12 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
 
   Future<void> _pickDateRange() async {
     final now = DateTime.now();
-    final initialRange = (_customDateFrom != null &&
+    final initialRange =
+        (_customDateFrom != null &&
             _customDateTo != null &&
             !_customDateFrom!.isAtSameMomentAs(_customDateTo!))
         ? DateTimeRange(start: _customDateFrom!, end: _customDateTo!)
-        : DateTimeRange(
-            start: now.subtract(const Duration(days: 7)),
-            end: now,
-          );
+        : DateTimeRange(start: now.subtract(const Duration(days: 7)), end: now);
 
     final picked = await showDateRangePicker(
       context: context,
@@ -151,8 +168,16 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
 
     setState(() {
       _range = HistoryRange.custom;
-      _customDateFrom = DateTime(picked.start.year, picked.start.month, picked.start.day);
-      _customDateTo = DateTime(picked.end.year, picked.end.month, picked.end.day);
+      _customDateFrom = DateTime(
+        picked.start.year,
+        picked.start.month,
+        picked.start.day,
+      );
+      _customDateTo = DateTime(
+        picked.end.year,
+        picked.end.month,
+        picked.end.day,
+      );
       _future = _load();
     });
   }
@@ -195,10 +220,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
               const SizedBox(height: 4),
               const Text(
                 'Chọn ngày cụ thể hoặc khoảng ngày (tối đa 1 tháng)',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: CaslaColors.muted,
-                ),
+                style: TextStyle(fontSize: 13, color: CaslaColors.muted),
               ),
               const SizedBox(height: 18),
               _buildOptionTile(

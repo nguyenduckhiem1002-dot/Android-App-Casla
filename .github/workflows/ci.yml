@@ -2,7 +2,7 @@ name: Flutter CI
 
 on:
   push:
-    branches: [main, master, develop]
+    branches: [main, master, develop, 'chatgpt/**']
   pull_request:
     branches: [main, master, develop]
 
@@ -42,6 +42,29 @@ jobs:
 
       - name: Test
         run: flutter test --no-pub
+
+  android:
+    name: Android / PDA build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: casla_production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.44.8
+          cache: true
+          cache-key: flutter-${{ runner.os }}-${{ hashFiles('casla_production/pubspec.lock') }}
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Compile Android APK including native scanner bridge
+        run: flutter build apk --debug --no-pub
 
   ios:
     name: iOS / Xcode build
