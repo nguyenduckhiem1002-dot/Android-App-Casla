@@ -43,6 +43,9 @@ jobs:
       - name: Test
         run: flutter test --no-pub
 
+      - name: Regression-test release preflight
+        run: bash tool/test_release_preflight.sh
+
   android:
     name: Android / PDA build
     runs-on: ubuntu-latest
