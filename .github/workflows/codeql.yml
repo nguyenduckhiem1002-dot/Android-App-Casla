@@ -23,10 +23,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           flutter-version: 3.44.8
           cache: true
@@ -37,7 +37,7 @@ jobs:
         run: flutter pub get
 
       - name: Initialize CodeQL for Kotlin
-        uses: github/codeql-action/init@v4
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
         with:
           languages: java-kotlin
           build-mode: manual
@@ -49,7 +49,7 @@ jobs:
           --dart-define=SAP_TRANSPORT_AUTH_MODE=gateway
 
       - name: Analyze Kotlin
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
         with:
           category: /language:java-kotlin
 
@@ -58,10 +58,10 @@ jobs:
     runs-on: macos-14
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           flutter-version: 3.44.8
           cache: true
@@ -80,7 +80,7 @@ jobs:
           --dart-define=SAP_TRANSPORT_AUTH_MODE=gateway
 
       - name: Initialize CodeQL for Swift
-        uses: github/codeql-action/init@v4
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
         with:
           languages: swift
           build-mode: manual
@@ -103,6 +103,6 @@ jobs:
           clean build
 
       - name: Analyze Swift
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
         with:
           category: /language:swift
