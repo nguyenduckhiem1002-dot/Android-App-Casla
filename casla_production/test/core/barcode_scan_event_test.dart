@@ -17,7 +17,7 @@ void main() {
       expect(event.timestamp.millisecondsSinceEpoch, 1700000000000);
     });
 
-    test('rejects missing or unknown source instead of defaulting to hardware', () {
+    test('rejects missing or unknown source', () {
       expect(
         () => BarcodeScanEvent.fromPlatform({'rawValue': 'NV123'}),
         throwsFormatException,
@@ -31,7 +31,7 @@ void main() {
       );
     });
 
-    test('rejects non-string, oversized and NUL-containing barcode data', () {
+    test('rejects invalid barcode data', () {
       final oversized = List.filled(
         BarcodeScanEvent.maxRawValueCharacters + 1,
         'A',
