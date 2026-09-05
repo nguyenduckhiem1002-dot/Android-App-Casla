@@ -1,6 +1,6 @@
 # CipherLab RS38 scanner security
 
-The Android scanner integration deliberately avoids bundling CipherLab's proprietary Reader SDK. It receives ReaderConfig/Reader Service barcode output through the documented broadcast action:
+The Android scanner integration deliberately avoids bundling CipherLab's proprietary Reader SDK. It receives Reader Service barcode output through the documented broadcast action:
 
 ```text
 com.cipherlab.barcodebaseapi.PASS_DATA_2_APP
@@ -15,16 +15,14 @@ The broadcast is **input**, not authorization. A scan may select a worker/order 
 The app applies the following controls before a hardware scan reaches Flutter:
 
 1. The receiver exists only while the activity is started **and** Flutter has an active scanner listener.
-2. On Android 14/API 34 and newer, `BroadcastReceiver.getSentFromPackage()` must identify one of the known CipherLab sender packages:
-   - `com.cipherlab.clbarcodeservice` — Reader Service.
-   - `sw.programme.readerconfig` — ReaderConfig.
+2. On Android 14/API 34 and newer, `BroadcastReceiver.getSentFromPackage()` must identify `com.cipherlab.clbarcodeservice`, the CipherLab Reader Service package documented by the vendor. A null or different sender is rejected.
 3. Only `Decoder_Data` is accepted. The bridge deliberately does not fall back to `Original_Decoder_Data`, because CipherLab documents `Decoder_Data` as the value after ReaderConfig processing.
 4. Barcode values must be `String`/`ByteArray`, are bounded to 4096 characters / 8192 bytes, and embedded NUL is rejected.
 5. Symbology metadata is type-checked and bounded.
 6. Flutter validates the platform event envelope again and rejects unknown sources instead of defaulting them to `hardware`.
 7. Worker QR parsing has an independent 4096-character/NUL bound and extracts only an employee code. Master data and permissions are resolved separately.
 
-The pure native policy is covered by JVM unit tests in `CipherLabBroadcastPolicyTest`; CI runs `:app:testProductionDebugUnitTest` before the production-flavor APK build.
+The pure native policy is covered by JVM unit tests in `CipherLabBroadcastPolicyTest`; CI runs `:app:testProductionDebugUnitTest` after generating the Android wrapper through the production-flavor build.
 
 ## Android 13 and older: residual risk
 
