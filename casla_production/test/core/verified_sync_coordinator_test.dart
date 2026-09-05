@@ -22,9 +22,8 @@ void main() {
     }
   });
 
-  Future<({String assignmentQueueId, String productionQueueId})> seedWorkerChain({
-    String suffix = 'chain',
-  }) async {
+  Future<({String assignmentQueueId, String productionQueueId})>
+  seedWorkerChain({String suffix = 'chain'}) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     final assignmentId = 'asg-$suffix';
     final productionId = 'prod-$suffix';
@@ -145,11 +144,8 @@ void main() {
       },
     );
 
-    final report =
-        await VerifiedSyncCoordinator(
-          database: db,
-          gateway: gateway,
-        ).syncVerifiedWorkerChain(
+    final report = await VerifiedSyncCoordinator(database: db, gateway: gateway)
+        .syncVerifiedWorkerChain(
           anchorQueueItemId: chain.assignmentQueueId,
           workerPassword: 'fresh-password',
         );
@@ -171,11 +167,8 @@ void main() {
       },
     );
 
-    final report =
-        await VerifiedSyncCoordinator(
-          database: db,
-          gateway: gateway,
-        ).syncVerifiedWorkerChain(
+    final report = await VerifiedSyncCoordinator(database: db, gateway: gateway)
+        .syncVerifiedWorkerChain(
           anchorQueueItemId: chain.productionQueueId,
           workerPassword: 'fresh-password',
         );
@@ -200,11 +193,8 @@ void main() {
       },
     );
 
-    final report =
-        await VerifiedSyncCoordinator(
-          database: db,
-          gateway: gateway,
-        ).syncVerifiedWorkerChain(
+    final report = await VerifiedSyncCoordinator(database: db, gateway: gateway)
+        .syncVerifiedWorkerChain(
           anchorQueueItemId: chain.assignmentQueueId,
           workerPassword: 'fresh-password',
         );
