@@ -71,10 +71,8 @@ void main() {
       final failure = await pushAndRecord(
         database: db,
         gateway: _Gateway(
-          onPush: (_) async => const SapWriteResult(
-            sapId: 'SAP-EXISTING',
-            wasDuplicate: true,
-          ),
+          onPush: (_) async =>
+              const SapWriteResult(sapId: 'SAP-EXISTING', wasDuplicate: true),
         ),
         backoff: SyncBackoff(),
         queueItem: queueItem,
