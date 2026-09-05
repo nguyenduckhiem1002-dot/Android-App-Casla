@@ -22,8 +22,9 @@ void main() {
     }
   });
 
-  Future<({String assignmentQueueId, String productionQueueId})>
-  seedWorkerChain({String suffix = 'chain'}) async {
+  Future<({String assignmentQueueId, String productionQueueId})> seedWorkerChain({
+    String suffix = 'chain',
+  }) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     final assignmentId = 'asg-$suffix';
     final productionId = 'prod-$suffix';
@@ -94,31 +95,40 @@ void main() {
     ),
   );
 
-  test('pushes assignment before descendants with the same fresh password', () async {
-    final chain = await seedWorkerChain();
-    final calls = <SyncPushRequest>[];
-    final gateway = _RecordingGateway(
-      onPush: (request) async {
-        calls.add(request);
-        return SapWriteResult(sapId: 'SAP-${request.entityId}');
-      },
-    );
+  test(
+    'pushes assignment before descendants with the same fresh password',
+    () async {
+      final chain = await seedWorkerChain();
+      final calls = <SyncPushRequest>[];
+      final gateway = _RecordingGateway(
+        onPush: (request) async {
+          calls.add(request);
+          return SapWriteResult(sapId: 'SAP-${request.entityId}');
+        },
+      );
 
-    final report = await VerifiedSyncCoordinator(database: db, gateway: gateway)
-        .syncVerifiedWorkerChain(
-          anchorQueueItemId: chain.productionQueueId,
-          workerPassword: 'fresh-password',
-        );
+      final report =
+          await VerifiedSyncCoordinator(
+            database: db,
+            gateway: gateway,
+          ).syncVerifiedWorkerChain(
+            anchorQueueItemId: chain.productionQueueId,
+            workerPassword: 'fresh-password',
+          );
 
-    expect(report.outcome, VerifiedSyncOutcome.synced);
-    expect(report.syncedCount, 2);
-    expect(calls.map((request) => request.entityType), [
-      'ASSIGNMENT',
-      'PRODUCTION_RECORD',
-    ]);
-    expect(calls.every((request) => request.workerPassword == 'fresh-password'), isTrue);
-    expect(await db.watchSyncQueue().first, isEmpty);
-  });
+      expect(report.outcome, VerifiedSyncOutcome.synced);
+      expect(report.syncedCount, 2);
+      expect(calls.map((request) => request.entityType), [
+        'ASSIGNMENT',
+        'PRODUCTION_RECORD',
+      ]);
+      expect(
+        calls.every((request) => request.workerPassword == 'fresh-password'),
+        isTrue,
+      );
+      expect(await db.watchSyncQueue().first, isEmpty);
+    },
+  );
 
   test('refreshes once after auth failure then resumes the chain', () async {
     final chain = await seedWorkerChain(suffix: 'refresh');
@@ -135,8 +145,11 @@ void main() {
       },
     );
 
-    final report = await VerifiedSyncCoordinator(database: db, gateway: gateway)
-        .syncVerifiedWorkerChain(
+    final report =
+        await VerifiedSyncCoordinator(
+          database: db,
+          gateway: gateway,
+        ).syncVerifiedWorkerChain(
           anchorQueueItemId: chain.assignmentQueueId,
           workerPassword: 'fresh-password',
         );
@@ -158,8 +171,11 @@ void main() {
       },
     );
 
-    final report = await VerifiedSyncCoordinator(database: db, gateway: gateway)
-        .syncVerifiedWorkerChain(
+    final report =
+        await VerifiedSyncCoordinator(
+          database: db,
+          gateway: gateway,
+        ).syncVerifiedWorkerChain(
           anchorQueueItemId: chain.productionQueueId,
           workerPassword: 'fresh-password',
         );
@@ -184,8 +200,11 @@ void main() {
       },
     );
 
-    final report = await VerifiedSyncCoordinator(database: db, gateway: gateway)
-        .syncVerifiedWorkerChain(
+    final report =
+        await VerifiedSyncCoordinator(
+          database: db,
+          gateway: gateway,
+        ).syncVerifiedWorkerChain(
           anchorQueueItemId: chain.assignmentQueueId,
           workerPassword: 'fresh-password',
         );
