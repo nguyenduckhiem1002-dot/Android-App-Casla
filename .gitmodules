@@ -1,0 +1,3 @@
+[submodule "abap_casla_app_mobile"]
+	path = abap_casla_app_mobile
+	url = https://github.com/nguyenduckhiem1002-dot/abap_casla_app_mobile.git
