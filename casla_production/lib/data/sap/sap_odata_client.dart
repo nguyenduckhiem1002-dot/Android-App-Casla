@@ -1,11 +1,13 @@
 // SAP Integration — OData Client
 // Spec: Section 9, 7.2 (dio)
-// Configurable base URL, auth token interceptor, CSRF token handling, logging with redaction
+// Configurable base URL, transport auth, CSRF token handling, logging with redaction
 
 import 'dart:convert';
-import 'package:flutter/foundation.dart';
+
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:logger/logger.dart';
+
 import '../../core/config/app_config.dart';
 
 class SapConfigurationException implements Exception {
@@ -19,16 +21,27 @@ class SapConfigurationException implements Exception {
 
 class SapODataClient {
   final String baseUrl;
+  final SapTransportAuthMode transportAuthMode;
+  final String _basicAuthUser;
+  final String _basicAuthPassword;
   String? _authToken;
   String? _csrfToken;
   List<String>? _cookies;
   late final Dio dio;
   final _logger = Logger(filter: DebugOnlyLogFilter());
 
-  SapODataClient({String? baseUrl, String? authToken})
-    : baseUrl = _normalizeBaseUrl(baseUrl ?? AppConfig.sapBaseUrl) {
+  SapODataClient({
+    String? baseUrl,
+    String? authToken,
+    SapTransportAuthMode? transportAuthMode,
+    String? basicAuthUser,
+    String? basicAuthPassword,
+  }) : baseUrl = _normalizeBaseUrl(baseUrl ?? AppConfig.sapBaseUrl),
+       transportAuthMode = transportAuthMode ?? AppConfig.sapTransportAuthMode,
+       _basicAuthUser = (basicAuthUser ?? AppConfig.sapBasicAuthUser).trim(),
+       _basicAuthPassword =
+           (basicAuthPassword ?? AppConfig.sapBasicAuthPassword).trim() {
     _authToken = authToken;
-    final basicAuthCredentials = _getBasicAuthCredentials();
 
     dio = Dio(
       BaseOptions(
@@ -39,7 +52,7 @@ class SapODataClient {
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
-          'Authorization': 'Basic $basicAuthCredentials',
+          ..._transportHeaders(),
         },
       ),
     );
@@ -47,15 +60,18 @@ class SapODataClient {
     dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) {
-          // Always use Basic Auth header per SAP NetWeaver/OData requirement
-          options.headers['Authorization'] = 'Basic $basicAuthCredentials';
+          // Transport auth is closed and deterministic. In gateway mode an
+          // Authorization header must never be inherited from a previous call
+          // or accidentally reintroduced by a caller.
+          options.headers.remove('Authorization');
+          options.headers.addAll(_transportHeaders());
 
-          // Attach session cookies if present
+          // Attach session cookies if present.
           if (_cookies != null && _cookies!.isNotEmpty) {
             options.headers['Cookie'] = _cookies!.join('; ');
           }
 
-          // Attach CSRF token for non-GET requests
+          // Attach CSRF token for non-GET requests.
           if (options.method != 'GET' && options.method != 'HEAD') {
             if (_csrfToken != null && _csrfToken!.isNotEmpty) {
               options.headers['x-csrf-token'] = _csrfToken;
@@ -145,6 +161,15 @@ class SapODataClient {
     return '$trimmed/';
   }
 
+  Map<String, String> _transportHeaders() {
+    if (transportAuthMode == SapTransportAuthMode.gateway) {
+      return const <String, String>{};
+    }
+    return <String, String>{
+      'Authorization': 'Basic ${_getBasicAuthCredentials()}',
+    };
+  }
+
   void ensureConfigured() {
     final uri = Uri.tryParse(baseUrl);
     final hasHttpHost =
@@ -154,8 +179,7 @@ class SapODataClient {
 
     if (!hasHttpHost) {
       throw const SapConfigurationException(
-        'Không thể kết nối SAP. Vui lòng kiểm tra cấu hình trong file .env '
-        'và chạy ứng dụng với --dart-define-from-file=.env.',
+        'Không thể kết nối SAP. Vui lòng kiểm tra SAP_BASE_URL.',
       );
     }
 
@@ -171,31 +195,47 @@ class SapODataClient {
       );
     }
 
-    if (AppConfig.sapBasicAuthUser.isEmpty ||
-        AppConfig.sapBasicAuthPassword.isEmpty ||
-        AppConfig.sapBasicAuthUser == 'replace-me' ||
-        AppConfig.sapBasicAuthPassword == 'replace-me') {
+    if (kReleaseMode && transportAuthMode != SapTransportAuthMode.gateway) {
       throw const SapConfigurationException(
-        'Thiếu thông tin xác thực SAP trong file .env. Vui lòng kiểm tra '
-        'SAP_BASIC_AUTH_USER và SAP_BASIC_AUTH_PASSWORD.',
+        'Bản phát hành phải dùng SAP_TRANSPORT_AUTH_MODE=gateway để không '
+        'đóng gói shared SAP Basic credential.',
       );
+    }
+
+    switch (transportAuthMode) {
+      case SapTransportAuthMode.basic:
+        if (_basicAuthUser.isEmpty ||
+            _basicAuthPassword.isEmpty ||
+            _basicAuthUser == 'replace-me' ||
+            _basicAuthPassword == 'replace-me') {
+          throw const SapConfigurationException(
+            'Basic mode chỉ dành cho dev/staging và cần '
+            'SAP_BASIC_AUTH_USER/SAP_BASIC_AUTH_PASSWORD hợp lệ.',
+          );
+        }
+      case SapTransportAuthMode.gateway:
+        if (_basicAuthUser.isNotEmpty || _basicAuthPassword.isNotEmpty) {
+          throw const SapConfigurationException(
+            'Gateway mode không cho phép cấu hình SAP_BASIC_AUTH_USER hoặc '
+            'SAP_BASIC_AUTH_PASSWORD trong mobile client.',
+          );
+        }
     }
   }
 
   String _getBasicAuthCredentials() {
-    return base64Encode(
-      utf8.encode(
-        '${AppConfig.sapBasicAuthUser}:${AppConfig.sapBasicAuthPassword}',
-      ),
-    );
+    return base64Encode(utf8.encode('$_basicAuthUser:$_basicAuthPassword'));
   }
 
-  /// Explicitly fetches fresh CSRF Token and Session Cookies from SAP backend.
+  /// Explicitly fetches fresh CSRF Token and Session Cookies from the backend.
+  ///
+  /// In direct Basic mode the mobile authenticates to SAP itself. In gateway
+  /// mode the request intentionally carries no shared Authorization header; the
+  /// trusted gateway is responsible for adding its upstream SAP credential.
   /// Uses a clean standalone Dio instance to avoid interceptor recursion.
   Future<String?> fetchCsrfToken() async {
     try {
       ensureConfigured();
-      final basicAuthCredentials = _getBasicAuthCredentials();
       final cleanDio = Dio(
         BaseOptions(
           baseUrl: baseUrl,
@@ -209,13 +249,13 @@ class SapODataClient {
         options: Options(
           headers: {
             'Accept': '*/*',
-            'Authorization': 'Basic $basicAuthCredentials',
             'x-csrf-token': 'Fetch',
+            ..._transportHeaders(),
           },
         ),
       );
 
-      // Read CSRF Token from response headers
+      // Read CSRF Token from response headers.
       final tokenHeader = response.headers['x-csrf-token'];
       if (tokenHeader != null && tokenHeader.isNotEmpty) {
         final token = tokenHeader.first;
@@ -225,7 +265,7 @@ class SapODataClient {
         }
       }
 
-      // Read Set-Cookie headers for session persistence
+      // Read Set-Cookie headers for session persistence.
       final setCookieHeaders = response.headers['set-cookie'];
       if (setCookieHeaders != null && setCookieHeaders.isNotEmpty) {
         _cookies = setCookieHeaders.map((c) => c.split(';')[0]).toList();
@@ -241,28 +281,23 @@ class SapODataClient {
     }
   }
 
-  /// Update auth token (after login/refresh).
+  /// Update the application session token after login/refresh.
   ///
-  /// WARNING: this token is *not* sent on requests. The request interceptor
-  /// unconditionally sets `Authorization` to the shared Basic service account,
-  /// and SAP receives the per-user token only where a caller passes it
-  /// explicitly as an `access_token` query parameter. So every call reaches SAP
-  /// as the service account, and SAP cannot attribute an action to a person.
-  ///
-  /// Resolving this is task P4-04 in the remediation plan: either send this
-  /// token per request instead of Basic, or drop the field as dead. It is left
-  /// in place for now because changing it alters what SAP sees.
+  /// This token remains part of the existing RAP action payload contract and
+  /// is intentionally not repurposed as an HTTP Bearer token here. Changing
+  /// that would alter the backend authentication contract. Transport mode only
+  /// controls whether the mobile itself carries the shared SAP service account.
   void setAuthToken(String? token) {
     _authToken = token;
   }
 
-  /// Reset CSRF token & cookies (e.g. on logout)
+  /// Reset CSRF token & cookies (e.g. on logout).
   void resetCsrfSession() {
     _csrfToken = null;
     _cookies = null;
   }
 
-  /// Check if client has a valid auth token
+  /// Check if client has a valid application auth token.
   bool get isAuthenticated => _authToken != null && _authToken!.isNotEmpty;
 }
 
