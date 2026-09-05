@@ -31,11 +31,18 @@ Tài liệu này phản ánh trạng thái source hiện tại sau các phase ha
 - Android release guard và cross-platform `tool/verify_transport_security.sh` cấm production chứa shared Basic credential.
 - Existing RAP user access-token payload contract được giữ nguyên; source không tự ý đổi sang HTTP Bearer khi backend chưa đổi contract.
 
-### RS38/PDA
+### RS38/PDA và scanner trust boundary
 
 - Có native CipherLab scanner bridge, hardware-first scanner và camera/manual fallback.
+- Native receiver chỉ tồn tại khi activity đang `started` và Flutter có active scanner listener.
+- Trên Android 14/API 34+, broadcast scanner phải có initial sender package đúng `com.cipherlab.clbarcodeservice`; sender null/lạ bị drop.
+- Chỉ nhận `Decoder_Data` đã qua ReaderConfig processing; không fallback sang `Original_Decoder_Data`.
+- Native payload được type-check và giới hạn 4096 ký tự/8192 byte; embedded NUL bị reject; symbology cũng được giới hạn.
+- Dart platform event parser fail-closed với source lạ, kiểu dữ liệu sai, timestamp/symbology sai và payload quá dài.
+- Worker QR parser có giới hạn input độc lập, chỉ trích xuất mã nhân viên; master data/scope/authorization không lấy từ QR.
+- Có native JVM test cho sender/payload policy và Flutter tests cho event/QR validation.
 - Có scan deduplication, phản hồi haptic/trạng thái, lỗi worker persistent/accessibility và touch target phù hợp PDA.
-- CI compile Android production flavor cùng native scanner bridge.
+- Xem `android/SCANNER_SECURITY.md` cho residual risk và test matrix thiết bị thật.
 
 ### Android release hardening
 
@@ -60,12 +67,14 @@ CI ghim Flutter `3.44.8` và bắt buộc chạy:
 2. `flutter analyze`.
 3. toàn bộ `flutter test`.
 4. Android `productionDebug` build + native RS38 bridge.
-5. Android release signing/identity guard.
-6. Android production demo-data guard.
-7. Android gateway-only/no-Basic transport guard.
-8. iOS release compile không ký.
-9. Xcode archive-setting build validation.
-10. iOS production identity + transport guard.
+5. native scanner trust-policy JVM tests.
+6. Android release signing/identity guard.
+7. Android production demo-data guard.
+8. Android gateway-only/no-Basic transport guard.
+9. iOS release compile không ký.
+10. iOS AOT sentinel scan chứng minh Basic credential define không nằm trong release binary.
+11. Xcode archive-setting build validation.
+12. iOS production identity + transport guard.
 
 Không nâng dependency/toolchain hàng loạt chỉ vì có version mới; mỗi lần nâng phải là PR riêng có full gate tương ứng.
 
@@ -117,11 +126,20 @@ Trước go-live phải có:
 
 ## 3. P1 — Security và vận hành nên hoàn tất trước rollout rộng
 
-### CipherLab broadcast trust boundary
+### CipherLab broadcast — residual risk trên Android 13 trở xuống
 
-Native bridge phải nhận broadcast từ ReaderConfig bên ngoài app; trên Android 13+ receiver hiện cần exported behavior để vendor app có thể gửi scan. Vì vậy vẫn còn trust-boundary risk nếu một app khác có thể spoof broadcast.
+Source đã harden được phần có thể làm chắc chắn mà không phá vendor integration: Android 14+ xác minh initial sender là Reader Service, chỉ nhận processed `Decoder_Data`, giới hạn payload, validate lại ở Dart và không coi scan là authorization.
 
-Không đổi sang `RECEIVER_NOT_EXPORTED` một cách mù vì có thể làm hỏng RS38. Cần xác minh tài liệu/vendor xem có permission, package restriction hoặc signed broadcast contract hay không. Dù vậy barcode vẫn phải qua parser/scope/backend validation; broadcast không được coi là authorization.
+Điểm chưa thể đóng hoàn toàn bằng source hiện tại là **Android 13/API 33 trở xuống**. `BroadcastReceiver.getSentFromPackage()` chỉ có từ API 34; với implicit external broadcast hiện tại, app không có một sender identity tương đương để chứng minh cryptographically ai đã phát broadcast. Do đó các thiết bị này vẫn là `legacy sender-unverified`.
+
+Trước rollout rộng cần xác minh trên firmware RS38 thực tế xem CipherLab có một trong các contract mạnh hơn hay không:
+
+- sender/signature permission cho `PASS_DATA_2_APP`;
+- explicit/package-targeted output có thể authenticate;
+- Reader SDK/service API có trust boundary mạnh hơn;
+- hoặc OS/firmware nâng lên Android 14+ và xác nhận package sender thực tế.
+
+Không đổi sang `RECEIVER_NOT_EXPORTED` một cách mù vì Reader Service nằm ngoài APK và như vậy có thể làm hỏng hardware scanning. Xem `android/SCANNER_SECURITY.md`.
 
 ### GitHub/repository controls
 
@@ -164,7 +182,7 @@ Telemetry source hiện chỉ là privacy-safe aggregate in-memory, chưa tự g
 - [ ] `SAP_BASE_URL` là HTTPS gateway production endpoint.
 - [ ] `verifyCaslaSigning` pass trong authorized release environment.
 - [ ] Signed AAB/APK được xác minh certificate/package trước phân phối.
-- [ ] RS38 physical-device smoke pass.
+- [ ] RS38 physical-device smoke + scanner trust test matrix trong `android/SCANNER_SECURITY.md` đã pass.
 
 ### iOS
 
