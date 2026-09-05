@@ -63,6 +63,10 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Run native scanner trust policy tests
+        working-directory: casla_production/android
+        run: ./gradlew :app:testProductionDebugUnitTest
+
       - name: Compile production flavor APK including native scanner bridge
         run: >-
           flutter build apk --debug --flavor production --no-pub
