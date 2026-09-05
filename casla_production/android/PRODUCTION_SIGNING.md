@@ -40,15 +40,36 @@ keyAlias=...
 keyPassword=...
 ```
 
-The production release configuration never falls back to the Android debug key. Any production release task runs `verifyCaslaSigning` first and fails if the official application ID, keystore, alias, or passwords are missing.
+The production release configuration never falls back to the Android debug key.
+
+## Production SAP transport
+
+Direct Basic transport is retained only for development/staging against SAP. A production binary must not contain a shared SAP service account.
+
+Production therefore requires this Dart define:
+
+```text
+SAP_TRANSPORT_AUTH_MODE=gateway
+```
+
+Do **not** pass either of these to a production build:
+
+```text
+SAP_BASIC_AUTH_USER
+SAP_BASIC_AUTH_PASSWORD
+```
+
+In gateway mode the mobile client sends no shared Basic `Authorization` header. The trusted gateway/API-management layer must own the upstream SAP service credential while preserving the existing RAP user-token payload contract until the backend contract is deliberately changed.
+
+`verifyCaslaSigning` fails if production transport is not `gateway`, if either Basic value is embedded, if demo data is enabled, or if Android identity/signing inputs are incomplete.
 
 ## Commands
 
 Development/staging verification:
 
 ```bash
-flutter run --flavor dev
-flutter run --flavor staging
+flutter run --flavor dev --dart-define=SAP_TRANSPORT_AUTH_MODE=basic
+flutter run --flavor staging --dart-define=SAP_TRANSPORT_AUTH_MODE=basic
 ```
 
 Production-like CI build without release secrets:
@@ -57,10 +78,12 @@ Production-like CI build without release secrets:
 flutter build apk --debug --flavor production
 ```
 
-Authorized production bundle after the real ID and signing secrets are configured:
+Authorized production bundle after the real ID, signing secrets and gateway endpoint are configured:
 
 ```bash
-flutter build appbundle --release --flavor production
+flutter build appbundle --release --flavor production \
+  --dart-define=SAP_TRANSPORT_AUTH_MODE=gateway \
+  --dart-define=SAP_BASE_URL=https://your-gateway.example/sap/opu/odata4/sap/
 ```
 
-Before distributing an AAB/APK, also confirm the SAP production endpoint, disable demo data, enroll the upload key with the chosen store/MDM process, and retain the keystore in an organization-controlled secret store.
+Before distributing an AAB/APK, confirm that the gateway is deployed and owns the upstream SAP credential, disable demo data, enroll the upload key with the chosen store/MDM process, and retain the keystore in an organization-controlled secret store.

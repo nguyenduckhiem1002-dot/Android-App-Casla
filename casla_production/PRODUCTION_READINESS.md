@@ -1,6 +1,6 @@
 # Casla Production — trạng thái sẵn sàng production
 
-Tài liệu này phản ánh trạng thái source hiện tại sau các phase hardening. CI xanh là điều kiện cần nhưng **không đồng nghĩa đã được phép go-live**: một số hạng mục cần credential/identity chính thức, thay đổi kiến trúc SAP hoặc kiểm thử ngoài thiết bị thật.
+Tài liệu này phản ánh trạng thái source hiện tại sau các phase hardening. CI xanh là điều kiện cần nhưng **không đồng nghĩa đã được phép go-live**: một số hạng mục cần credential/identity chính thức, gateway SAP production hoặc kiểm thử ngoài thiết bị thật.
 
 ## 1. Những phần đã hoàn thành trong source
 
@@ -21,6 +21,16 @@ Tài liệu này phản ánh trạng thái source hiện tại sau các phase ha
 - Network logging chỉ bật ở debug; test redaction bảo vệ token/password/header nhạy cảm.
 - Field telemetry chỉ dùng enum đóng và số aggregate in-memory; không nhận barcode, WorkerID, token, credential, SAP payload hoặc error text.
 
+### SAP transport security
+
+- `SapODataClient` có hai transport mode rõ ràng: `basic` và `gateway`.
+- `basic` chỉ dành cho direct-SAP dev/staging và vẫn yêu cầu credential hợp lệ.
+- `gateway` không tạo/gửi shared Basic `Authorization` header, kể cả lúc fetch CSRF token.
+- `gateway` fail-closed nếu mobile vẫn được cấu hình `SAP_BASIC_AUTH_USER` hoặc `SAP_BASIC_AUTH_PASSWORD`.
+- Release runtime yêu cầu `SAP_TRANSPORT_AUTH_MODE=gateway`.
+- Android release guard và cross-platform `tool/verify_transport_security.sh` cấm production chứa shared Basic credential.
+- Existing RAP user access-token payload contract được giữ nguyên; source không tự ý đổi sang HTTP Bearer khi backend chưa đổi contract.
+
 ### RS38/PDA
 
 - Có native CipherLab scanner bridge, hardware-first scanner và camera/manual fallback.
@@ -32,14 +42,14 @@ Tài liệu này phản ánh trạng thái source hiện tại sau các phase ha
 - Có flavor `dev`, `staging`, `production`.
 - Production Application ID và signing input lấy từ secret/env hoặc `key.properties` đã gitignore.
 - Production release không fallback sang debug signing.
-- `verifyCaslaSigning` fail-closed khi Application ID còn placeholder, thiếu keystore/password/alias hoặc `ENABLE_DEMO_DATA=true`.
-- CI kiểm tra độc lập cả signing guard và demo-data guard.
+- `verifyCaslaSigning` fail-closed khi Application ID còn placeholder, thiếu keystore/password/alias, `ENABLE_DEMO_DATA=true`, transport khác `gateway`, hoặc Basic credential bị embed.
+- CI kiểm tra độc lập signing, demo-data và transport-security guard.
 - Xem `android/PRODUCTION_SIGNING.md`.
 
 ### iOS build hardening
 
 - CI compile Flutter iOS release không ký và chạy Xcode build validation.
-- Có `ios/verify_production_identity.sh` để fail-closed khi Bundle ID vẫn placeholder hoặc thiếu Apple Team ID.
+- `ios/verify_production_identity.sh` fail-closed khi Bundle ID vẫn placeholder hoặc thiếu Apple Team ID, sau đó chạy production transport-security guard.
 - Xem `ios/PRODUCTION_SIGNING.md`.
 
 ### CI hiện tại
@@ -52,27 +62,29 @@ CI ghim Flutter `3.44.8` và bắt buộc chạy:
 4. Android `productionDebug` build + native RS38 bridge.
 5. Android release signing/identity guard.
 6. Android production demo-data guard.
-7. iOS release compile không ký.
-8. Xcode archive-setting build validation.
-9. iOS production identity guard.
+7. Android gateway-only/no-Basic transport guard.
+8. iOS release compile không ký.
+9. Xcode archive-setting build validation.
+10. iOS production identity + transport guard.
 
 Không nâng dependency/toolchain hàng loạt chỉ vì có version mới; mỗi lần nâng phải là PR riêng có full gate tương ứng.
 
 ## 2. P0 — Blocker trước production go-live
 
-### P0.1 — Loại shared SAP Basic credential khỏi mobile binary
+### P0.1 — Triển khai trusted SAP gateway cho production
 
-Đây là blocker kiến trúc quan trọng nhất còn lại.
+**Mobile half đã được harden trong source:** production release giờ bắt buộc `gateway` mode và cấm shared SAP Basic credential trong APK/IPA.
 
-Client hiện vẫn nhận `SAP_BASIC_AUTH_USER` / `SAP_BASIC_AUTH_PASSWORD` qua compile-time configuration và `SapODataClient` dùng Basic Authorization để gọi SAP. User access token lại được truyền trong RAP contract riêng. Dù secret không nằm trong source control, **shared Basic credential đóng gói trong APK/IPA vẫn có thể bị trích xuất khỏi binary**.
+Phần còn lại là hạ tầng/backend, không thể hoàn thành chỉ bằng source mobile:
 
-Trước go-live cần:
-
-- Đưa service credential về SAP API Management/BTP/gateway hoặc backend tin cậy; không phân phối shared SAP credential cho mobile.
-- Chốt mobile auth contract dùng token ngắn hạn và cơ chế refresh/revoke phù hợp.
-- Không đưa access token/password vào query string nếu gateway/backend cho phép chuyển sang header/secure contract.
+- Deploy SAP API Management/BTP/gateway hoặc backend tin cậy làm production `SAP_BASE_URL`.
+- Gateway phải giữ upstream SAP service credential ở server-side secret store; không trả credential đó về mobile.
+- Xác minh gateway proxy đúng hai service path hiện tại và CSRF/session-cookie behavior.
 - Giữ backend authorization cho role, permission, team scope và idempotency ở mọi write API.
-- Chỉ đổi client protocol sau khi backend contract đã được thống nhất; không tự thay Basic/Bearer một phía.
+- Chốt bước tiếp theo cho user-token contract (header hay RAP payload) ở backend trước khi đổi mobile; hiện client cố ý giữ contract RAP đang chạy.
+- Nếu backend cho phép, loại token/password khỏi query string trong một thay đổi contract riêng có integration tests.
+
+**Cho tới khi gateway production được triển khai và smoke-test, go-live vẫn bị chặn**, nhưng production binary phía mobile không còn được phép chứa shared Basic credential.
 
 ### P0.2 — Cung cấp production identity và signing thật
 
@@ -97,7 +109,7 @@ Compile-only CI hiện tại **không phải** signed distribution pipeline.
 
 Trước go-live phải có:
 
-- smoke test với SAP/gateway production-like environment.
+- smoke test với gateway/SAP production-like environment.
 - pilot trên CipherLab RS38 thật, gồm trigger scan liên tục, sleep/resume, mất mạng, app kill/restart và camera fallback.
 - test quyền/scope bằng nhiều account thật.
 - offline → restart → reconnect → SAP ACK trên thiết bị thật.
@@ -135,7 +147,7 @@ Telemetry source hiện chỉ là privacy-safe aggregate in-memory, chưa tự g
 
 - Pen-test APK/IPA: binary secret extraction, cleartext/TLS, backup, log/screenshot leakage, route authorization và tampered QR.
 - Retry/error matrix: 401/403/409/429/5xx, timeout, network flap, token expiry giữa transaction.
-- Load test SAP/gateway theo concurrency thiết bị và tần suất ghi thực tế.
+- Load test gateway/SAP theo concurrency thiết bị và tần suất ghi thực tế.
 - Kiểm thử clock skew, duplicate/idempotency và long-running queue.
 - Pilot một tổ trước rollout rộng; theo dõi crash-free rate, sync success, queue age và latency.
 - Kiểm thử upgrade/migration từ version đang phát hành sang schema hiện tại.
@@ -147,7 +159,9 @@ Telemetry source hiện chỉ là privacy-safe aggregate in-memory, chưa tự g
 - [ ] Application ID chính thức đã cấu hình.
 - [ ] Keystore/alias/password nằm trong secret store, không nằm trong repo.
 - [ ] `ENABLE_DEMO_DATA` không được bật.
-- [ ] Endpoint SAP/gateway là HTTPS production endpoint.
+- [ ] `SAP_TRANSPORT_AUTH_MODE=gateway`.
+- [ ] Không truyền `SAP_BASIC_AUTH_USER`/`SAP_BASIC_AUTH_PASSWORD` vào production build.
+- [ ] `SAP_BASE_URL` là HTTPS gateway production endpoint.
 - [ ] `verifyCaslaSigning` pass trong authorized release environment.
 - [ ] Signed AAB/APK được xác minh certificate/package trước phân phối.
 - [ ] RS38 physical-device smoke pass.
@@ -156,13 +170,15 @@ Telemetry source hiện chỉ là privacy-safe aggregate in-memory, chưa tự g
 
 - [ ] Bundle ID chính thức đã cấu hình.
 - [ ] Apple Team ID và distribution signing material đã cấu hình.
+- [ ] `SAP_TRANSPORT_AUTH_MODE=gateway`, không có Basic credential trong build.
 - [ ] `ios/verify_production_identity.sh` pass trong authorized release environment.
 - [ ] Signed archive/IPA được export bằng production pipeline, không dùng `--no-codesign`.
 - [ ] TestFlight/MDM smoke pass.
 
 ### Backend/SAP
 
-- [ ] Shared Basic service credential không còn nằm trong mobile binary.
+- [ ] Trusted gateway đã deploy và giữ upstream SAP service credential server-side.
+- [ ] Mobile production endpoint đi qua gateway; shared Basic service credential không nằm trong binary.
 - [ ] Role/permission/team scope được kiểm tra server-side cho mọi write.
 - [ ] Idempotency được SAP/backend enforce.
 - [ ] Token/session revoke và expiry đã test.
@@ -173,11 +189,12 @@ Telemetry source hiện chỉ là privacy-safe aggregate in-memory, chưa tự g
 Go-live chỉ đạt khi đồng thời:
 
 - CI source hiện tại xanh trên commit phát hành.
-- Không có shared service credential có thể trích xuất từ mobile binary.
+- Production mobile build dùng gateway mode và không chứa shared service credential.
+- Gateway production đã deploy, bảo vệ upstream SAP credential và qua smoke/load/security test.
 - Android/iOS có identity và signing chính thức.
 - Demo data bị tắt và endpoint production được xác nhận.
 - Pending transaction sống qua restart và sync/ACK đúng với SAP.
 - Backend enforce authorization/scope/idempotency.
 - Pilot RS38 + security/load/rollback validation đạt ngưỡng đã thống nhất.
 
-Nếu P0.1 chưa giải quyết, trạng thái đúng là **codebase hardened / pilot-capable**, chưa phải production go-live ready.
+Khi gateway/signing/device-pilot chưa hoàn tất, trạng thái đúng là **codebase hardened / production-contract-ready**, chưa phải production go-live ready.
