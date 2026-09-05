@@ -2,7 +2,7 @@ name: CodeQL Native
 
 on:
   push:
-    branches: [master, 'chatgpt/**']
+    branches: [master]
   pull_request:
     branches: [master, develop, 'chatgpt/**']
   schedule:
@@ -88,7 +88,8 @@ jobs:
       # `flutter build ios` successfully produced Runner.app but hid the Swift
       # compiler invocation from the CodeQL tracer. Build directly with a fresh
       # DerivedData directory after init so AppDelegate.swift is recompiled and
-      # visible to the Swift extractor.
+      # visible to the Swift extractor. Restrict to arm64 to avoid tracing an
+      # unnecessary second architecture on the macOS runner.
       - name: Build iOS release directly for CodeQL extraction
         working-directory: casla_production/ios
         run: >-
@@ -98,6 +99,8 @@ jobs:
           -sdk iphoneos
           -destination 'generic/platform=iOS'
           -derivedDataPath "$RUNNER_TEMP/codeql-derived-data"
+          ARCHS=arm64
+          ONLY_ACTIVE_ARCH=YES
           CODE_SIGNING_ALLOWED=NO
           CODE_SIGNING_REQUIRED=NO
           clean build
