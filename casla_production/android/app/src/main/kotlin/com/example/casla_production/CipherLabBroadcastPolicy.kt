@@ -6,7 +6,7 @@ package com.example.casla_production
  * Kept Android-free so sender and payload rules can be unit-tested without an
  * emulator. Android 13 and below cannot expose the original broadcast sender
  * identity to a runtime receiver, so those versions remain a documented legacy
- * trust boundary. Android 14+ must identify a known CipherLab sender package.
+ * trust boundary. Android 14+ must identify CipherLab Reader Service.
  */
 internal object CipherLabBroadcastPolicy {
     const val VERIFY_SENDER_FROM_API = 34
@@ -14,14 +14,11 @@ internal object CipherLabBroadcastPolicy {
     const val MAX_BARCODE_BYTES = 8192
     const val MAX_SYMBOLOGY_CHARACTERS = 64
 
-    private val trustedSenderPackages = setOf(
-        "com.cipherlab.clbarcodeservice",
-        "sw.programme.readerconfig",
-    )
+    private const val READER_SERVICE_PACKAGE = "com.cipherlab.clbarcodeservice"
 
     fun acceptsSender(apiLevel: Int, senderPackage: String?): Boolean {
         if (apiLevel < VERIFY_SENDER_FROM_API) return true
-        return senderPackage != null && senderPackage in trustedSenderPackages
+        return senderPackage == READER_SERVICE_PACKAGE
     }
 
     fun sanitizeDecodedData(value: Any?): String? {
