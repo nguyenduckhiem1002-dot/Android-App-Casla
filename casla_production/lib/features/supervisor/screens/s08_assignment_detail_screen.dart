@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../../app/theme/casla_colors.dart';
+import '../../../core/utils/quantity_formatter.dart';
 import '../../../domain/entities/entities.dart';
 import '../../../domain/entities/enums.dart';
 import '../../../main.dart';
@@ -28,6 +29,7 @@ class S08AssignmentDetailScreen extends ConsumerStatefulWidget {
 class _S08AssignmentDetailScreenState
     extends ConsumerState<S08AssignmentDetailScreen> {
   bool _isSubmitting = false;
+  bool _isCompletionSheetOpen = false;
   late final Stream<Assignment?> _assignmentStream;
   late final Stream<List<Map<String, dynamic>>> _recordsStream;
 
@@ -41,147 +43,147 @@ class _S08AssignmentDetailScreenState
     _recordsStream = appState.db.watchRecordsByAssignment(widget.assignment.id);
   }
 
-  void _openConfirmCompletionSheet(double remainingMax) {
+  Future<void> _openConfirmCompletionSheet(double remainingMax) async {
+    if (_isCompletionSheetOpen || _isSubmitting) return;
+    _isCompletionSheetOpen = true;
     String qtyInput = '';
+    try {
+      final quantity = await showModalBottomSheet<double>(
+        context: context,
+        isScrollControlled: true,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        builder: (context) {
+          return StatefulBuilder(
+            builder: (context, setSheetState) {
+              final qtyNum = double.tryParse(qtyInput) ?? 0.0;
+              final isOverflow = !qtyNum.isFinite || qtyNum > remainingMax;
 
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setSheetState) {
-            final qtyNum = double.tryParse(qtyInput) ?? 0.0;
-            final isOverflow = !qtyNum.isFinite || qtyNum > remainingMax;
+              return SafeArea(
+                child: SingleChildScrollView(
+                  padding: EdgeInsets.only(
+                    bottom: MediaQuery.viewInsetsOf(context).bottom + 18,
+                    top: 18,
+                    left: 18,
+                    right: 18,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 36,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: CaslaColors.line,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'Xác nhận hoàn thành',
+                        style: TextStyle(
+                          fontFamily: 'Manrope',
+                          fontWeight: FontWeight.w800,
+                          fontSize: 16,
+                          color: CaslaColors.primaryNavy,
+                        ),
+                      ),
+                      Text(
+                        'Nhập số lượng công nhân vừa hoàn thành (Tối đa: ${remainingMax.toStringAsFixed(0)} cái)',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: CaslaColors.muted,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
 
-            return SafeArea(
-              child: SingleChildScrollView(
-                padding: EdgeInsets.only(
-                  bottom: MediaQuery.viewInsetsOf(context).bottom + 18,
-                  top: 18,
-                  left: 18,
-                  right: 18,
+                      // Qty display
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.baseline,
+                        textBaseline: TextBaseline.alphabetic,
+                        children: [
+                          Text(
+                            qtyInput.isEmpty ? '0' : qtyInput,
+                            style: TextStyle(
+                              fontFamily: 'Manrope',
+                              fontWeight: FontWeight.w800,
+                              fontSize: 42,
+                              color: isOverflow
+                                  ? CaslaColors.danger
+                                  : CaslaColors.primaryNavy,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          const Text(
+                            'cái',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: CaslaColors.muted,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+
+                      if (isOverflow)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 4),
+                          child: Text(
+                            'Vượt quá số lượng còn lại cho phép.',
+                            style: TextStyle(
+                              color: CaslaColors.danger,
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+
+                      const SizedBox(height: 16),
+
+                      NumPad(
+                        value: qtyInput,
+                        onChanged: (val) {
+                          setSheetState(() {
+                            qtyInput = val;
+                          });
+                        },
+                      ),
+
+                      const SizedBox(height: 16),
+
+                      ElevatedButton(
+                        onPressed:
+                            (!qtyNum.isFinite || qtyNum <= 0 || isOverflow)
+                            ? null
+                            : () => Navigator.pop(context, qtyNum),
+                        child: const Text('Lưu xác nhận'),
+                      ),
+                    ],
+                  ),
                 ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 36,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: CaslaColors.line,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    const Text(
-                      'Xác nhận hoàn thành',
-                      style: TextStyle(
-                        fontFamily: 'Manrope',
-                        fontWeight: FontWeight.w800,
-                        fontSize: 16,
-                        color: CaslaColors.primaryNavy,
-                      ),
-                    ),
-                    Text(
-                      'Nhập số lượng công nhân vừa hoàn thành (Tối đa: ${remainingMax.toStringAsFixed(0)} cái)',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: CaslaColors.muted,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-
-                    // Qty display
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.baseline,
-                      textBaseline: TextBaseline.alphabetic,
-                      children: [
-                        Text(
-                          qtyInput.isEmpty ? '0' : qtyInput,
-                          style: TextStyle(
-                            fontFamily: 'Manrope',
-                            fontWeight: FontWeight.w800,
-                            fontSize: 42,
-                            color: isOverflow
-                                ? CaslaColors.danger
-                                : CaslaColors.primaryNavy,
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        const Text(
-                          'cái',
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: CaslaColors.muted,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-
-                    if (isOverflow)
-                      const Padding(
-                        padding: EdgeInsets.only(top: 4),
-                        child: Text(
-                          'Vượt quá số lượng còn lại cho phép.',
-                          style: TextStyle(
-                            color: CaslaColors.danger,
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-
-                    const SizedBox(height: 16),
-
-                    NumPad(
-                      value: qtyInput,
-                      onChanged: (val) {
-                        setSheetState(() {
-                          qtyInput = val;
-                        });
-                      },
-                    ),
-
-                    const SizedBox(height: 16),
-
-                    ElevatedButton(
-                      onPressed: (!qtyNum.isFinite || qtyNum <= 0 || isOverflow)
-                          ? null
-                          : () async {
-                              Navigator.pop(context);
-                              await _confirmProduction(qtyNum);
-                            },
-                      child: const Text('Lưu xác nhận'),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
+              );
+            },
+          );
+        },
+      );
+      if (mounted && quantity != null) await _confirmProduction(quantity);
+    } finally {
+      _isCompletionSheetOpen = false;
+    }
   }
 
   Future<void> _confirmProduction(double qty) async {
+    if (_isSubmitting) return;
     final appState = ref.read(appStateProvider);
     final emp = appState.currentSession;
     final supervisorMaNv = emp?.maNv ?? '';
 
     final asgId = widget.assignment.id;
     final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
-    final workerPassword = await showWorkerVerificationDialog(
-      context,
-      workerName: widget.assignment.workerName,
-      actionLabel: 'xác nhận sản lượng lên SAP',
-    );
-    if (!mounted || workerPassword == null) return;
+    final generation = appState.sessionGeneration;
     setState(() => _isSubmitting = true);
 
     // Goes through the repository, not the raw store: this is where the
@@ -189,6 +191,19 @@ class _S08AssignmentDetailScreenState
     // The repository throws on a business-rule violation, so the supervisor has
     // to see that as a message rather than an unhandled crash.
     try {
+      final workerPassword = await showWorkerVerificationDialog(
+        context,
+        workerName: widget.assignment.workerName,
+        actionLabel: 'xác nhận sản lượng lên SAP',
+      );
+      if (!mounted || workerPassword == null) return;
+      if (!appState.isSessionGenerationCurrent(generation) ||
+          appState.currentSession?.toIds.contains(widget.assignment.teamId) !=
+              true) {
+        throw Exception(
+          'Phiên hoặc quyền đã thay đổi. Vui lòng mở lại thao tác.',
+        );
+      }
       final receipt = await appState.productionRepo.recordProduction(
         assignmentId: asgId,
         quantity: qty,
@@ -322,14 +337,14 @@ class _S08AssignmentDetailScreenState
                               Expanded(
                                 child: KpiCard(
                                   label: 'Giao ban đầu',
-                                  value: initialAssigned.toStringAsFixed(0),
+                                  value: formatQuantity(initialAssigned),
                                 ),
                               ),
                               const SizedBox(width: 10),
                               Expanded(
                                 child: KpiCard(
                                   label: 'Đã thu hồi',
-                                  value: recalled.toStringAsFixed(0),
+                                  value: formatQuantity(recalled),
                                   valueColor: CaslaColors.danger,
                                 ),
                               ),
@@ -341,9 +356,9 @@ class _S08AssignmentDetailScreenState
                           // Ring progress card
                           RingProgressCard(
                             percentage: pct,
-                            remainingValue: remaining.toStringAsFixed(0),
+                            remainingValue: formatQuantity(remaining),
                             detailText:
-                                'Giao hiệu lực ${effective.toStringAsFixed(0)} · Hoàn thành lũy kế ${completed.toStringAsFixed(0)}',
+                                'Giao hiệu lực ${formatQuantity(effective)} · Hoàn thành lũy kế ${formatQuantity(completed)}',
                           ),
 
                           const SizedBox(height: 20),
@@ -472,7 +487,7 @@ class _S08AssignmentDetailScreenState
                                             CrossAxisAlignment.end,
                                         children: [
                                           Text(
-                                            '+${(r['quantity'] as double).toStringAsFixed(0)}',
+                                            '+${formatQuantity((r['quantity'] as num).toDouble())}',
                                             style: const TextStyle(
                                               fontFamily: 'monospace',
                                               fontWeight: FontWeight.w700,

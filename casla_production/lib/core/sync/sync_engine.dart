@@ -121,8 +121,9 @@ class SyncEngine {
   Future<void> stop() async {
     _timer?.cancel();
     _timer = null;
-    await _connectivitySubscription?.cancel();
+    final cancellation = _connectivitySubscription?.cancel();
     _connectivitySubscription = null;
+    await cancellation;
   }
 
   Future<void> dispose() async {
@@ -142,6 +143,7 @@ class SyncEngine {
       return report;
     }
     _running = true;
+    final scope = _scopeProvider?.call();
     try {
       if (!await _connectivity.isOnline()) {
         final report = SyncRunReport.skippedRun;
@@ -149,7 +151,6 @@ class SyncEngine {
         return report;
       }
 
-      final scope = _scopeProvider?.call();
       if (_scopeProvider != null && (scope == null || !scope.isUsable)) {
         final report = SyncRunReport.skippedRun;
         _publish(report);
@@ -183,6 +184,7 @@ class SyncEngine {
         try {
           outcome = await _pushItem(
             item,
+            scope: scope,
             allowSessionRefresh: !sessionRefreshed,
             onSessionRefreshed: () => sessionRefreshed = true,
           );
@@ -239,6 +241,7 @@ class SyncEngine {
 
   Future<_Outcome> _pushItem(
     Map<String, dynamic> item, {
+    required SyncAccessScope? scope,
     required bool allowSessionRefresh,
     required VoidCallback onSessionRefreshed,
   }) async {
@@ -246,6 +249,7 @@ class SyncEngine {
     final entityId = item['entity_id'] as String;
 
     final source = await _database.getSyncSourceRow(entityType, entityId);
+    _ensureScopeStillActive(scope);
     if (source == null) {
       // Nothing left to push. Retrying cannot conjure the row back, and leaving
       // it PENDING would keep the badge count wrong forever.
@@ -274,6 +278,7 @@ class SyncEngine {
     if (failure.kind == SyncFailureKind.auth && allowSessionRefresh) {
       onSessionRefreshed();
       if (await _refreshSessionQuietly()) {
+        _ensureScopeStillActive(scope);
         // `pushAndRecord` already wrote the first failure; retrying either
         // deletes that row (success) or simply overwrites it with whatever
         // this attempt finds — nothing extra to undo either way.
@@ -307,6 +312,12 @@ class SyncEngine {
     final provider = _scopeProvider;
     if (provider == null) return true;
     return expected?.matches(provider()) ?? false;
+  }
+
+  void _ensureScopeStillActive(SyncAccessScope? scope) {
+    if (_canRun?.call() == false || !_isScopeStillActive(scope)) {
+      throw const SapSessionInvalidatedException();
+    }
   }
 
   void _publish(SyncRunReport report) {

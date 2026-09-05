@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../../app/theme/casla_colors.dart';
+import '../../../core/utils/quantity_formatter.dart';
 import '../../../domain/entities/entities.dart';
 import '../../../domain/entities/work_history.dart';
 import '../../../main.dart';
@@ -68,7 +69,9 @@ class _S06bEmployeeDailyDetailScreenState
       dateFrom: _selectedDate,
       dateTo: _selectedDate,
     );
-    _assignmentStream = appState.assignmentRepo.watchWorkerAssignments(_workerId);
+    _assignmentStream = appState.assignmentRepo.watchWorkerAssignments(
+      _workerId,
+    );
     _productionStream = appState.db.watchProductionHistory(
       _workerId,
       fromBusinessDate: date,
@@ -356,7 +359,7 @@ class _S06bEmployeeDailyDetailScreenState
                                       children: [
                                         _buildSummaryColumn(
                                           'Tổng giao',
-                                          totalAssigned.toStringAsFixed(0),
+                                          formatQuantity(totalAssigned),
                                           uom,
                                         ),
                                         Container(
@@ -366,7 +369,7 @@ class _S06bEmployeeDailyDetailScreenState
                                         ),
                                         _buildSummaryColumn(
                                           'Hoàn thành',
-                                          totalCompleted.toStringAsFixed(0),
+                                          formatQuantity(totalCompleted),
                                           uom,
                                           color: CaslaColors.success,
                                         ),
@@ -377,7 +380,7 @@ class _S06bEmployeeDailyDetailScreenState
                                         ),
                                         _buildSummaryColumn(
                                           'Còn lại',
-                                          totalRemaining.toStringAsFixed(0),
+                                          formatQuantity(totalRemaining),
                                           uom,
                                           color: CaslaColors.accentGold,
                                         ),
@@ -517,7 +520,7 @@ class _S06bEmployeeDailyDetailScreenState
                                               MainAxisAlignment.spaceBetween,
                                           children: [
                                             Text(
-                                              'Giao: ${e.quantity.toStringAsFixed(0)} ${e.unitOfMeasure}',
+                                              'Giao: ${formatQuantity(e.quantity)} ${e.unitOfMeasure}',
                                               style: const TextStyle(
                                                 fontFamily: 'Manrope',
                                                 fontWeight: FontWeight.w700,
@@ -597,7 +600,7 @@ class _S06bEmployeeDailyDetailScreenState
                                                       .spaceBetween,
                                               children: [
                                                 Text(
-                                                  'Giao: ${asg.effectiveAssigned.toStringAsFixed(0)} ${asg.uom}',
+                                                  'Giao: ${formatQuantity(asg.effectiveAssigned)} ${asg.uom}',
                                                   style: const TextStyle(
                                                     fontFamily: 'Manrope',
                                                     fontWeight: FontWeight.w700,
@@ -745,7 +748,7 @@ class _S06bEmployeeDailyDetailScreenState
                                         ),
                                         const SizedBox(width: 12),
                                         Text(
-                                          '+${e.quantity.toStringAsFixed(0)} ${e.unitOfMeasure}',
+                                          '+${formatQuantity(e.quantity)} ${e.unitOfMeasure}',
                                           style: const TextStyle(
                                             fontFamily: 'monospace',
                                             fontWeight: FontWeight.w700,
@@ -804,7 +807,7 @@ class _S06bEmployeeDailyDetailScreenState
                                         ),
                                         const SizedBox(width: 12),
                                         Text(
-                                          '+${(r['quantity'] as double).toStringAsFixed(0)} cái',
+                                          '+${formatQuantity((r['quantity'] as num).toDouble())} cái',
                                           style: const TextStyle(
                                             fontFamily: 'monospace',
                                             fontWeight: FontWeight.w700,

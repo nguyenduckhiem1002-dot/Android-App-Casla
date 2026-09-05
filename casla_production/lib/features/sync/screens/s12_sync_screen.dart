@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 import '../../../app/theme/casla_colors.dart';
+import '../../../core/database/casla_database.dart';
 import '../../../core/sync/verified_sync_coordinator.dart';
 import '../../../main.dart';
 import '../../../presentation/widgets/status_chip.dart';
@@ -17,22 +20,111 @@ class S12SyncScreen extends ConsumerStatefulWidget {
 }
 
 class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
-  static const int _syncPageSize = 50;
   int _selectedTabIndex = 0;
-  int _visibleItemCount = _syncPageSize;
   final Set<String> _syncingIds = <String>{};
-  Stream<List<Map<String, dynamic>>>? _feedStream;
+  StreamSubscription<SyncFeedPage>? _feedSubscription;
   String _scopeKey = '';
+  String _actorId = '';
+  List<String> _teamIds = const [];
+  List<Map<String, dynamic>> _feedItems = const [];
+  bool _feedLoading = true;
+  bool _feedLoadingMore = false;
+  bool _feedHasMore = false;
+  int? _nextCreatedAtUtc;
+  String? _nextId;
+  int _pendingCount = 0;
+  int _verificationCount = 0;
+  int _failedCount = 0;
+  int _totalCount = 0;
+  Object? _feedError;
+
+  SyncFeedFilter get _feedFilter => switch (_selectedTabIndex) {
+    1 => SyncFeedFilter.pending,
+    2 => SyncFeedFilter.verification,
+    3 => SyncFeedFilter.failed,
+    _ => SyncFeedFilter.all,
+  };
 
   void _ensureScopedFeed(String actorId, List<String> teamIds) {
     final normalizedTeams = teamIds.toList()..sort();
-    final key = '$actorId|${normalizedTeams.join(',')}';
-    if (key == _scopeKey && _feedStream != null) return;
+    final key = '$actorId|${normalizedTeams.join(',')}|$_selectedTabIndex';
+    if (key == _scopeKey && _feedSubscription != null) return;
     _scopeKey = key;
-    _feedStream = ref
+    _actorId = actorId;
+    _teamIds = normalizedTeams;
+    _feedItems = const [];
+    _feedLoading = true;
+    _feedError = null;
+    _feedHasMore = false;
+    _nextCreatedAtUtc = null;
+    _nextId = null;
+    unawaited(_feedSubscription?.cancel());
+    _feedSubscription = ref
         .read(appStateProvider)
         .db
-        .watchSyncFeed(actorId: actorId, teamIds: normalizedTeams);
+        .watchSyncFeedPage(
+          actorId: actorId,
+          teamIds: normalizedTeams,
+          filter: _feedFilter,
+        )
+        .listen(
+          _replaceFirstPage,
+          onError: (Object error, StackTrace _) {
+            if (!mounted) return;
+            setState(() {
+              _feedError = error;
+              _feedLoading = false;
+            });
+          },
+        );
+  }
+
+  void _replaceFirstPage(SyncFeedPage page) {
+    if (!mounted) return;
+    setState(() {
+      _feedItems = page.items;
+      _feedLoading = false;
+      _feedHasMore = page.hasMore;
+      _nextCreatedAtUtc = page.nextCreatedAtUtc;
+      _nextId = page.nextId;
+      _pendingCount = page.pendingCount;
+      _verificationCount = page.verificationCount;
+      _failedCount = page.failedCount;
+      _totalCount = page.totalCount;
+    });
+  }
+
+  Future<void> _loadMore() async {
+    if (_feedLoadingMore || !_feedHasMore) return;
+    setState(() => _feedLoadingMore = true);
+    try {
+      final page = await ref
+          .read(appStateProvider)
+          .db
+          .getSyncFeedPage(
+            actorId: _actorId,
+            teamIds: _teamIds,
+            filter: _feedFilter,
+            beforeCreatedAtUtc: _nextCreatedAtUtc,
+            beforeId: _nextId,
+          );
+      if (!mounted) return;
+      setState(() {
+        _feedItems = [..._feedItems, ...page.items];
+        _feedHasMore = page.hasMore;
+        _nextCreatedAtUtc = page.nextCreatedAtUtc;
+        _nextId = page.nextId;
+        _feedLoadingMore = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _feedLoadingMore = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    unawaited(_feedSubscription?.cancel());
+    super.dispose();
   }
 
   bool _isVerifiable(Map<String, dynamic> item) =>
@@ -42,6 +134,7 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
   Future<void> _verify(Map<String, dynamic> item) async {
     final appState = ref.read(appStateProvider);
     final id = item['id'] as String;
+    final generation = appState.sessionGeneration;
     if (_syncingIds.contains(id)) return;
     setState(() => _syncingIds.add(id));
     try {
@@ -54,6 +147,7 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
         actionLabel: 'xác minh và gửi các giao dịch đang chờ lên SAP',
       );
       if (!mounted || password == null) return;
+      if (!appState.isSessionGenerationCurrent(generation)) return;
 
       final report = await appState.verifiedSync.syncVerifiedWorkerChain(
         anchorQueueItemId: id,
@@ -75,7 +169,9 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Không thể xử lý lúc này. Giao dịch vẫn được lưu an toàn.'),
+          content: Text(
+            'Không thể xử lý lúc này. Giao dịch vẫn được lưu an toàn.',
+          ),
           backgroundColor: CaslaColors.gold700,
         ),
       );
@@ -263,256 +359,215 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
           ],
         ),
       ),
-      body: StreamBuilder<List<Map<String, dynamic>>>(
-        stream: _feedStream,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting &&
-              !snapshot.hasData) {
-            return const _SyncSkeleton();
-          }
-          if (snapshot.hasError) {
-            return const CaslaEmptyState(
+      body: _feedError != null
+          ? const CaslaEmptyState(
               icon: Icons.sync_problem_outlined,
               title: 'Không tải được hàng đợi đồng bộ',
               message:
                   'Các giao dịch vẫn được lưu an toàn trên thiết bị. Hãy mở lại màn hình để thử lại.',
-            );
-          }
-          final feedItems = snapshot.data ?? [];
+            )
+          : _feedLoading
+          ? const _SyncSkeleton()
+          : _buildFeedBody(),
+    );
+  }
 
-          final pendingCount = feedItems
-              .where((i) => i['status'] == 'PENDING')
-              .length;
-          final failedCount = feedItems
-              .where((i) => i['status'] == 'FAILED' && !_isVerifiable(i))
-              .length;
-          final verificationCount = feedItems.where(_isVerifiable).length;
+  Widget _buildFeedBody() {
+    final visibleItems = _feedItems;
 
-          final filteredItems = feedItems.where((i) {
-            if (_selectedTabIndex == 1) return i['status'] == 'PENDING';
-            if (_selectedTabIndex == 2) return _isVerifiable(i);
-            if (_selectedTabIndex == 3) {
-              return i['status'] == 'FAILED' && !_isVerifiable(i);
-            }
-            return true;
-          }).toList();
-          final visibleCount = _visibleItemCount < filteredItems.length
-              ? _visibleItemCount
-              : filteredItems.length;
-          final visibleItems = filteredItems
-              .take(visibleCount)
-              .toList(growable: false);
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Summary Boxes
+          Row(
+            children: [
+              _buildSummaryBox('$_pendingCount', 'ĐANG CHỜ'),
+              const SizedBox(width: 8),
+              _buildSummaryBox(
+                '$_verificationCount',
+                'CẦN XÁC MINH',
+                color: CaslaColors.gold700,
+              ),
+              const SizedBox(width: 8),
+              _buildSummaryBox(
+                '$_failedCount',
+                'LỖI',
+                color: CaslaColors.danger,
+              ),
+            ],
+          ),
 
-          return SingleChildScrollView(
-            padding: const EdgeInsets.all(18),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          const SizedBox(height: 14),
+
+          // Tabs Row
+          Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: CaslaColors.muted100,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
               children: [
-                // Summary Boxes
-                Row(
-                  children: [
-                    _buildSummaryBox('$pendingCount', 'ĐANG CHỜ'),
-                    const SizedBox(width: 8),
-                    _buildSummaryBox(
-                      '$verificationCount',
-                      'CẦN XÁC MINH',
-                      color: CaslaColors.gold700,
-                    ),
-                    const SizedBox(width: 8),
-                    _buildSummaryBox(
-                      '$failedCount',
-                      'LỖI',
-                      color: CaslaColors.danger,
-                    ),
-                  ],
+                _buildTab('Tất cả', 0),
+                _buildTab('Đang chờ', 1),
+                _buildTab('Xác minh', 2),
+                _buildTab('Lỗi', 3),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 14),
+
+          // List Items
+          if (visibleItems.isEmpty)
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: CaslaColors.surface,
+                border: Border.all(color: CaslaColors.line),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: const Center(
+                child: Text(
+                  'Không có bản ghi nào trong mục này.',
+                  style: TextStyle(color: CaslaColors.muted, fontSize: 13),
                 ),
+              ),
+            )
+          else
+            ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: visibleItems.length,
+              separatorBuilder: (_, _) => const Divider(height: 1),
+              itemBuilder: (context, index) {
+                final item = visibleItems[index];
+                final isFailed = item['status'] == 'FAILED';
+                final isPending = item['status'] == 'PENDING';
+                final isVerifiable = _isVerifiable(item);
+                final isSyncing = _syncingIds.contains(item['id']);
 
-                const SizedBox(height: 14),
-
-                // Tabs Row
-                Container(
-                  padding: const EdgeInsets.all(4),
-                  decoration: BoxDecoration(
-                    color: CaslaColors.muted100,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
+                return Container(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
                   child: Row(
                     children: [
-                      _buildTab('Tất cả', 0),
-                      _buildTab('Đang chờ', 1),
-                      _buildTab('Xác minh', 2),
-                      _buildTab('Lỗi', 3),
-                    ],
-                  ),
-                ),
-
-                const SizedBox(height: 14),
-
-                // List Items
-                if (filteredItems.isEmpty)
-                  Container(
-                    padding: const EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      color: CaslaColors.surface,
-                      border: Border.all(color: CaslaColors.line),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: const Center(
-                      child: Text(
-                        'Không có bản ghi nào trong mục này.',
-                        style: TextStyle(
-                          color: CaslaColors.muted,
-                          fontSize: 13,
+                      Container(
+                        width: 38,
+                        height: 38,
+                        decoration: BoxDecoration(
+                          color: CaslaColors.muted100,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Icon(
+                          isVerifiable
+                              ? Icons.lock_outline
+                              : isFailed
+                              ? Icons.error_outline
+                              : (isPending
+                                    ? Icons.access_time
+                                    : Icons.check_circle_outline),
+                          size: 20,
+                          color: isVerifiable
+                              ? CaslaColors.gold700
+                              : isFailed
+                              ? CaslaColors.danger
+                              : (isPending
+                                    ? CaslaColors.pending
+                                    : CaslaColors.success),
                         ),
                       ),
-                    ),
-                  )
-                else
-                  ListView.separated(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: visibleItems.length,
-                    separatorBuilder: (_, _) => const Divider(height: 1),
-                    itemBuilder: (context, index) {
-                      final item = visibleItems[index];
-                      final isFailed = item['status'] == 'FAILED';
-                      final isPending = item['status'] == 'PENDING';
-                      final isVerifiable = _isVerifiable(item);
-                      final isSyncing = _syncingIds.contains(item['id']);
-
-                      return Container(
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        child: Row(
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Container(
-                              width: 38,
-                              height: 38,
-                              decoration: BoxDecoration(
-                                color: CaslaColors.muted100,
-                                borderRadius: BorderRadius.circular(10),
+                            Text(
+                              item['payload_summary'] ?? 'Bản ghi',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 13,
+                                color: CaslaColors.primaryNavy,
                               ),
-                              child: Icon(
-                                isVerifiable
-                                    ? Icons.lock_outline
-                                    : isFailed
-                                    ? Icons.error_outline
-                                    : (isPending
-                                          ? Icons.access_time
-                                          : Icons.check_circle_outline),
-                                size: 20,
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              _secondaryText(item, isPending: isPending),
+                              style: TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 11,
                                 color: isVerifiable
                                     ? CaslaColors.gold700
                                     : isFailed
                                     ? CaslaColors.danger
-                                    : (isPending
-                                          ? CaslaColors.pending
-                                          : CaslaColors.success),
+                                    : CaslaColors.muted,
                               ),
                             ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    item['payload_summary'] ?? 'Bản ghi',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 13,
-                                      color: CaslaColors.primaryNavy,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    _secondaryText(item, isPending: isPending),
-                                    style: TextStyle(
-                                      fontFamily: 'monospace',
-                                      fontSize: 11,
-                                      color: isVerifiable
-                                          ? CaslaColors.gold700
-                                          : isFailed
-                                          ? CaslaColors.danger
-                                          : CaslaColors.muted,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            if (isVerifiable)
-                              ElevatedButton(
-                                onPressed: isSyncing
-                                    ? null
-                                    : () => _verify(item),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: CaslaColors.primaryNavy,
-                                  foregroundColor: Colors.white,
-                                  minimumSize: const Size(82, 44),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 10,
-                                  ),
-                                ),
-                                child: isSyncing
-                                    ? const SizedBox(
-                                        width: 16,
-                                        height: 16,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: Colors.white,
-                                        ),
-                                      )
-                                    : const Text(
-                                        'Xác minh & gửi',
-                                        style: TextStyle(fontSize: 11),
-                                      ),
-                              )
-                            else if (isFailed)
-                              OutlinedButton(
-                                onPressed: () => _showFailureDetails(item),
-                                style: OutlinedButton.styleFrom(
-                                  minimumSize: const Size(72, 44),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 10,
-                                  ),
-                                  foregroundColor: CaslaColors.danger,
-                                  side: const BorderSide(
-                                    color: CaslaColors.danger,
-                                  ),
-                                ),
-                                child: const Text(
-                                  'Chi tiết',
-                                  style: TextStyle(fontSize: 11),
-                                ),
-                              )
-                            else
-                              StatusChip(status: item['status']),
                           ],
                         ),
-                      );
-                    },
-                  ),
-                if (visibleItems.length < filteredItems.length) ...[
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 48,
-                    child: OutlinedButton.icon(
-                      onPressed: () => setState(() {
-                        final next = _visibleItemCount + _syncPageSize;
-                        _visibleItemCount = next < filteredItems.length
-                            ? next
-                            : filteredItems.length;
-                      }),
-                      icon: const Icon(Icons.expand_more_rounded),
-                      label: Text(
-                        'Xem thêm • ${visibleItems.length}/${filteredItems.length} giao dịch',
                       ),
-                    ),
+                      if (isVerifiable)
+                        ElevatedButton(
+                          onPressed: isSyncing ? null : () => _verify(item),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: CaslaColors.primaryNavy,
+                            foregroundColor: Colors.white,
+                            minimumSize: const Size(82, 44),
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                          ),
+                          child: isSyncing
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Text(
+                                  'Xác minh & gửi',
+                                  style: TextStyle(fontSize: 11),
+                                ),
+                        )
+                      else if (isFailed)
+                        OutlinedButton(
+                          onPressed: () => _showFailureDetails(item),
+                          style: OutlinedButton.styleFrom(
+                            minimumSize: const Size(72, 44),
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                            foregroundColor: CaslaColors.danger,
+                            side: const BorderSide(color: CaslaColors.danger),
+                          ),
+                          child: const Text(
+                            'Chi tiết',
+                            style: TextStyle(fontSize: 11),
+                          ),
+                        )
+                      else
+                        StatusChip(status: item['status']),
+                    ],
                   ),
-                ],
-              ],
+                );
+              },
             ),
-          );
-        },
+          if (_feedHasMore) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: OutlinedButton.icon(
+                onPressed: _feedLoadingMore ? null : _loadMore,
+                icon: const Icon(Icons.expand_more_rounded),
+                label: Text(
+                  _feedLoadingMore
+                      ? 'Đang tải thêm…'
+                      : 'Xem thêm • ${visibleItems.length}/$_totalCount giao dịch',
+                ),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -563,10 +618,9 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
         child: SizedBox(
           height: 48,
           child: InkWell(
-        onTap: () => setState(() {
-          _selectedTabIndex = index;
-          _visibleItemCount = _syncPageSize;
-        }),
+            onTap: () => setState(() {
+              _selectedTabIndex = index;
+            }),
             borderRadius: BorderRadius.circular(7),
             child: Container(
               alignment: Alignment.center,

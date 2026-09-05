@@ -34,6 +34,7 @@ class _WorkerVerificationDialog extends StatefulWidget {
 class _WorkerVerificationDialogState extends State<_WorkerVerificationDialog> {
   final _controller = TextEditingController();
   bool _obscure = true;
+  bool _isClosing = false;
   String? _error;
 
   @override
@@ -43,11 +44,19 @@ class _WorkerVerificationDialogState extends State<_WorkerVerificationDialog> {
   }
 
   void _submit() {
+    if (_isClosing) return;
     final password = _controller.text;
     if (password.trim().isEmpty) {
       setState(() => _error = 'Vui lòng nhập mật khẩu.');
       return;
     }
+    _close(password);
+  }
+
+  void _close([String? password]) {
+    if (_isClosing) return;
+    _isClosing = true;
+    _controller.clear();
     Navigator.of(context).pop(password);
   }
 
@@ -96,10 +105,7 @@ class _WorkerVerificationDialogState extends State<_WorkerVerificationDialog> {
         ],
       ),
       actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Hủy'),
-        ),
+        TextButton(onPressed: _close, child: const Text('Hủy')),
         FilledButton(
           onPressed: _submit,
           child: const Text('Xác minh & gửi SAP'),

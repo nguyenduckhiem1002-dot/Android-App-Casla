@@ -3,7 +3,8 @@ import 'package:flutter/material.dart';
 import '../../app/theme/casla_colors.dart';
 
 /// Lightweight loading placeholder that keeps the final layout stable while
-/// data is loading. It uses only opacity, so it remains cheap on older PDAs.
+/// data is loading. The shimmer is intentionally subtle and uses a single
+/// animated decoration, so it remains reasonable on older PDAs.
 class CaslaSkeleton extends StatefulWidget {
   final double? width;
   final double height;
@@ -23,19 +24,14 @@ class CaslaSkeleton extends StatefulWidget {
 class _CaslaSkeletonState extends State<CaslaSkeleton>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
-  late final Animation<double> _opacity;
 
   @override
   void initState() {
     super.initState();
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 900),
+      duration: const Duration(milliseconds: 1400),
     )..repeat(reverse: true);
-    _opacity = Tween<double>(
-      begin: 0.45,
-      end: 0.9,
-    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
   }
 
   @override
@@ -47,16 +43,44 @@ class _CaslaSkeletonState extends State<CaslaSkeleton>
   @override
   Widget build(BuildContext context) {
     final disableAnimations = MediaQuery.disableAnimationsOf(context);
-    final child = Container(
+    if (disableAnimations) {
+      return Opacity(
+        opacity: 0.72,
+        child: _placeholder(color: CaslaColors.muted100),
+      );
+    }
+
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) {
+        final shift = -1.4 + (_controller.value * 2.8);
+        return _placeholder(
+          gradient: LinearGradient(
+            begin: Alignment(shift, 0),
+            end: Alignment(shift + 1.1, 0),
+            colors: const [
+              CaslaColors.muted100,
+              CaslaColors.muted100,
+              Color(0xFFFFFFFF),
+              CaslaColors.muted100,
+              CaslaColors.muted100,
+            ],
+            stops: const [0, 0.26, 0.5, 0.74, 1],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _placeholder({Color? color, Gradient? gradient}) {
+    return Container(
       width: widget.width,
       height: widget.height,
       decoration: BoxDecoration(
-        color: CaslaColors.muted100,
+        color: color,
+        gradient: gradient,
         borderRadius: BorderRadius.circular(widget.radius),
       ),
     );
-    return disableAnimations
-        ? Opacity(opacity: 0.72, child: child)
-        : FadeTransition(opacity: _opacity, child: child);
   }
 }

@@ -11,6 +11,7 @@ import 'package:intl/intl.dart';
 
 import '../../../app/theme/casla_colors.dart';
 import '../../../core/sync/sync_failure.dart';
+import '../../../core/utils/quantity_formatter.dart';
 import '../../../domain/entities/work_history.dart';
 import '../../../main.dart';
 import '../../../presentation/widgets/casla_skeleton.dart';
@@ -372,24 +373,35 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
         child: StreamBuilder<WorkHistoryResult>(
           stream: _historyStream,
           builder: (context, snapshot) {
-            return SingleChildScrollView(
+            return CustomScrollView(
+              key: PageStorageKey<String>('worker-history-${_range.code}'),
               physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.all(18),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+              slivers: [
+                _boxSliver(
                   _buildRangeTabs(),
-                  const SizedBox(height: 14),
-                  if (snapshot.connectionState == ConnectionState.waiting &&
-                      !snapshot.hasData)
-                    const _HistorySkeleton()
-                  else if (snapshot.hasData) ...[
-                    if (snapshot.hasError) _buildCachedRefreshWarning(),
-                    _buildContent(snapshot.data!),
-                  ] else if (snapshot.hasError)
-                    _buildError(snapshot.error!)
-                ],
-              ),
+                  padding: const EdgeInsets.fromLTRB(18, 18, 18, 0),
+                ),
+                const SliverToBoxAdapter(child: SizedBox(height: 14)),
+                if (snapshot.connectionState == ConnectionState.waiting &&
+                    !snapshot.hasData)
+                  _boxSliver(
+                    const _HistorySkeleton(),
+                    padding: const EdgeInsets.symmetric(horizontal: 18),
+                  )
+                else if (snapshot.hasData) ...[
+                  if (snapshot.hasError)
+                    _boxSliver(
+                      _buildCachedRefreshWarning(),
+                      padding: const EdgeInsets.symmetric(horizontal: 18),
+                    ),
+                  ..._buildContentSlivers(snapshot.data!),
+                ] else if (snapshot.hasError)
+                  _boxSliver(
+                    _buildError(snapshot.error!),
+                    padding: const EdgeInsets.symmetric(horizontal: 18),
+                  ),
+                const SliverToBoxAdapter(child: SizedBox(height: 18)),
+              ],
             );
           },
         ),
@@ -601,7 +613,11 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
       ),
       child: const Row(
         children: [
-          Icon(Icons.cloud_off_outlined, color: CaslaColors.bannerText, size: 17),
+          Icon(
+            Icons.cloud_off_outlined,
+            color: CaslaColors.bannerText,
+            size: 17,
+          ),
           SizedBox(width: 8),
           Expanded(
             child: Text(
@@ -620,20 +636,35 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
     context.go('/login');
   }
 
-  Widget _buildContent(WorkHistoryResult result) {
+  Widget _boxSliver(
+    Widget child, {
+    required EdgeInsets padding,
+  }) {
+    return SliverPadding(
+      padding: padding,
+      sliver: SliverToBoxAdapter(child: child),
+    );
+  }
+
+  List<Widget> _buildContentSlivers(WorkHistoryResult result) {
     final visibleCount = _visibleEntryCount < result.entries.length
         ? _visibleEntryCount
         : result.entries.length;
-    final visibleEntries = result.entries
-        .take(visibleCount)
-        .toList(growable: false);
+    final visibleEntryCount = visibleCount;
+    final slivers = <Widget>[];
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (result.workers.isNotEmpty) _buildSummary(result.workers.first),
-        if (result.isTruncated) ...[
-          const SizedBox(height: 10),
+    if (result.workers.isNotEmpty) {
+      slivers.add(
+        _boxSliver(
+          _buildSummary(result.workers),
+          padding: const EdgeInsets.symmetric(horizontal: 18),
+        ),
+      );
+    }
+
+    if (result.isTruncated) {
+      slivers.add(
+        _boxSliver(
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(10),
@@ -646,18 +677,28 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
               style: TextStyle(color: CaslaColors.bannerText, fontSize: 11.5),
             ),
           ),
-        ],
-        const SizedBox(height: 14),
-        Text(
+          padding: const EdgeInsets.fromLTRB(18, 10, 18, 0),
+        ),
+      );
+    }
+
+    slivers.add(
+      _boxSliver(
+        const Text(
           'Chi tiết giao dịch',
-          style: const TextStyle(
+          style: TextStyle(
             fontWeight: FontWeight.w700,
             fontSize: 13.5,
             color: CaslaColors.primaryNavy,
           ),
         ),
-        const SizedBox(height: 8),
-        if (result.entries.isEmpty)
+        padding: const EdgeInsets.fromLTRB(18, 14, 18, 8),
+      ),
+    );
+
+    if (result.entries.isEmpty) {
+      slivers.add(
+        _boxSliver(
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(24),
@@ -672,26 +713,58 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
                 style: TextStyle(color: CaslaColors.muted, fontSize: 13),
               ),
             ),
-          )
-        else
-          Container(
-            decoration: BoxDecoration(
-              color: CaslaColors.surface,
-              border: Border.all(color: CaslaColors.line),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: ListView.separated(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              itemCount: visibleEntries.length,
-              separatorBuilder: (_, _) => const Divider(height: 1),
-              itemBuilder: (context, index) =>
-                  _buildEntryTile(visibleEntries[index]),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 18),
+        ),
+      );
+    } else {
+      slivers.add(
+        SliverPadding(
+          padding: const EdgeInsets.symmetric(horizontal: 18),
+          sliver: SliverList(
+            delegate: SliverChildBuilderDelegate(
+              (context, index) {
+                final isLast = index == visibleEntryCount - 1;
+                return DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: CaslaColors.surface,
+                    border: Border(
+                      left: const BorderSide(color: CaslaColors.line),
+                      right: const BorderSide(color: CaslaColors.line),
+                      top: index == 0
+                          ? const BorderSide(color: CaslaColors.line)
+                          : BorderSide.none,
+                      bottom: BorderSide(color: CaslaColors.line),
+                    ),
+                    borderRadius: index == 0 || isLast
+                        ? BorderRadius.vertical(
+                            top: index == 0
+                                ? const Radius.circular(14)
+                                : Radius.zero,
+                            bottom: isLast
+                                ? const Radius.circular(14)
+                                : Radius.zero,
+                          )
+                        : null,
+                  ),
+                  child: Column(
+                    children: [
+                      _buildEntryTile(result.entries[index]),
+                      if (!isLast) const Divider(height: 1),
+                    ],
+                  ),
+                );
+              },
+              childCount: visibleEntryCount,
             ),
           ),
-        if (visibleEntries.length < result.entries.length) ...[
-          const SizedBox(height: 10),
+        ),
+      );
+    }
+
+    if (visibleEntryCount < result.entries.length) {
+      slivers.add(
+        _boxSliver(
           SizedBox(
             width: double.infinity,
             height: 52,
@@ -707,38 +780,45 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
               },
               icon: const Icon(Icons.expand_more_rounded),
               label: Text(
-                'Xem thêm • ${visibleEntries.length}/${result.entries.length} giao dịch',
+                'Xem thêm • $visibleEntryCount/${result.entries.length} giao dịch',
               ),
             ),
           ),
-        ],
-      ],
-    );
+          padding: const EdgeInsets.fromLTRB(18, 10, 18, 0),
+        ),
+      );
+    }
+
+    return slivers;
   }
 
-  Widget _buildSummary(WorkHistorySummary summary) {
+  Widget _buildSummary(List<WorkHistorySummary> summaries) {
+    final first = summaries.first;
+    final assigned = summaries.fold<double>(
+      0,
+      (total, summary) => total + summary.assignedQuantity,
+    );
+    final completed = summaries.fold<double>(
+      0,
+      (total, summary) => total + summary.completedQuantity,
+    );
+    final remaining = summaries.fold<double>(
+      0,
+      (total, summary) => total + summary.remainingQuantity,
+    );
+    final uom = first.unitOfMeasure;
     return Row(
       children: [
         _summaryTile(
-          'Đã giao',
-          summary.assignedQuantity,
-          summary.unitOfMeasure,
+          summaries.length == 1 ? 'Đã giao' : 'Tổng đã giao',
+          assigned,
+          uom,
           CaslaColors.primaryNavy,
         ),
         const SizedBox(width: 8),
-        _summaryTile(
-          'Đã hoàn thành',
-          summary.completedQuantity,
-          summary.unitOfMeasure,
-          CaslaColors.success,
-        ),
+        _summaryTile('Đã hoàn thành', completed, uom, CaslaColors.success),
         const SizedBox(width: 8),
-        _summaryTile(
-          'Còn lại',
-          summary.remainingQuantity,
-          summary.unitOfMeasure,
-          CaslaColors.pending,
-        ),
+        _summaryTile('Còn lại', remaining, uom, CaslaColors.pending),
       ],
     );
   }
@@ -755,7 +835,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
         child: Column(
           children: [
             Text(
-              value.toStringAsFixed(0),
+              formatQuantity(value),
               style: TextStyle(
                 fontWeight: FontWeight.w800,
                 fontSize: 18,
@@ -821,7 +901,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
             ),
           ),
           Text(
-            '${isNegative ? '-' : '+'}${entry.quantity.toStringAsFixed(0)} ${entry.unitOfMeasure}',
+            '${isNegative ? '-' : '+'}${formatQuantity(entry.quantity)} ${entry.unitOfMeasure}',
             style: TextStyle(
               fontWeight: FontWeight.w700,
               fontSize: 13,

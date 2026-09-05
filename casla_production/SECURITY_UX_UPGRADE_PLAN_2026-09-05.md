@@ -95,12 +95,12 @@ GitHub REST trả `protected=false`, enforcement `off` ngày audit. CI/CodeQL/De
 | UX-00, P0 | `casla_database.dart:96,549,573,738,744`: demo=false không seed; history chỉ tạo tên worker với `to_ids=[]`; không tìm thấy đường nạp orders/teams từ network. S07 picker đọc local. | Cài mới không thể hoàn tất phân công. Thêm master-data bootstrap có quyền, operation keys, worker-team membership và trạng thái sẵn sàng; không bật demo để chữa. Cần chốt contract backend. |
 | UX-01, P1 | Repo:767 trả stale, refresh unawaited; DB replace cache không emit; W01:367 dùng FutureBuilder. S06:113/S06b:70 pull-refresh không force. | DB đã mới nhưng màn vẫn cũ; kéo làm mới có thể vẫn nhận cache. Dùng snapshot reactive chung có `fetchedAt`, source, stale, refreshing, error; force refresh phải đi network/gom in-flight và publish khi xong. |
 | UX-02, P1 | S06:101 biến lỗi thành report rỗng; S06:498 ưu tiên hoàn toàn SAP summary; S06b:260–318 ưu tiên SAP hoặc fallback extra. | Lỗi trông như không có dữ liệu; thay đổi offline không phản ánh KPI khi đã có SAP summary; extra có thể hiện số ngày cũ. Tách server-confirmed và local-pending, đối soát bằng stable transaction ID, không cộng hai nguồn mù. |
-| UX-03, P1 | S12:281,346 và W01:643 dùng nested shrinkWrap ListView. S12 query toàn bộ; W01 chỉ giới hạn số widget ban đầu, DB/network vẫn materialize toàn report. | Virtualized slivers + keyset pagination, aggregate COUNT riêng. “Xem thêm 50” hiện tại chưa phải pagination end-to-end. |
+| UX-03, P1 | S12:281,346 và W01:643 từng dùng nested shrinkWrap ListView. S12 query toàn bộ; W01 gọi RAP static action OData V4 `getWorkHistory` với deep result `_Entries`, nên action hiện vẫn trả toàn bộ report. | S12 đã chuyển sang keyset pagination theo `(created_at_utc, id)`, aggregate COUNT riêng và page tối đa 50. W01 đã chuyển phần dựng danh sách sang `CustomScrollView`/`SliverList`; còn cần mở rộng contract OData V4 action hiện có với cursor/page size (hoặc tách entity collection query) để backend giới hạn dữ liệu trước khi map deep result. |
 | UX-04, P1 | S06:420, S06b:177/184, S08:258/293, S09:160, S12:248 tạo stream trong build. Repo:345 tải toàn employees/orders/tổng production/recall kể cả khi chỉ xem một assignment. | Resubscribe/query lại khi gõ/chuyển tab/setState. Stream/provider identity ổn định; selector nhỏ; SQL lọc theo scope/date/IDs trước map; group dữ liệu một lần thay vì lặp `.where` từng worker. |
-| UX-05, P1 | Cache key repo:987 có ngày anchor; schema index theo subject nhưng không có prune/eviction; cache read gồm ba query riêng. | Snapshot tích lũy theo ngày/range; có thể đọc meta/entries khác phiên bản khi refresh xen kẽ. Read snapshot trong transaction, retention/LRU theo count/bytes/age, prune chỉ cache. |
+| UX-05, P1 | Cache key repo:987 có ngày anchor; schema index theo subject nhưng không có prune/eviction; cache read gồm ba query riêng. | Đã thêm snapshot read trong transaction, retention theo tuổi/count và bounded byte pruning xấp xỉ 25MB; chỉ cache bị prune, outbox không bị ảnh hưởng. Cần đo lại cap trên dữ liệu thiết bị thật. |
 | UX-06, P1 | Shell:80 eager IndexedStack trừ scanner; DB:1539 query mỗi tick; gateway:235 fetch metadata trước mọi POST bằng Dio mới. | Tab ẩn vẫn giữ subscription/build; sync burst khuếch đại query; thêm RTT mỗi item. Lazy mount + bounded keepalive; coalesce invalidation; cache CSRF/session có single-flight và retry chỉ khi xác định CSRF rejection an toàn. |
 | UX-07, P1 | `CaslaColors.muted=#8A8F9B` trên trắng đạt **3,24:1**, trên background **3,00:1**; W01:729/777 dùng cho chữ 10.5/11. | Chữ nhỏ khó đọc. Semantic text tokens >=4.5:1; Android tap >=48dp, CTA thao tác PDA 52–56dp thử trên máy/găng tay; test font scale và landscape. Không coi phép tính contrast là visual QA đã xong. |
-| UX-08, P2 | W01:594 dùng `workers.first` dù scope có thể team; lượng hiển thị `toStringAsFixed(0)` nhiều nơi; fonts Manrope/Inter chưa khai báo asset hoạt động. | Tổng không rõ của ai; số thập phân bị làm tròn. Tách self/team summary, theo UOM; chuẩn hóa số và typography qua Theme, chọn system font hoặc bundle font tiếng Việt có license. |
+| UX-08, P2 | W01:594 dùng `workers.first` dù scope có thể team; lượng hiển thị `toStringAsFixed(0)` nhiều nơi; fonts Manrope/Inter chưa khai báo asset hoạt động. | W01 đã cộng KPI trên toàn bộ worker trong scope và các màn chính dùng formatter số theo UOM, giữ tối đa 3 chữ số thập phân. Typography/font và visual QA trên thiết bị vẫn còn. |
 | UX-09, P1/P2 | S07/08 chỉ khóa submit sau dialog; login:73 clear controller trước mounted check trong finally; S12 FAILED chủ yếu xem/copy chẩn đoán. | Chặn reentrancy từ đầu; xử lý lifecycle an toàn; lỗi có CTA phù hợp. Không retry mù business rejection; cần edit/supersede/admin workflow có audit và giữ original/idempotency contract. |
 
 ## 4. Kiến trúc đích: cải thiện các module hiện có
@@ -136,12 +136,12 @@ Không dùng `keepAlive` toàn cục hoặc tăng cacheExtent vô hạn. Không 
 | A4 — 2–3 ngày | INT-01 validation trong DB transaction, reentrancy, rejected/local projection semantics. | Flutter + SAP idempotency tests | Parallel confirm/recall không vượt trần; rollback không có nửa entity; ACK/crash/replay không trùng. |
 | A5 — 3–5 ngày sau chốt contract | UX-00 master bootstrap, master-data readiness/error/retry screen state. | Backend + Flutter | Cài mới demo=false → login → tải master → scan/chọn worker/order → write → restart/reconcile thành công; không nới scope khi thiếu dữ liệu. |
 | B1 — 3–4 ngày | UX-01/02 reactive history, refresh thật, stale/offline banner và unified totals. | Flutter; sau A2/A3 | Data mới hiện tự động; response query cũ không ghi đè query mới; local pending visible nhưng không cộng trùng ACK. |
-| B2 — 3–4 ngày | UX-03/04/05 scoped SQL, pagination, atomic cache read, bounded eviction, ổn định subscriptions. | Flutter; sau B1 | 10k rows không dựng toàn list; gõ text không khởi tạo lại stream; cache đạt cap; migration giữ nguyên outbox. |
+| B2 — 3–4 ngày | UX-03/04/05 scoped SQL, keyset pagination, atomic cache read, bounded eviction, ổn định subscriptions. | Flutter; sau B1 | S12 không dựng toàn queue; page/cursor và COUNT giữ ổn định; cache có age/count/byte bound; migration giữ nguyên outbox. W01 report pagination tiếp tục ở đợt kế. |
 | B3 — 1–2 ngày | UX-06 lazy tabs, scoped invalidation, CSRF/session reuse có guard. | Flutter + gateway staging | Không polling/request thừa ở tab ẩn; CSRF expiry/race không làm nhân đôi lệnh; đo RTT trước/sau. |
 | C — 3–4 ngày | UX-07/08/09 typography/contrast, touch targets, keyboard/safe area, số/UOM, inline errors, CTA recovery, state restoration. | Flutter + UX/QA | 320/360/375 logical width, landscape, text scale 1.0/1.3/2.0, TalkBack, reduced motion; không mất input/scroll hoặc thông tin quantity. |
 | D — 3–5 ngày | Signed staging, device/load/security matrix, pilot một tổ rồi mở rộng. | QA + DevOps + SAP owner | Go-live gates trong PRODUCTION_READINESS đạt; migration, revoke, scanner, rollback và support runbook đã thử. |
 
-A1/A4 có thể làm độc lập với chốt backend. B1/B2 chỉ rollout sau A2/A3 để không tăng tốc hiển thị dữ liệu sai quyền. Không cần chờ ABAP thay chính sách WorkerPassword để sửa các lỗi mobile độc lập.
+A1/A4 có thể làm độc lập với việc thay đổi backend vì chính sách `WorkerPassword` đã được xác nhận là bắt buộc. B1/B2 chỉ rollout sau A2/A3 để không tăng tốc hiển thị dữ liệu sai quyền. App phải giữ password trong memory cho đúng thao tác foreground, không persist/cache/log và không cho background retry tự động khi thiếu xác minh.
 
 ## 6. Ngưỡng đo lường và rollout
 
@@ -196,17 +196,55 @@ Nguồn chính thức đã đối chiếu:
 - **A4:** kiểm tra invariant trong cùng SQLite transaction cho assignment/production/recall; chống vượt trần khi có thao tác cạnh tranh và giữ outbox/audit nhất quán.
 - **B1–B3:** lịch sử/KPI dùng stream ổn định với stale-while-refresh, refresh thật, cache read atomic, retention/prune có giới hạn, pagination màn sync, lazy tabs và touch target/semantics tối thiểu cho các control chính.
 - **C một phần:** CTA `Xác minh & gửi` gọi verified sync trực tiếp với password chỉ giữ trong memory; item không còn bị báo thành công giả hoặc bị retry nền vô hạn khi thiếu xác minh.
+- **QR thực tế:** parser công nhân nhận mã hỗn hợp như `A1`, `bachdv`, `NC000002`, `2`, đọc `ValidFrom/ValidTo` và chặn scan ngoài hiệu lực; parser công đoạn giữ raw payload, tên hàng và khóa `ProductionOrder/Operation`. Schema v4 lưu validity window công nhân và `operation_qr_payload` để retry/sync không mất thông tin QR.
 
 Kiểm chứng sau triển khai:
 
 - `flutter analyze --no-pub`: **No issues found**.
-- `flutter test --no-pub`: **181 tests passed**, gồm auth race, scope isolation, transaction invariant, cache stream, SAP chaos, offline restart, verified sync và performance benchmark.
+- `flutter test --no-pub`: **203 tests passed** ở vòng hiện tại, gồm auth race, scope isolation, transaction invariant, cache stream, SAP chaos, offline restart, verified sync, QR parser/validity, schema migration, operation QR lookup, overview team-scope alias và performance benchmark.
 - `git diff --check`: không phát hiện whitespace error.
 
 Các phần chưa thể hoàn tất chỉ bằng app và cần phối hợp ngoài code:
 
-- **ABAP contract:** backend hiện vẫn bắt buộc `WorkerPassword` trên cả `initialAssign`, `transfer`, `recall`, `confirm`; cần ticket/chốt chính sách nếu muốn supervisor dùng credential của chính mình cho assignment/recall.
+- **ABAP contract (đã xác nhận, không phải blocker):** backend bắt buộc `WorkerPassword` trên `initialAssign`, `transfer`, `recall`, `confirm` để công nhân xác nhận việc nhận sản phẩm và xác nhận công đoạn. App giữ nguyên quy tắc này: mở dialog xác minh ở foreground, chỉ truyền password cho request hiện tại, không lưu lại và hiển thị CTA xử lý lại nếu giao dịch offline/chưa được xác minh.
 - **Master-data bootstrap:** backend clone hiện chưa có endpoint revision/bootstrap đủ để app tải catalog khi cài mới; app đã fail-closed và hiển thị hướng dẫn rõ thay vì giả tạo dữ liệu.
 - **Release governance/visual QA:** branch protection, signed staging, device matrix, profile-mode frame metrics và pilot rollout cần được thực hiện bởi DevOps/QA/SAP owner theo gate D; không được suy ra từ test local.
 
 Không thay đổi mã ABAP trong đợt này. Các file `.abap_security_review/`, `.tmp_abap_rap100/`, `.claude/` và trạng thái submodule đã tồn tại ngoài phạm vi app được giữ nguyên.
+
+## 10. Đợt tiếp tục — bảo vệ xác minh và giảm tải đọc dữ liệu
+
+Triển khai tiếp trên commit `b499bb5`:
+
+- `SyncAccessScope` chứa session generation và danh sách team bất biến. Chuỗi xác minh/background sync dừng khi đăng nhập lại cùng tài khoản; kiểm tra lại sau đọc nguồn và sau refresh trước khi gửi. Sửa race stop/start của subscription kết nối.
+- S07/S08/S09 khóa thao tác trước khi mở dialog, mở khóa khi hủy/lỗi và kiểm tra phiên/team sau khi nhập password. S08 ngăn mở lặp sheet nhập sản lượng. S12 không tiếp tục xác minh từ dialog của phiên cũ.
+- Dialog worker password chỉ đóng một lần khi Enter và nút gửi được kích hoạt sát nhau, xóa controller khi đóng. Login chặn gửi lặp và tránh truy cập controller sau dispose.
+- Repository assignment chỉ đọc thông tin hiển thị và KPI của các ID đã chọn. SQLite dùng index hiện có cho tổng production/recall, đọc một snapshot transaction và chia chunk 400 ID để tránh giới hạn tham số. Giữ thứ tự danh sách, không nhân tổng do join hai bảng chi tiết.
+- Stream lịch sử phát lỗi refresh cho query tương ứng, giữ snapshot đã tải để UI hiển thị cảnh báo bản lưu và phát dữ liệu mới khi mạng phục hồi. Buffer update trong lần đọc đầu để cache cũ không ghi đè kết quả refresh nhanh.
+
+Kiểm chứng: analyzer sạch; full Flutter suite **194 tests passed**, gồm regression cho session/scope giữa sync, SQL display/chunk, cache error/recovery, dialog double-submit, keyset pagination, cache retention và quantity formatting. Đã format các file sửa và kiểm tra whitespace. Chưa đo frame timing trên thiết bị thật.
+
+Phạm vi còn lại của plan (các mục này cần thêm QA/backend/DevOps hoặc một PR riêng):
+
+- UX-03: W01 đã có lazy `SliverList` ở phía app; còn cần mở rộng contract của OData V4 static action `getWorkHistory` để nhận page size/cursor (hoặc thêm entity collection query) và trả `nextCursor/hasMore`; S12 queue đã có pagination end-to-end.
+- UX-02/06: đối soát KPI SAP/local pending bằng transaction ID, invalidation sau ACK/resume và quyết định chính sách giữ subscription ở tab ẩn.
+- UX-05: chạy profile dữ liệu thật để xác nhận cap xấp xỉ 25MB, chi phí prune và điều chỉnh LRU theo pilot.
+- UX-07/08/09: typography/font chính thức, visual QA text scale/TalkBack/landscape, state restoration đầy đủ và workflow sửa giao dịch bị từ chối có audit.
+- Bootstrap master data còn cần contract backend; staging, branch protection và device/pilot gates còn cần môi trường vận hành. `WorkerPassword` là quy tắc nghiệp vụ đã chốt và được giữ nguyên.
+
+## 11. Đợt tiếp tục — range tổng quan quản lý và hiển thị đủ tổ
+
+Đã triển khai trên app Flutter:
+
+- S06 có bộ chọn `Một ngày`, `Tuần này`, `Tháng này` và `Tùy chọn`; request dùng đúng `RangeCode` của OData `getWorkHistory` (`D/W/M/C`). Khoảng ngày custom giới hạn 31 ngày để giữ trải nghiệm và tải dữ liệu ổn định.
+- KPI, danh sách công nhân và assignment local dùng cùng một khoảng thời gian. Khi đổi range, stream query được thay thế có chủ đích để tránh hiển thị lẫn dữ liệu của range trước.
+- Scope tổ được resolve ở database theo cả khóa local (`team-1`) và mã nghiệp vụ SAP (`ma_to`, ví dụ `TC01`). Cùng một logic được dùng cho worker và assignment, nên “Tất cả tổ” không còn bị rỗng chỉ vì khác dạng mã.
+- Nếu master team local chưa có bản ghi tương ứng, bộ lọc vẫn hiển thị các mã tổ SAP trong phạm vi phiên và không tự mở rộng ra ngoài scope.
+- Bổ sung regression test cho worker/assignment/team lookup bằng mã SAP.
+
+Kiểm chứng sau đợt này:
+
+- `flutter analyze --no-pub`: **No issues found**.
+- `flutter test --no-pub test/core/scope_and_order_lookup_test.dart`: **23 tests passed**.
+- `flutter test --no-pub`: **203 tests passed**.
+- `git diff --check`: không phát hiện whitespace error; cảnh báo còn lại chỉ là chuyển đổi line ending LF/CRLF của Git trên Windows.

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../../app/theme/casla_colors.dart';
+import '../../../core/utils/quantity_formatter.dart';
 import '../../../domain/entities/entities.dart';
 import '../../../domain/entities/enums.dart';
 import '../../../main.dart';
@@ -54,6 +55,7 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
   }
 
   Future<void> _submitRecall(double maxRecall) async {
+    if (_isSubmitting) return;
     final qty = double.tryParse(_qtyController.text) ?? 0.0;
     if (!qty.isFinite || qty <= 0 || qty > maxRecall) {
       setState(() {
@@ -77,18 +79,25 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
     final appState = ref.read(appStateProvider);
     final emp = appState.currentSession;
     final supervisorMaNv = emp?.maNv ?? '';
-    final workerPassword = await showWorkerVerificationDialog(
-      context,
-      workerName: widget.assignment.workerName,
-      actionLabel: 'gửi thu hồi lên SAP',
-    );
-    if (!mounted || workerPassword == null) return;
-
+    final generation = appState.sessionGeneration;
     setState(() => _isSubmitting = true);
 
     // Through the repository so ProductionMath.validateRecallEntry runs — the
     // max-recall ceiling and the mandatory note for "Khác" live there.
     try {
+      final workerPassword = await showWorkerVerificationDialog(
+        context,
+        workerName: widget.assignment.workerName,
+        actionLabel: 'gửi thu hồi lên SAP',
+      );
+      if (!mounted || workerPassword == null) return;
+      if (!appState.isSessionGenerationCurrent(generation) ||
+          appState.currentSession?.toIds.contains(widget.assignment.teamId) !=
+              true) {
+        throw Exception(
+          'Phiên hoặc quyền đã thay đổi. Vui lòng mở lại thao tác.',
+        );
+      }
       final receipt = await appState.recallRepo.recallAssignment(
         assignmentId: widget.assignment.id,
         quantity: qty,
@@ -109,7 +118,6 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
       );
     } on Exception catch (e) {
       if (!mounted) return;
-      setState(() => _isSubmitting = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -119,6 +127,8 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
         ),
       );
       return;
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
     }
 
     if (!mounted) return;
@@ -216,15 +226,15 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
                           children: [
                             _buildStatCol(
                               'Giao ban đầu',
-                              effective.toStringAsFixed(0),
+                              formatQuantity(effective),
                             ),
                             _buildStatCol(
                               'Đã hoàn thành',
-                              completed.toStringAsFixed(0),
+                              formatQuantity(completed),
                             ),
                             _buildStatCol(
                               'Có thể thu hồi',
-                              maxRecall.toStringAsFixed(0),
+                              formatQuantity(maxRecall),
                               color: CaslaColors.gold700,
                             ),
                           ],

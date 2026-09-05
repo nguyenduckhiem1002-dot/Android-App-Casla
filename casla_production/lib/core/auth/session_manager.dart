@@ -124,6 +124,7 @@ class AppState extends ChangeNotifier {
     final scope = SyncAccessScope(
       actorId: session.maNv,
       teamIds: session.toIds,
+      sessionGeneration: _session.generation,
     );
     return scope.isUsable ? scope : null;
   }
@@ -142,6 +143,9 @@ class AppState extends ChangeNotifier {
 
   // ─── Session ──────────────────────────────────────────────────────
   UserSession? get currentSession => _session.currentSession;
+  int get sessionGeneration => _session.generation;
+  bool isSessionGenerationCurrent(int generation) =>
+      _session.isGenerationCurrent(generation);
   bool get isLoggedIn => _session.isLoggedIn;
   UserRole? get currentRole => _session.currentSession?.role;
 

@@ -6,6 +6,7 @@
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:casla_production/core/database/casla_database.dart';
+import 'package:casla_production/core/utils/operation_qr_parser.dart';
 import '../support/database_test_harness.dart';
 
 void main() {
@@ -54,6 +55,14 @@ void main() {
     test('an empty scope returns nothing, not everything', () async {
       expect(await db.getEmployeesByTeamIds([]), isEmpty);
     });
+
+    test('accepts SAP team codes as aliases for local team ids', () async {
+      final workers = await db.getEmployeesByTeamIds(['TC01']);
+
+      expect(workers, isNotEmpty);
+      expect(workers.every((e) => (e['to_ids'] as List).contains('team-1')),
+          isTrue);
+    });
   });
 
   group('watchAssignmentsByTeams', () {
@@ -70,6 +79,104 @@ void main() {
 
     test('an empty team scope returns nothing', () async {
       expect(await db.watchAssignmentsByTeams([]).first, isEmpty);
+    });
+
+    test('resolves SAP team codes when reading local assignments', () async {
+      final team1 = await db.watchAssignmentsByTeams(['TC01']).first;
+
+      expect(team1, isNotEmpty);
+      expect(team1.every((assignment) => assignment['to_id'] == 'team-1'),
+          isTrue);
+    });
+  });
+
+  group('getTeamsForScope', () {
+    test('returns team master rows for SAP business codes', () async {
+      final teams = await db.getTeamsForScope(['TC01', 'TC03']);
+
+      expect(teams.map((team) => team['id']), containsAll(['team-1', 'team-3']));
+      expect(teams.map((team) => team['ten_to']),
+          containsAll(['Tổ Cắt 1', 'Tổ Cắt 3']));
+    });
+  });
+
+  group('paged sync feed', () {
+    test('uses a stable cursor and returns complete summaries', () async {
+      await db.createAssignmentAtomically(
+        assignment: {
+          'id': 'page-assignment-a',
+          'nhan_vien_id': 'emp-1',
+          'don_hang_id': 'ord-1',
+          'to_id': 'team-2',
+          'assigned_quantity': 10.0,
+          'business_date': '2026-09-05',
+          'shift_id': 'SHIFT_1',
+          'status': 'OPEN',
+          'created_by': 'SUP-A',
+          'occurred_at_utc': 10,
+          'device_id': 'TEST',
+          'sync_status': 'PENDING',
+          'idempotency_key': 'page-a',
+          'created_at_utc': 10,
+        },
+        queueItem: {
+          'id': 'page-queue-a',
+          'entity_type': 'ASSIGNMENT',
+          'entity_id': 'page-assignment-a',
+          'action': 'CREATE',
+          'created_at_utc': 10,
+          'retry_count': 0,
+        },
+        auditLog: {'id': 'page-audit-a', 'occurred_at_utc': 10},
+      );
+      await db.createAssignmentAtomically(
+        assignment: {
+          'id': 'page-assignment-b',
+          'nhan_vien_id': 'emp-1',
+          'don_hang_id': 'ord-1',
+          'to_id': 'team-2',
+          'assigned_quantity': 10.0,
+          'business_date': '2026-09-05',
+          'shift_id': 'SHIFT_1',
+          'status': 'OPEN',
+          'created_by': 'SUP-A',
+          'occurred_at_utc': 11,
+          'device_id': 'TEST',
+          'sync_status': 'PENDING',
+          'idempotency_key': 'page-b',
+          'created_at_utc': 11,
+        },
+        queueItem: {
+          'id': 'page-queue-b',
+          'entity_type': 'ASSIGNMENT',
+          'entity_id': 'page-assignment-b',
+          'action': 'CREATE',
+          'created_at_utc': 11,
+          'retry_count': 0,
+        },
+        auditLog: {'id': 'page-audit-b', 'occurred_at_utc': 11},
+      );
+      final first = await db.getSyncFeedPage(
+        actorId: 'SUP-A',
+        teamIds: ['team-2'],
+        filter: SyncFeedFilter.pending,
+        pageSize: 1,
+      );
+      expect(first.items, hasLength(1));
+      expect(first.items.single['id'], 'page-queue-b');
+      expect(first.hasMore, isTrue);
+      expect(first.totalCount, 2);
+      final second = await db.getSyncFeedPage(
+        actorId: 'SUP-A',
+        teamIds: ['team-2'],
+        filter: SyncFeedFilter.pending,
+        pageSize: 1,
+        beforeCreatedAtUtc: first.nextCreatedAtUtc,
+        beforeId: first.nextId,
+      );
+      expect(second.items.single['id'], 'page-queue-a');
+      expect(second.hasMore, isFalse);
+      expect(second.pendingCount, 2);
     });
   });
 
@@ -138,5 +245,27 @@ void main() {
         expect(await db.getOrderByCode('{not json'), isNull);
       },
     );
+  });
+
+  group('upsertOrderFromOperationQr', () {
+    test('keeps SAP keys, product name and raw QR payload', () async {
+      const raw = '{"ProductionOrder":"000001000020",'
+          '"Operation":"0010","ProductCode":"200009017",'
+          '"ProductName":"XE-EU24122750-G-V1-2cm",'
+          '"UnitOfMeasure":"KG"}';
+
+      final order = await db.upsertOrderFromOperationQr(
+        OperationQrParser.parse(raw),
+      );
+
+      expect(order?['production_order'], '000001000020');
+      expect(order?['operation'], '0010');
+      expect(order?['ten_sp'], 'XE-EU24122750-G-V1-2cm');
+      expect(order?['operation_qr_payload'], raw);
+      expect(
+        await db.getOrderByCode('000001000020-0010'),
+        isNotNull,
+      );
+    });
   });
 }

@@ -9,7 +9,7 @@
 import 'package:sqflite/sqflite.dart';
 
 /// Bump on every schema change and add the matching step to [migrate].
-const int schemaVersion = 3;
+const int schemaVersion = 4;
 
 /// Tables holding transactions that must survive a restart until SAP confirms
 /// them. The retention policy in Spec 4.7 forbids clearing these.
@@ -86,7 +86,9 @@ const List<String> _createStatements = [
     trang_thai TEXT NOT NULL,
     vai_tro TEXT NOT NULL,
     quyen_han TEXT NOT NULL DEFAULT '[]',
-    to_ids TEXT NOT NULL DEFAULT '[]'
+    to_ids TEXT NOT NULL DEFAULT '[]',
+    valid_from TEXT,
+    valid_to TEXT
   )
   ''',
   'CREATE UNIQUE INDEX idx_employees_ma_nv ON employees(ma_nv)',
@@ -117,7 +119,8 @@ const List<String> _createStatements = [
     -- fields, not from `ma_don_hang` — that code is an app-internal label and
     -- is never guaranteed to match SAP's real order number format.
     production_order TEXT,
-    operation TEXT
+    operation TEXT,
+    operation_qr_payload TEXT
   )
   ''',
   // getOrderByCode resolves a scan against any of these identifiers.
@@ -259,6 +262,7 @@ Future<void> createSchema(Database db) async {
 const Map<int, Future<void> Function(Database)> _migrations = {
   1: _upgradeV1ToV2,
   2: _upgradeV2ToV3,
+  3: _upgradeV3ToV4,
 };
 
 /// v2 — SAP live keys on `orders`.
@@ -281,6 +285,14 @@ Future<void> _upgradeV2ToV3(Database db) async {
   for (final statement in _workHistoryCacheStatements) {
     await db.execute(statement);
   }
+}
+
+/// v4 — preserve the validity window from worker QR cards and the original
+/// operation QR payload used to resolve SAP's production order/operation.
+Future<void> _upgradeV3ToV4(Database db) async {
+  await db.execute('ALTER TABLE employees ADD COLUMN valid_from TEXT');
+  await db.execute('ALTER TABLE employees ADD COLUMN valid_to TEXT');
+  await db.execute('ALTER TABLE orders ADD COLUMN operation_qr_payload TEXT');
 }
 
 /// Walks a database from [from] up to [to], one version at a time.

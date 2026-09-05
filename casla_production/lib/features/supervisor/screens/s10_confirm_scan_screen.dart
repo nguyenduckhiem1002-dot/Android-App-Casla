@@ -44,6 +44,10 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
         _showError(parsed.error ?? 'Mã QR công nhân không hợp lệ.');
         return;
       }
+      if (!parsed.isEffectiveOn(DateTime.now())) {
+        _showError('Công nhân này không còn hiệu lực trong ngày hiện tại.');
+        return;
+      }
 
       final db = ref.read(appStateProvider).db;
       final worker = await db.getEmployeeByCode(parsed.maNv);
@@ -69,6 +73,12 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
         _showError('Công nhân không thuộc phạm vi tổ bạn được phân quyền.');
         return;
       }
+
+      await db.rememberEmployeeQrValidity(
+        maNv: parsed.maNv,
+        validFrom: parsed.validFrom,
+        validTo: parsed.validTo,
+      );
 
       if (!mounted) return;
       unawaited(HapticFeedback.lightImpact());

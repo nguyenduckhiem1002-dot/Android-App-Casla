@@ -9,6 +9,7 @@ import '../../../presentation/widgets/qr_scanner_view.dart';
 import '../../../presentation/widgets/worker_verification_dialog.dart';
 
 import '../../../core/utils/worker_qr_parser.dart';
+import '../../../core/utils/operation_qr_parser.dart';
 
 class S07CreateAssignmentWizardScreen extends ConsumerStatefulWidget {
   const S07CreateAssignmentWizardScreen({super.key});
@@ -60,6 +61,17 @@ class _S07CreateAssignmentWizardScreenState
                 );
                 return;
               }
+              if (!res.isEffectiveOn(DateTime.now())) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Công nhân này không còn hiệu lực trong ngày hiện tại.',
+                    ),
+                    backgroundColor: CaslaColors.danger,
+                  ),
+                );
+                return;
+              }
               final worker = await ref
                   .read(appStateProvider)
                   .db
@@ -96,12 +108,17 @@ class _S07CreateAssignmentWizardScreenState
                 );
                 return;
               }
-              if (mounted) {
-                Navigator.pop(context); // Pop camera page
-                setState(() {
-                  _selectedWorker = worker;
-                });
-              }
+              if (!mounted || !context.mounted) return;
+              await ref.read(appStateProvider).db.rememberEmployeeQrValidity(
+                    maNv: res.maNv,
+                    validFrom: res.validFrom,
+                    validTo: res.validTo,
+                  );
+              if (!mounted || !context.mounted) return;
+              Navigator.pop(context); // Pop camera page
+              setState(() {
+                _selectedWorker = worker;
+              });
             },
           ),
         ),
@@ -164,7 +181,10 @@ class _S07CreateAssignmentWizardScreenState
             onManualInput: () => _showManualOrderSelection(isFromCamera: true),
             onScan: (code) async {
               final db = ref.read(appStateProvider).db;
-              final order = await db.getOrderByCode(code);
+              final operationQr = OperationQrParser.parse(code);
+              final order = operationQr.isValid
+                  ? await db.upsertOrderFromOperationQr(operationQr)
+                  : await db.getOrderByCode(code);
               if (!context.mounted || !mounted) return;
               if (order == null) {
                 // Check if it's a worker QR by mistake
@@ -233,6 +253,7 @@ class _S07CreateAssignmentWizardScreenState
   }
 
   Future<void> _submitAssignment() async {
+    if (_isSubmitting) return;
     if (_selectedWorker == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -288,17 +309,23 @@ class _S07CreateAssignmentWizardScreenState
     final createdBy = emp?.maNv ?? '';
 
     final dateFormatted = DateFormat('yyyy-MM-dd').format(_startDate);
-    final workerPassword = await showWorkerVerificationDialog(
-      context,
-      workerName: _selectedWorker!['ten'] as String? ?? 'Công nhân',
-      actionLabel: 'gửi phân công lên SAP',
-    );
-    if (!mounted || workerPassword == null) return;
-
+    final generation = appState.sessionGeneration;
     setState(() => _isSubmitting = true);
 
     // Through the repository so the quantity check and the audit-log entry run.
     try {
+      final workerPassword = await showWorkerVerificationDialog(
+        context,
+        workerName: _selectedWorker!['ten'] as String? ?? 'Công nhân',
+        actionLabel: 'gửi phân công lên SAP',
+      );
+      if (!mounted || workerPassword == null) return;
+      if (!appState.isSessionGenerationCurrent(generation) ||
+          appState.currentSession?.toIds.contains(toId) != true) {
+        throw Exception(
+          'Phiên hoặc quyền đã thay đổi. Vui lòng mở lại thao tác.',
+        );
+      }
       final receipt = await appState.assignmentRepo.createAssignment(
         workerId: workerId,
         orderId: orderId,
@@ -325,7 +352,6 @@ class _S07CreateAssignmentWizardScreenState
       );
     } on Exception catch (e) {
       if (!mounted) return;
-      setState(() => _isSubmitting = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -335,11 +361,11 @@ class _S07CreateAssignmentWizardScreenState
         ),
       );
       return;
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
     }
 
     if (!mounted) return;
-
-    setState(() => _isSubmitting = false);
 
     if (_keepProductAfterSubmit) {
       setState(() {
@@ -372,7 +398,7 @@ class _S07CreateAssignmentWizardScreenState
         : 'Chọn hoặc quét mã công nhân';
 
     final productDisplayName = _selectedOrder != null
-        ? '${_selectedOrder!['ten_sp']} (${_selectedOrder!['dac_tinh'] ?? ''})'
+        ? '${_selectedOrder!['ten_sp']}'
         : 'Quét mã QR sản phẩm / NVL';
 
     return Scaffold(

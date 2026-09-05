@@ -130,7 +130,8 @@ class VerifiedSyncCoordinator {
             outcome: VerifiedSyncOutcome.blocked,
             syncedCount: synced,
             totalCount: items.length,
-            message: 'Phiên đăng nhập đã thay đổi. Giao dịch chưa gửi được giữ nguyên.',
+            message:
+                'Phiên đăng nhập đã thay đổi. Giao dịch chưa gửi được giữ nguyên.',
           );
         }
         final source = await database.getSyncSourceRow(
@@ -159,6 +160,7 @@ class VerifiedSyncCoordinator {
 
         SyncFailure? failure;
         try {
+          _ensureScopeStillActive(scope);
           failure = await pushAndRecord(
             database: database,
             gateway: gateway,
@@ -172,13 +174,15 @@ class VerifiedSyncCoordinator {
             outcome: VerifiedSyncOutcome.blocked,
             syncedCount: synced,
             totalCount: items.length,
-            message: 'Phiên đăng nhập đã thay đổi. Giao dịch chưa gửi được giữ nguyên.',
+            message:
+                'Phiên đăng nhập đã thay đổi. Giao dịch chưa gửi được giữ nguyên.',
           );
         }
 
         if (failure?.kind == SyncFailureKind.auth &&
             await gateway.refreshSession()) {
           try {
+            _ensureScopeStillActive(scope);
             failure = await pushAndRecord(
               database: database,
               gateway: gateway,
@@ -255,5 +259,11 @@ class VerifiedSyncCoordinator {
     final provider = _scopeProvider;
     if (provider == null) return true;
     return expected?.matches(provider()) ?? false;
+  }
+
+  void _ensureScopeStillActive(SyncAccessScope? scope) {
+    if (_canExecute?.call() == false || !_isScopeStillActive(scope)) {
+      throw const SapSessionInvalidatedException();
+    }
   }
 }

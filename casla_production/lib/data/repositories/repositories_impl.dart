@@ -149,7 +149,9 @@ class AuthRepositoryImpl implements AuthRepository {
       fullName: result.fullName.trim().isNotEmpty
           ? result.fullName.trim()
           : current.fullName,
-      email: result.email.trim().isNotEmpty ? result.email.trim() : current.email,
+      email: result.email.trim().isNotEmpty
+          ? result.email.trim()
+          : current.email,
       teamName: authorization.workContexts.isNotEmpty
           ? authorization.workContexts.first.workName
           : current.teamName,
@@ -421,58 +423,37 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
     return results.isNotEmpty ? results.first : null;
   }
 
-  /// Batch-maps assignment entities to domain models.
-  ///
-  /// Every lookup table is fetched once up front, so the cost is
-  /// O(E + O + P + R + N) rather than O(N × (P + R)). The per-assignment
-  /// `getCompletedQuantity` / `getRecalledQuantity` calls that used to sit
-  /// inside this loop each scanned the full records table.
+  /// Maps only the selected assignments from one consistent display snapshot.
   Future<List<Assignment>> _mapToAssignmentsBatch(
     List<Map<String, dynamic>> entities,
   ) async {
     if (entities.isEmpty) return [];
 
-    final employees = await db.getAllEmployees();
-    // All orders, not just OPEN ones: an assignment whose order has since closed
-    // still has to render its real code and product name.
-    final orders = await db.getAllOrders();
-    final completedByAssignment = await db.getCompletedQuantitiesByAssignment();
-    final recalledByAssignment = await db.getRecalledQuantitiesByAssignment();
-
-    final empLookup = <String, Map<String, dynamic>>{};
-    for (final e in employees) {
-      empLookup[e['id'] as String] = e;
-    }
-
-    final orderLookup = <String, Map<String, dynamic>>{};
-    for (final o in orders) {
-      orderLookup[o['id'] as String] = o;
-    }
+    final snapshots = await db.getAssignmentDisplayRows(
+      entities.map((entity) => entity['id'] as String),
+    );
 
     final result = <Assignment>[];
-    for (final entity in entities) {
+    for (final entity in snapshots) {
       final empId = entity['nhan_vien_id'] as String;
       final orderId = entity['don_hang_id'] as String;
       final assignmentId = entity['id'] as String;
 
-      final emp = empLookup[empId];
-      final ord = orderLookup[orderId];
-
-      final completed = completedByAssignment[assignmentId] ?? 0.0;
-      final recalled = recalledByAssignment[assignmentId] ?? 0.0;
+      final completed = (entity['completed_quantity'] as num).toDouble();
+      final recalled = (entity['recalled_quantity'] as num).toDouble();
 
       result.add(
         Assignment(
           id: assignmentId,
           workerId: empId,
-          workerMaNv: emp?['ma_nv'] as String? ?? empId,
-          workerName: emp?['ten'] as String? ?? 'Công nhân',
+          workerMaNv: entity['worker_code'] as String? ?? empId,
+          workerName: entity['worker_name'] as String? ?? 'Công nhân',
           teamId: entity['to_id'] as String,
           orderId: orderId,
-          orderCode: ord?['ma_don_hang'] as String? ?? orderId,
-          productCode: ord?['ma_sp'] as String? ?? 'SP',
-          productName: ord?['ten_sp'] as String? ?? 'Sản phẩm',
-          uom: ord?['uom'] as String? ?? 'cái',
+          orderCode: entity['order_code'] as String? ?? orderId,
+          productCode: entity['product_code'] as String? ?? 'SP',
+          productName: entity['product_name'] as String? ?? 'Sản phẩm',
+          uom: entity['unit_of_measure'] as String? ?? 'cái',
           assignedQuantity: entity['assigned_quantity'] as double,
           completedQuantity: completed,
           recalledQuantity: recalled,
@@ -921,11 +902,22 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
     StreamSubscription<_WorkHistoryUpdate>? updatesSubscription;
     var isLoading = false;
     WorkHistoryResult? lastEmitted;
+    _WorkHistoryUpdate? pendingUpdate;
 
     void emitIfNew(WorkHistoryResult result) {
       if (controller.isClosed || identical(lastEmitted, result)) return;
       lastEmitted = result;
       controller.add(result);
+    }
+
+    void emitUpdate(_WorkHistoryUpdate update) {
+      if (controller.isClosed || !_isCacheSubjectCurrent(subject)) return;
+      final result = update.result;
+      if (result != null) {
+        emitIfNew(result);
+      } else {
+        controller.addError(update.error!, update.stackTrace);
+      }
     }
 
     Future<void> emitCurrent() async {
@@ -941,9 +933,13 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
           emitIfNew(result);
         }
       } catch (error, stackTrace) {
+        pendingUpdate = null;
         if (!controller.isClosed) controller.addError(error, stackTrace);
       } finally {
         isLoading = false;
+        final update = pendingUpdate;
+        pendingUpdate = null;
+        if (update != null) emitUpdate(update);
       }
     }
 
@@ -954,7 +950,13 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
         updatesSubscription = _updates.stream
             .where((update) => update.cacheKey == cacheKey)
             .listen((update) {
-              if (_isCacheSubjectCurrent(subject)) emitIfNew(update.result);
+              // A very fast refresh may finish before the initial cache read
+              // reaches the listener. Emit cache first, then its newer update.
+              if (isLoading) {
+                pendingUpdate = update;
+              } else {
+                emitUpdate(update);
+              }
             });
         unawaited(emitCurrent());
       },
@@ -996,6 +998,17 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
 
     try {
       return await future;
+    } catch (error, stackTrace) {
+      if (!_updates.isClosed && _isCacheSubjectCurrent(subject)) {
+        _updates.add(
+          _WorkHistoryUpdate.failed(
+            cacheKey: cacheKey,
+            error: error,
+            stackTrace: stackTrace,
+          ),
+        );
+      }
+      rethrow;
     } finally {
       if (identical(_inFlight[cacheKey], future)) {
         final _ = _inFlight.remove(cacheKey);
@@ -1218,9 +1231,21 @@ class _CachedWorkHistory {
 
 class _WorkHistoryUpdate {
   final String cacheKey;
-  final WorkHistoryResult result;
+  final WorkHistoryResult? result;
+  final Object? error;
+  final StackTrace? stackTrace;
 
-  const _WorkHistoryUpdate({required this.cacheKey, required this.result});
+  const _WorkHistoryUpdate({
+    required this.cacheKey,
+    required WorkHistoryResult this.result,
+  }) : error = null,
+       stackTrace = null;
+
+  const _WorkHistoryUpdate.failed({
+    required this.cacheKey,
+    required Object this.error,
+    required this.stackTrace,
+  }) : result = null;
 }
 
 MutationReceipt _mutationReceipt(String id, SyncFailure? failure) {

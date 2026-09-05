@@ -7,20 +7,27 @@
 class SyncAccessScope {
   final String actorId;
   final List<String> teamIds;
+  final int sessionGeneration;
 
-  SyncAccessScope({required String actorId, required Iterable<String> teamIds})
-    : actorId = actorId.trim(),
-      teamIds = (teamIds
-            .map((id) => id.trim())
-            .where((id) => id.isNotEmpty)
-            .toSet()
-            .toList()
-          ..sort());
+  SyncAccessScope({
+    required String actorId,
+    required Iterable<String> teamIds,
+    this.sessionGeneration = 0,
+  }) : actorId = actorId.trim(),
+       teamIds = List.unmodifiable(
+         teamIds
+             .map((id) => id.trim())
+             .where((id) => id.isNotEmpty)
+             .toSet()
+             .toList()
+           ..sort(),
+       );
 
   bool get isUsable => actorId.isNotEmpty && teamIds.isNotEmpty;
 
   bool matches(SyncAccessScope? other) =>
       other != null &&
+      sessionGeneration == other.sessionGeneration &&
       actorId == other.actorId &&
       teamIds.length == other.teamIds.length &&
       _sameTeams(other.teamIds);

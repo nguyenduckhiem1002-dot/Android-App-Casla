@@ -40,6 +40,7 @@ class _S02bAccountLoginScreenState
   }
 
   Future<void> _submitLogin([String? customUser, String? customPass]) async {
+    if (_isLoading) return;
     final username = customUser ?? _usernameController.text.trim();
     final password = customPass ?? _passwordController.text;
 
@@ -57,8 +58,8 @@ class _S02bAccountLoginScreenState
 
     try {
       final appState = ref.read(appStateProvider);
-      await appState.loginByCredentials(username, password);
-      if (!mounted) return;
+      final accepted = await appState.loginByCredentials(username, password);
+      if (!mounted || !accepted) return;
       final role = appState.currentSession?.role;
       _passwordController.clear();
       context.go(role == UserRole.worker ? '/history' : '/supervisor');
@@ -70,8 +71,8 @@ class _S02bAccountLoginScreenState
     } finally {
       // Do not retain credentials in the controller after an authentication
       // attempt (successful or otherwise).
-      _passwordController.clear();
       if (mounted) {
+        _passwordController.clear();
         setState(() {
           _isLoading = false;
         });

@@ -112,7 +112,7 @@ void main() {
     await db.close();
   });
 
-  test('a fresh install already has the v2 columns', () async {
+  test('a fresh install has QR validity and operation payload columns', () async {
     final db = await openDatabase(
       inMemoryDatabasePath,
       version: schemaVersion,
@@ -132,6 +132,15 @@ void main() {
     final row = (await db.query('orders')).single;
     expect(row['production_order'], '000010001234');
     expect(row['operation'], '0010');
+    expect(row.containsKey('operation_qr_payload'), isTrue);
+
+    // The fresh-install schema is checked through an explicit table-info query
+    // because this test database does not seed employees by default.
+    final employeeColumns = await db.rawQuery('PRAGMA table_info(employees)');
+    expect(
+      employeeColumns.map((column) => column['name']),
+      containsAll(<String>['valid_from', 'valid_to']),
+    );
 
     await db.close();
   });

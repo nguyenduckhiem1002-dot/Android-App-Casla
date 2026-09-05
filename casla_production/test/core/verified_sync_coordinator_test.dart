@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:casla_production/core/database/casla_database.dart';
 import 'package:casla_production/core/sync/sap_write_gateway.dart';
+import 'package:casla_production/core/sync/sync_access_scope.dart';
 import 'package:casla_production/core/sync/verified_sync_coordinator.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -234,14 +235,82 @@ void main() {
     releasePush.complete();
     expect((await first).outcome, VerifiedSyncOutcome.synced);
   });
+
+  test(
+    'same-account relogin stops descendants of an old verification',
+    () async {
+      final chain = await seedWorkerChain(suffix: 'relogin');
+      var generation = 1;
+      final calls = <String>[];
+      final coordinator = VerifiedSyncCoordinator(
+        database: db,
+        scopeProvider: () => SyncAccessScope(
+          actorId: 'MNV00100',
+          teamIds: ['team-2'],
+          sessionGeneration: generation,
+        ),
+        gateway: _RecordingGateway(
+          onPush: (request) async {
+            calls.add(request.entityType);
+            generation++;
+            return SapWriteResult(sapId: 'SAP-${request.entityId}');
+          },
+        ),
+      );
+      final report = await coordinator.syncVerifiedWorkerChain(
+        anchorQueueItemId: chain.assignmentQueueId,
+        workerPassword: 'fresh-password',
+      );
+      expect(report.outcome, VerifiedSyncOutcome.blocked);
+      expect(calls, ['ASSIGNMENT']);
+      expect(await db.getSyncQueueItemById(chain.productionQueueId), isNotNull);
+    },
+  );
+
+  test(
+    'scope revoked during refresh never retries with the entered password',
+    () async {
+      final chain = await seedWorkerChain(suffix: 'refresh-revoke');
+      var teams = ['team-2'];
+      var attempts = 0;
+      final coordinator = VerifiedSyncCoordinator(
+        database: db,
+        scopeProvider: () =>
+            SyncAccessScope(actorId: 'MNV00100', teamIds: teams),
+        gateway: _RecordingGateway(
+          onRefresh: () async {
+            teams = ['team-3'];
+            return true;
+          },
+          onPush: (_) async {
+            attempts++;
+            throw authFailure();
+          },
+        ),
+      );
+      final report = await coordinator.syncVerifiedWorkerChain(
+        anchorQueueItemId: chain.assignmentQueueId,
+        workerPassword: 'fresh-password',
+      );
+      expect(report.outcome, VerifiedSyncOutcome.blocked);
+      expect(attempts, 1);
+      expect(await db.getSyncQueueItemById(chain.assignmentQueueId), isNotNull);
+      expect(await db.getSyncQueueItemById(chain.productionQueueId), isNotNull);
+    },
+  );
 }
 
 class _RecordingGateway implements SapWriteGateway {
   final Future<SapWriteResult> Function(SyncPushRequest request) onPush;
   final bool refreshResult;
+  final Future<bool> Function()? onRefresh;
   int refreshCalls = 0;
 
-  _RecordingGateway({required this.onPush, this.refreshResult = false});
+  _RecordingGateway({
+    required this.onPush,
+    this.refreshResult = false,
+    this.onRefresh,
+  });
 
   @override
   Future<SapWriteResult> push(SyncPushRequest request) => onPush(request);
@@ -249,6 +318,7 @@ class _RecordingGateway implements SapWriteGateway {
   @override
   Future<bool> refreshSession() async {
     refreshCalls++;
+    if (onRefresh != null) return onRefresh!();
     return refreshResult;
   }
 }

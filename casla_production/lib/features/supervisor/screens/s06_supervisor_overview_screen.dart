@@ -7,6 +7,7 @@ import '../../../domain/entities/entities.dart';
 import '../../../domain/entities/enums.dart';
 import '../../../domain/entities/work_history.dart';
 import '../../../domain/policies/production_math.dart';
+import '../../../core/utils/quantity_formatter.dart';
 import '../../../main.dart';
 import '../../../presentation/widgets/kpi_card.dart';
 import '../../../presentation/widgets/status_chip.dart';
@@ -75,9 +76,15 @@ class _S06SupervisorOverviewScreenState
         .read(appStateProvider)
         .workHistoryRepo
         .watchWorkHistory(
-          range: HistoryRange.custom,
-          dateFrom: _selectedDate,
-          dateTo: _selectedDate,
+          range: _historyRange,
+          dateFrom: _historyRange == HistoryRange.custom ||
+                  _historyRange == HistoryRange.day
+              ? _rangeFrom
+              : null,
+          dateTo: _historyRange == HistoryRange.custom ||
+                  _historyRange == HistoryRange.day
+              ? _rangeTo
+              : null,
         )
         .asyncMap(_ensureHistoryEmployees);
   }
@@ -87,9 +94,15 @@ class _S06SupervisorOverviewScreenState
         .read(appStateProvider)
         .workHistoryRepo
         .getWorkHistory(
-          range: HistoryRange.custom,
-          dateFrom: _selectedDate,
-          dateTo: _selectedDate,
+          range: _historyRange,
+          dateFrom: _historyRange == HistoryRange.custom ||
+                  _historyRange == HistoryRange.day
+              ? _rangeFrom
+              : null,
+          dateTo: _historyRange == HistoryRange.custom ||
+                  _historyRange == HistoryRange.day
+              ? _rangeTo
+              : null,
           forceRefresh: forceRefresh,
         );
     return _ensureHistoryEmployees(result);
@@ -130,8 +143,10 @@ class _S06SupervisorOverviewScreenState
   String _selectedTeamLabel = 'Tất cả tổ';
 
   DateTime _selectedDate = DateTime.now();
+  HistoryRange _historyRange = HistoryRange.day;
+  DateTime? _customDateFrom;
+  DateTime? _customDateTo;
 
-  String _dateStr(DateTime d) => DateFormat('yyyy-MM-dd').format(d);
   String _formatDisplayDate(DateTime d) {
     final today = DateTime.now();
     if (d.year == today.year && d.month == today.month && d.day == today.day) {
@@ -144,6 +159,64 @@ class _S06SupervisorOverviewScreenState
       return 'Hôm qua';
     }
     return DateFormat('dd/MM/yyyy').format(d);
+  }
+
+  DateTime _dateOnly(DateTime value) =>
+      DateTime(value.year, value.month, value.day);
+
+  DateTime get _rangeFrom {
+    switch (_historyRange) {
+      case HistoryRange.day:
+        return _dateOnly(_selectedDate);
+      case HistoryRange.week:
+        final anchor = _dateOnly(DateTime.now());
+        return anchor.subtract(Duration(days: anchor.weekday - 1));
+      case HistoryRange.month:
+        final now = DateTime.now();
+        return DateTime(now.year, now.month, 1);
+      case HistoryRange.custom:
+        return _customDateFrom ?? _dateOnly(_selectedDate);
+    }
+  }
+
+  DateTime get _rangeTo {
+    switch (_historyRange) {
+      case HistoryRange.day:
+        return _rangeFrom;
+      case HistoryRange.week:
+        return _rangeFrom.add(const Duration(days: 6));
+      case HistoryRange.month:
+        return DateTime(_rangeFrom.year, _rangeFrom.month + 1, 0);
+      case HistoryRange.custom:
+        return _customDateTo ?? _rangeFrom;
+    }
+  }
+
+  String get _rangeLabel {
+    switch (_historyRange) {
+      case HistoryRange.day:
+        return _formatDisplayDate(_selectedDate);
+      case HistoryRange.week:
+        return 'Tuần này';
+      case HistoryRange.month:
+        return 'Tháng này';
+      case HistoryRange.custom:
+        final from = _customDateFrom ?? _selectedDate;
+        final to = _customDateTo ?? from;
+        final format = DateFormat('dd/MM/yyyy');
+        return from.year == to.year &&
+                from.month == to.month &&
+                from.day == to.day
+            ? format.format(from)
+            : '${format.format(from)} - ${format.format(to)}';
+    }
+  }
+
+  bool _isInSelectedRange(String businessDate) {
+    final parsed = DateTime.tryParse(businessDate);
+    if (parsed == null) return false;
+    final date = _dateOnly(parsed);
+    return !date.isBefore(_rangeFrom) && !date.isAfter(_rangeTo);
   }
 
   Future<List<Map<String, dynamic>>> _employeesFor(List<String> teamIds) {
@@ -162,9 +235,23 @@ class _S06SupervisorOverviewScreenState
   Future<void> _showTeamFilterSheet() async {
     final appState = ref.read(appStateProvider);
     final scope = appState.currentSession?.toIds.toSet() ?? const <String>{};
-    final allTeams = await appState.db.getAllTeams();
+    final allTeams = await appState.db.getTeamsForScope(scope.toList());
     if (!mounted) return;
-    final teams = allTeams.where((team) => scope.contains(team['id'])).toList();
+    final teams = allTeams.isNotEmpty
+        ? allTeams
+        : scope
+              .map(
+                (id) => <String, dynamic>{
+                  'id': id,
+                  'ma_to': id,
+                  'ten_to': scope.length == 1
+                      ? (appState.currentSession?.teamName.isNotEmpty == true
+                            ? appState.currentSession!.teamName
+                            : 'Tổ $id')
+                      : 'Tổ $id',
+                },
+              )
+              .toList();
 
     await showModalBottomSheet<void>(
       context: context,
@@ -252,20 +339,101 @@ class _S06SupervisorOverviewScreenState
     );
   }
 
-  void _showDatePickerDialog() async {
+  void _selectHistoryRange(HistoryRange range) {
+    if (range == HistoryRange.custom) {
+      _showCustomDatePicker();
+      return;
+    }
+    setState(() {
+      _historyRange = range;
+      _historyStream = _watchHistory();
+    });
+  }
+
+  Future<void> _showCustomDatePicker() async {
     final now = DateTime.now();
-    final picked = await showDatePicker(
+    final picked = await showDateRangePicker(
       context: context,
-      initialDate: _selectedDate,
+      initialDateRange: DateTimeRange(
+        start: _customDateFrom ?? _selectedDate,
+        end: _customDateTo ?? _selectedDate,
+      ),
       firstDate: DateTime(now.year - 2, 1, 1),
       lastDate: DateTime(now.year + 2, 12, 31),
+      helpText: 'CHỌN KHOẢNG THỜI GIAN',
+      cancelText: 'HỦY',
+      confirmText: 'CHỌN',
+      saveText: 'CHỌN',
     );
-    if (picked != null) {
-      setState(() {
-        _selectedDate = picked;
-        _historyStream = _watchHistory();
-      });
+    if (picked == null || !mounted) return;
+    final from = _dateOnly(picked.start);
+    final to = _dateOnly(picked.end);
+    if (to.difference(from).inDays > 31) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Khoảng thời gian tối đa là 31 ngày')),
+      );
+      return;
     }
+    setState(() {
+      _historyRange = HistoryRange.custom;
+      _customDateFrom = from;
+      _customDateTo = to;
+      _selectedDate = from;
+      _historyStream = _watchHistory();
+    });
+  }
+
+  Future<void> _showHistoryRangeSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(18, 18, 18, 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Khoảng thời gian tổng quan',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 17,
+                    color: CaslaColors.primaryNavy,
+                  ),
+                ),
+              ),
+            ),
+            for (final option in const [
+              (HistoryRange.day, 'Một ngày', 'Xem dữ liệu của ngày đang chọn'),
+              (HistoryRange.week, 'Tuần này', 'Từ thứ Hai đến Chủ nhật'),
+              (HistoryRange.month, 'Tháng này', 'Từ ngày 1 đến cuối tháng'),
+              (HistoryRange.custom, 'Tùy chọn', 'Chọn một khoảng ngày cụ thể'),
+            ])
+              ListTile(
+                leading: Icon(
+                  option.$1 == _historyRange
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                  color: option.$1 == _historyRange
+                      ? CaslaColors.primaryNavy
+                      : CaslaColors.muted,
+                ),
+                title: Text(option.$2),
+                subtitle: Text(option.$3),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _selectHistoryRange(option.$1);
+                },
+              ),
+            const SizedBox(height: 10),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -444,11 +612,12 @@ class _S06SupervisorOverviewScreenState
                     // Process Local data
                     final rawAssignments =
                         assignmentSnapshot.data ?? const <Assignment>[];
-                    final selectedDateFormatted = _dateStr(_selectedDate);
-
                     final localAssignments = rawAssignments.where((a) {
-                      if (!effectiveTeamIds.contains(a.teamId)) return false;
-                      if (a.businessDate != selectedDateFormatted) return false;
+                      if (_selectedTeamId != 'ALL' &&
+                          a.teamId != _selectedTeamId) {
+                        return false;
+                      }
+                      if (!_isInSelectedRange(a.businessDate)) return false;
                       return true;
                     }).toList();
 
@@ -605,8 +774,8 @@ class _S06SupervisorOverviewScreenState
                                     ),
                                     const SizedBox(width: 8),
                                     _buildFilterChip(
-                                      '${_formatDisplayDate(_selectedDate)} ▾',
-                                      onTap: _showDatePickerDialog,
+                                      '$_rangeLabel ▾',
+                                      onTap: _showHistoryRangeSheet,
                                     ),
                                   ],
                                 ),
@@ -625,12 +794,12 @@ class _S06SupervisorOverviewScreenState
                                 children: [
                                   KpiCard(
                                     label: 'Tổng giao hiệu lực',
-                                    value: totalEffective.toStringAsFixed(0),
+                                    value: formatQuantity(totalEffective),
                                     isAccent: true,
                                   ),
                                   KpiCard(
                                     label: 'Tổng hoàn thành',
-                                    value: totalCompleted.toStringAsFixed(0),
+                                    value: formatQuantity(totalCompleted),
                                   ),
                                   KpiCard(
                                     label: 'Đã được giao',
@@ -652,7 +821,7 @@ class _S06SupervisorOverviewScreenState
                                     MainAxisAlignment.spaceBetween,
                                 children: [
                                   Text(
-                                    'Công nhân trong phạm vi · ${_formatDisplayDate(_selectedDate)}',
+                                    'Công nhân trong phạm vi · $_rangeLabel',
                                     style: const TextStyle(
                                       fontFamily: 'Manrope',
                                       fontWeight: FontWeight.w800,
@@ -720,7 +889,7 @@ class _S06SupervisorOverviewScreenState
                                                 'remaining_qty':
                                                     worker.remainingQty,
                                                 'uom': worker.uom,
-                                                'date': _selectedDate,
+                                                    'date': _rangeFrom,
                                               },
                                             );
                                           },
@@ -826,15 +995,15 @@ class _S06SupervisorOverviewScreenState
                                                   children: [
                                                     _buildStatItem(
                                                       'Giao',
-                                                      '${worker.assignedQty.toStringAsFixed(0)} ${worker.uom}',
+                                                      '${formatQuantity(worker.assignedQty)} ${worker.uom}',
                                                     ),
                                                     _buildStatItem(
                                                       'H.thành',
-                                                      '${worker.completedQty.toStringAsFixed(0)} ${worker.uom}',
+                                                      '${formatQuantity(worker.completedQty)} ${worker.uom}',
                                                     ),
                                                     _buildStatItem(
                                                       'Còn lại',
-                                                      '${worker.remainingQty.toStringAsFixed(0)} ${worker.uom}',
+                                                      '${formatQuantity(worker.remainingQty)} ${worker.uom}',
                                                     ),
                                                   ],
                                                 ),

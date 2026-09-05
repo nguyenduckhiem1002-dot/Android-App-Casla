@@ -15,6 +15,31 @@ void main() {
       expect(delimited.maNv, 'NV43');
     });
 
+    test('accepts the real mixed worker codes and reads validity dates', () {
+      final result = WorkerQrParser.parse(
+        '{"MaNV":"NC000002","ValidFrom":"2020-01-01","ValidTo":"2099-12-31"}',
+      );
+
+      expect(result.isValid, isTrue);
+      expect(result.maNv, 'NC000002');
+      expect(result.isEffectiveOn(DateTime(2026, 9, 5)), isTrue);
+      expect(WorkerQrParser.parse('A1').isValid, isTrue);
+      expect(WorkerQrParser.parse('bachdv').isValid, isTrue);
+      expect(WorkerQrParser.parse('2').isValid, isTrue);
+    });
+
+    test('marks a worker QR outside its validity window', () {
+      final beforeStart = WorkerQrParser.parse(
+        '{"ma_nv":"A1","ValidFrom":"2099-01-01"}',
+      );
+      final afterEnd = WorkerQrParser.parse(
+        '{"ma_nv":"A1","ValidTo":"2020-01-01"}',
+      );
+
+      expect(beforeStart.isEffectiveOn(DateTime(2026, 9, 5)), isFalse);
+      expect(afterEnd.isEffectiveOn(DateTime(2026, 9, 5)), isFalse);
+    });
+
     test('rejects unrelated QR payloads', () {
       expect(WorkerQrParser.parse('https://example.com').isValid, isFalse);
       expect(WorkerQrParser.parse('NV-FAKE').isValid, isFalse);

@@ -10,6 +10,7 @@ import 'package:casla_production/core/database/casla_database.dart';
 import 'package:casla_production/core/network/connectivity_monitor.dart';
 import 'package:casla_production/core/sync/sap_write_gateway.dart';
 import 'package:casla_production/core/sync/sync_engine.dart';
+import 'package:casla_production/core/sync/sync_access_scope.dart';
 import 'package:casla_production/core/sync/sync_failure.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -322,6 +323,39 @@ void main() {
 
     expect(seen, [older, newer]);
   });
+
+  test(
+    'a new session during refresh stops retry without deleting the queue',
+    () async {
+      await _queueProduction(db, quantity: 1);
+      var generation = 1;
+      var attempts = 0;
+      final engine = SyncEngine(
+        database: db,
+        connectivity: connectivity,
+        scopeProvider: () => SyncAccessScope(
+          actorId: 'MNV00100',
+          teamIds: ['team-2'],
+          sessionGeneration: generation,
+        ),
+        gateway: _FakeGateway(
+          onPush: (_) {
+            attempts++;
+            throw _badResponse(401, 'expired');
+          },
+          onRefresh: () {
+            generation++;
+            return true;
+          },
+        ),
+      );
+      final report = await engine.runOnce();
+      expect(report.skipped, isTrue);
+      expect(attempts, 1);
+      expect(await db.watchSyncQueue().first, hasLength(1));
+      await engine.dispose();
+    },
+  );
 }
 
 Future<void> _clearQueue(CaslaDatabase db) async {
