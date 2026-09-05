@@ -32,6 +32,11 @@ void main() {
     });
 
     test('rejects non-string, oversized and NUL-containing barcode data', () {
+      final oversized = List.filled(
+        BarcodeScanEvent.maxRawValueCharacters + 1,
+        'A',
+      ).join();
+
       expect(
         () => BarcodeScanEvent.fromPlatform({
           'rawValue': 123,
@@ -41,7 +46,7 @@ void main() {
       );
       expect(
         () => BarcodeScanEvent.fromPlatform({
-          'rawValue': 'A' * (BarcodeScanEvent.maxRawValueCharacters + 1),
+          'rawValue': oversized,
           'source': 'hardware',
         }),
         throwsFormatException,
