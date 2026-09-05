@@ -8,6 +8,10 @@ on:
   schedule:
     - cron: '23 3 * * 3'
 
+concurrency:
+  group: codeql-native-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   actions: read
