@@ -64,7 +64,9 @@ jobs:
         run: flutter pub get
 
       - name: Compile production flavor APK including native scanner bridge
-        run: flutter build apk --debug --flavor production --no-pub
+        run: >-
+          flutter build apk --debug --flavor production --no-pub
+          --dart-define=SAP_TRANSPORT_AUTH_MODE=gateway
 
       - name: Verify production release fails closed without secrets
         working-directory: casla_production/android
@@ -128,7 +130,6 @@ jobs:
             CASLA_ANDROID_KEY_PASSWORD=ci-only
           )
 
-          # A fully specified release preflight is allowed in gateway mode.
           env "${common_env[@]}" \
             ./gradlew -Pdart-defines="$gateway_define" :app:verifyCaslaSigning
 
@@ -174,8 +175,10 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Build iOS without signing
-        run: flutter build ios --release --no-codesign
+      - name: Build iOS without signing using production transport mode
+        run: >-
+          flutter build ios --release --no-codesign
+          --dart-define=SAP_TRANSPORT_AUTH_MODE=gateway
 
       - name: Validate Xcode archive settings
         working-directory: casla_production/ios
