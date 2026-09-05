@@ -2,11 +2,12 @@
 set -euo pipefail
 
 mode="${SAP_TRANSPORT_AUTH_MODE:-}"
+mode_normalized="$(printf '%s' "$mode" | tr '[:upper:]' '[:lower:]')"
 basic_user="${SAP_BASIC_AUTH_USER:-}"
 basic_password="${SAP_BASIC_AUTH_PASSWORD:-}"
 problems=()
 
-if [[ "${mode,,}" != "gateway" ]]; then
+if [[ "$mode_normalized" != "gateway" ]]; then
   problems+=("SAP_TRANSPORT_AUTH_MODE must be gateway for a production release")
 fi
 
