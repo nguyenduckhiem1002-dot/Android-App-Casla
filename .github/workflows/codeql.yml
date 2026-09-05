@@ -1,0 +1,85 @@
+name: CodeQL Native
+
+on:
+  push:
+    branches: [master, 'chatgpt/**']
+  pull_request:
+    branches: [master, develop, 'chatgpt/**']
+  schedule:
+    - cron: '23 3 * * 3'
+
+permissions:
+  contents: read
+  actions: read
+  security-events: write
+
+jobs:
+  kotlin:
+    name: CodeQL Java/Kotlin
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.44.8
+          cache: true
+          cache-key: codeql-flutter-${{ runner.os }}-${{ hashFiles('casla_production/pubspec.lock') }}
+
+      - name: Install Flutter dependencies
+        working-directory: casla_production
+        run: flutter pub get
+
+      - name: Initialize CodeQL for Kotlin
+        uses: github/codeql-action/init@v4
+        with:
+          languages: java-kotlin
+          build-mode: manual
+
+      - name: Build Android production flavor for CodeQL extraction
+        working-directory: casla_production
+        run: >-
+          flutter build apk --debug --flavor production --no-pub
+          --dart-define=SAP_TRANSPORT_AUTH_MODE=gateway
+
+      - name: Analyze Kotlin
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:java-kotlin
+
+  swift:
+    name: CodeQL Swift
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.44.8
+          cache: true
+          cache-key: codeql-flutter-${{ runner.os }}-${{ hashFiles('casla_production/pubspec.lock') }}
+
+      - name: Install Flutter dependencies
+        working-directory: casla_production
+        run: flutter pub get
+
+      - name: Initialize CodeQL for Swift
+        uses: github/codeql-action/init@v4
+        with:
+          languages: swift
+          build-mode: manual
+
+      - name: Build iOS release for CodeQL extraction
+        working-directory: casla_production
+        run: >-
+          flutter build ios --release --no-codesign --no-pub
+          --dart-define=SAP_TRANSPORT_AUTH_MODE=gateway
+
+      - name: Analyze Swift
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:swift
