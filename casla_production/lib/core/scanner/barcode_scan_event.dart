@@ -1,6 +1,9 @@
 enum BarcodeScanSource { hardware, camera, manual }
 
 class BarcodeScanEvent {
+  static const int maxRawValueCharacters = 4096;
+  static const int maxSymbologyCharacters = 64;
+
   final String rawValue;
   final String? symbology;
   final BarcodeScanSource source;
@@ -18,27 +21,53 @@ class BarcodeScanEvent {
       throw const FormatException('Invalid scanner event payload.');
     }
 
-    final rawValue = payload['rawValue']?.toString().trim() ?? '';
-    if (rawValue.isEmpty) {
+    final rawPayload = payload['rawValue'];
+    if (rawPayload is! String) {
       throw const FormatException('Scanner event is missing barcode data.');
     }
+    final rawValue = rawPayload.trim();
+    if (rawValue.isEmpty ||
+        rawValue.length > maxRawValueCharacters ||
+        rawValue.contains('\u0000')) {
+      throw const FormatException('Scanner event contains invalid barcode data.');
+    }
 
-    final sourceName = payload['source']?.toString().toLowerCase();
-    final source = switch (sourceName) {
+    final sourcePayload = payload['source'];
+    if (sourcePayload is! String) {
+      throw const FormatException('Scanner event is missing source metadata.');
+    }
+    final source = switch (sourcePayload.trim().toLowerCase()) {
+      'hardware' => BarcodeScanSource.hardware,
       'camera' => BarcodeScanSource.camera,
       'manual' => BarcodeScanSource.manual,
-      _ => BarcodeScanSource.hardware,
+      _ => throw const FormatException('Scanner event contains an unknown source.'),
     };
 
-    final timestampMs = int.tryParse(payload['timestampMs']?.toString() ?? '');
+    final symbologyPayload = payload['symbology'];
+    String? symbology;
+    if (symbologyPayload != null) {
+      if (symbologyPayload is! String) {
+        throw const FormatException('Scanner event contains invalid symbology.');
+      }
+      final normalized = symbologyPayload.trim();
+      if (normalized.length > maxSymbologyCharacters) {
+        throw const FormatException('Scanner event symbology is too long.');
+      }
+      symbology = normalized.isEmpty ? null : normalized;
+    }
+
+    final timestampPayload = payload['timestampMs'];
+    if (timestampPayload != null && timestampPayload is! int) {
+      throw const FormatException('Scanner event contains an invalid timestamp.');
+    }
 
     return BarcodeScanEvent(
       rawValue: rawValue,
-      symbology: payload['symbology']?.toString(),
+      symbology: symbology,
       source: source,
-      timestamp: timestampMs == null
+      timestamp: timestampPayload == null
           ? DateTime.now()
-          : DateTime.fromMillisecondsSinceEpoch(timestampMs),
+          : DateTime.fromMillisecondsSinceEpoch(timestampPayload),
     );
   }
 }
