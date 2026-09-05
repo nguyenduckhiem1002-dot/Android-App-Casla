@@ -179,6 +179,18 @@ jobs:
         run: >-
           flutter build ios --release --no-codesign
           --dart-define=SAP_TRANSPORT_AUTH_MODE=gateway
+          --dart-define=SAP_BASIC_AUTH_USER=CASLA_CI_BASIC_USER_SENTINEL
+          --dart-define=SAP_BASIC_AUTH_PASSWORD=CASLA_CI_BASIC_PASSWORD_SENTINEL
+
+      - name: Verify release AOT binary strips Basic credential defines
+        run: |
+          app_binary="build/ios/iphoneos/Runner.app/Frameworks/App.framework/App"
+          test -f "$app_binary"
+
+          if strings "$app_binary" | grep -q 'CASLA_CI_BASIC_.*_SENTINEL'; then
+            echo "::error::A SAP Basic credential sentinel was embedded in the iOS release AOT binary."
+            exit 1
+          fi
 
       - name: Validate Xcode archive settings
         working-directory: casla_production/ios
