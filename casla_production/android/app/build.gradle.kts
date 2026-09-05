@@ -63,6 +63,11 @@ val productionKeyPassword = configuredValue(
 )
 val productionDemoDataEnabled =
     dartDefines["ENABLE_DEMO_DATA"]?.equals("true", ignoreCase = true) == true
+val productionTransportAuthMode =
+    dartDefines["SAP_TRANSPORT_AUTH_MODE"]?.trim()?.lowercase() ?: "basic"
+val productionBasicAuthUser = dartDefines["SAP_BASIC_AUTH_USER"]?.trim().orEmpty()
+val productionBasicAuthPassword =
+    dartDefines["SAP_BASIC_AUTH_PASSWORD"]?.trim().orEmpty()
 
 val productionSigningReady = listOf(
     productionStoreFile,
@@ -146,7 +151,7 @@ android {
 
 val verifyCaslaSigning by tasks.registering {
     group = "verification"
-    description = "Fail closed unless the production Android identity, signing inputs and data mode are configured."
+    description = "Fail closed unless production identity, signing, data and transport security are configured."
 
     doLast {
         val problems = mutableListOf<String>()
@@ -169,6 +174,12 @@ val verifyCaslaSigning by tasks.registering {
         }
         if (productionDemoDataEnabled) {
             problems += "ENABLE_DEMO_DATA must not be true for a production release"
+        }
+        if (productionTransportAuthMode != "gateway") {
+            problems += "SAP_TRANSPORT_AUTH_MODE must be gateway for a production release"
+        }
+        if (productionBasicAuthUser.isNotEmpty() || productionBasicAuthPassword.isNotEmpty()) {
+            problems += "SAP_BASIC_AUTH_USER/SAP_BASIC_AUTH_PASSWORD must not be embedded in a production release"
         }
 
         if (problems.isNotEmpty()) {
