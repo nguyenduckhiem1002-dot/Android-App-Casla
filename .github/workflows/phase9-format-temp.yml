@@ -1,0 +1,42 @@
+name: Phase 9 Canonical Format Temp
+
+on:
+  push:
+    branches: ['chatgpt/phase9-workflow-resilience']
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: casla_production
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: chatgpt/phase9-workflow-resilience
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: 3.44.8
+          cache: true
+
+      - name: Format target
+        run: dart format test/core/verified_sync_coordinator_test.dart
+
+      - name: Commit canonical formatting when needed
+        working-directory: .
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- casla_production/test/core/verified_sync_coordinator_test.dart; then
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add casla_production/test/core/verified_sync_coordinator_test.dart
+          git commit -m 'style: apply canonical Dart formatting'
+          git push origin HEAD:chatgpt/phase9-workflow-resilience
