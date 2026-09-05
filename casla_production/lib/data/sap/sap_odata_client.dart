@@ -213,6 +213,7 @@ class SapODataClient {
             'SAP_BASIC_AUTH_USER/SAP_BASIC_AUTH_PASSWORD hợp lệ.',
           );
         }
+        break;
       case SapTransportAuthMode.gateway:
         if (_basicAuthUser.isNotEmpty || _basicAuthPassword.isNotEmpty) {
           throw const SapConfigurationException(
@@ -220,6 +221,7 @@ class SapODataClient {
             'SAP_BASIC_AUTH_PASSWORD trong mobile client.',
           );
         }
+        break;
     }
   }
 
