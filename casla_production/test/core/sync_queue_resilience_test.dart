@@ -56,38 +56,39 @@ void main() {
     return queueItem;
   }
 
-  test('a duplicate SAP receipt is finalized exactly like a fresh success', () async {
-    final queueItem = await queueProduction(
-      suffix: 'duplicate',
-      idempotencyKey: 'idem-duplicate',
-    );
-    final source = await db.getSyncSourceRow(
-      queueItem['entity_type'] as String,
-      queueItem['entity_id'] as String,
-    );
+  test(
+    'a duplicate SAP receipt is finalized exactly like a fresh success',
+    () async {
+      final queueItem = await queueProduction(
+        suffix: 'duplicate',
+        idempotencyKey: 'idem-duplicate',
+      );
+      final source = await db.getSyncSourceRow(
+        queueItem['entity_type'] as String,
+        queueItem['entity_id'] as String,
+      );
 
-    final failure = await pushAndRecord(
-      database: db,
-      gateway: _Gateway(
-        onPush: (_) async => const SapWriteResult(
-          sapId: 'SAP-EXISTING',
-          wasDuplicate: true,
+      final failure = await pushAndRecord(
+        database: db,
+        gateway: _Gateway(
+          onPush: (_) async =>
+              const SapWriteResult(sapId: 'SAP-EXISTING', wasDuplicate: true),
         ),
-      ),
-      backoff: SyncBackoff(),
-      queueItem: queueItem,
-      source: source!,
-    );
+        backoff: SyncBackoff(),
+        queueItem: queueItem,
+        source: source!,
+      );
 
-    expect(failure, isNull);
-    expect(await db.getSyncQueueItemById(queueItem['id'] as String), isNull);
-    final stamped = await db.getSyncSourceRow(
-      'PRODUCTION_RECORD',
-      queueItem['entity_id'] as String,
-    );
-    expect(stamped!['sync_status'], 'SYNCED');
-    expect(stamped['sap_id'], 'SAP-EXISTING');
-  });
+      expect(failure, isNull);
+      expect(await db.getSyncQueueItemById(queueItem['id'] as String), isNull);
+      final stamped = await db.getSyncSourceRow(
+        'PRODUCTION_RECORD',
+        queueItem['entity_id'] as String,
+      );
+      expect(stamped!['sync_status'], 'SYNCED');
+      expect(stamped['sap_id'], 'SAP-EXISTING');
+    },
+  );
 
   test('an auth retry keeps the exact same idempotency key', () async {
     final queueItem = await queueProduction(
