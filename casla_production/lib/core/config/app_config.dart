@@ -3,6 +3,8 @@
 
 import 'package:flutter/foundation.dart';
 
+enum SapTransportAuthMode { basic, gateway }
+
 class AppConfig {
   static const String appVersion = String.fromEnvironment(
     'APP_VERSION',
@@ -17,9 +19,9 @@ class AppConfig {
   static String get appName => _normalizeEnvValue(_appName);
 
   /// `https://<tenant>.s4hana.cloud.sap/sap/opu/odata4/sap/` — the shared
-  /// root every OData V4 service on this tenant is published under. The two
-  /// full service roots below are this plus a fixed, per-service suffix; only
-  /// this one value needs to change if the tenant changes.
+  /// root every OData V4 service on this tenant is published under. In gateway
+  /// mode this may instead be the gateway origin, provided it preserves these
+  /// service paths when proxying to SAP.
   static const String _sapBaseUrl = String.fromEnvironment('SAP_BASE_URL');
   static String get sapBaseUrl => _normalizeEnvValue(_sapBaseUrl);
 
@@ -56,13 +58,43 @@ class AppConfig {
     return '$withSlash$suffix';
   }
 
-  /// SAP Basic Authentication User
+  /// Transport authentication between the mobile client and its HTTP origin.
+  ///
+  /// `basic` exists only for direct SAP development/staging compatibility.
+  /// Production releases must use `gateway`: the gateway owns the upstream SAP
+  /// service credential and the mobile binary contains no shared Basic secret.
+  static const String _sapTransportAuthMode = String.fromEnvironment(
+    'SAP_TRANSPORT_AUTH_MODE',
+    defaultValue: 'basic',
+  );
+  static SapTransportAuthMode get sapTransportAuthMode =>
+      parseSapTransportAuthMode(_sapTransportAuthMode);
+
+  @visibleForTesting
+  static SapTransportAuthMode parseSapTransportAuthMode(String value) {
+    switch (_normalizeEnvValue(value).toLowerCase()) {
+      case '':
+      case 'basic':
+        return SapTransportAuthMode.basic;
+      case 'gateway':
+        return SapTransportAuthMode.gateway;
+      default:
+        throw FormatException(
+          'SAP_TRANSPORT_AUTH_MODE must be either basic or gateway.',
+          value,
+        );
+    }
+  }
+
+  /// Development/staging direct-SAP Basic Authentication User.
+  /// Never include this value in a production release.
   static const String _sapBasicAuthUser = String.fromEnvironment(
     'SAP_BASIC_AUTH_USER',
   );
   static String get sapBasicAuthUser => _normalizeEnvValue(_sapBasicAuthUser);
 
-  /// SAP Basic Authentication Password
+  /// Development/staging direct-SAP Basic Authentication Password.
+  /// Never include this value in a production release.
   static const String _sapBasicAuthPassword = String.fromEnvironment(
     'SAP_BASIC_AUTH_PASSWORD',
   );
