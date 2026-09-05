@@ -87,6 +87,7 @@ jobs:
         working-directory: casla_production/android
         run: |
           demo_define=$(printf 'ENABLE_DEMO_DATA=true' | base64 -w0)
+          gateway_define=$(printf 'SAP_TRANSPORT_AUTH_MODE=gateway' | base64 -w0)
           dummy_keystore="$RUNNER_TEMP/casla-ci-dummy.jks"
           touch "$dummy_keystore"
 
@@ -97,7 +98,7 @@ jobs:
             CASLA_ANDROID_STORE_PASSWORD=ci-only \
             CASLA_ANDROID_KEY_ALIAS=ci-only \
             CASLA_ANDROID_KEY_PASSWORD=ci-only \
-            ./gradlew -Pdart-defines="$demo_define" :app:verifyCaslaSigning 2>&1
+            ./gradlew -Pdart-defines="$demo_define,$gateway_define" :app:verifyCaslaSigning 2>&1
           )
           status=$?
           set -e
@@ -108,6 +109,45 @@ jobs:
           fi
 
           echo "$output" | grep -q "ENABLE_DEMO_DATA must not be true for a production release"
+
+      - name: Verify production release requires gateway transport with no Basic secret
+        working-directory: casla_production/android
+        run: |
+          gateway_define=$(printf 'SAP_TRANSPORT_AUTH_MODE=gateway' | base64 -w0)
+          basic_define=$(printf 'SAP_TRANSPORT_AUTH_MODE=basic' | base64 -w0)
+          basic_user_define=$(printf 'SAP_BASIC_AUTH_USER=ci-user' | base64 -w0)
+          basic_password_define=$(printf 'SAP_BASIC_AUTH_PASSWORD=ci-password' | base64 -w0)
+          dummy_keystore="$RUNNER_TEMP/casla-ci-transport-dummy.jks"
+          touch "$dummy_keystore"
+
+          common_env=(
+            CASLA_ANDROID_APPLICATION_ID=com.casla.ci
+            CASLA_ANDROID_STORE_FILE="$dummy_keystore"
+            CASLA_ANDROID_STORE_PASSWORD=ci-only
+            CASLA_ANDROID_KEY_ALIAS=ci-only
+            CASLA_ANDROID_KEY_PASSWORD=ci-only
+          )
+
+          # A fully specified release preflight is allowed in gateway mode.
+          env "${common_env[@]}" \
+            ./gradlew -Pdart-defines="$gateway_define" :app:verifyCaslaSigning
+
+          set +e
+          output=$(
+            env "${common_env[@]}" \
+              ./gradlew -Pdart-defines="$basic_define,$basic_user_define,$basic_password_define" \
+              :app:verifyCaslaSigning 2>&1
+          )
+          status=$?
+          set -e
+
+          if [ "$status" -eq 0 ]; then
+            echo "::error::Production guard accepted direct Basic transport."
+            exit 1
+          fi
+
+          echo "$output" | grep -q "SAP_TRANSPORT_AUTH_MODE must be gateway for a production release"
+          echo "$output" | grep -q "SAP_BASIC_AUTH_USER/SAP_BASIC_AUTH_PASSWORD must not be embedded in a production release"
 
   ios:
     name: iOS / Xcode build
@@ -162,3 +202,29 @@ jobs:
           fi
 
           echo "$output" | grep -q "iOS production identity is not configured"
+
+          CASLA_IOS_BUNDLE_ID=com.casla.ci \
+          CASLA_IOS_TEAM_ID=CITEAM1234 \
+          SAP_TRANSPORT_AUTH_MODE=gateway \
+          bash ios/verify_production_identity.sh
+
+      - name: Verify production transport guard rejects embedded Basic credentials
+        run: |
+          SAP_TRANSPORT_AUTH_MODE=gateway bash tool/verify_transport_security.sh
+
+          set +e
+          output=$(
+            SAP_TRANSPORT_AUTH_MODE=gateway \
+            SAP_BASIC_AUTH_USER=ci-user \
+            SAP_BASIC_AUTH_PASSWORD=ci-password \
+            bash tool/verify_transport_security.sh 2>&1
+          )
+          status=$?
+          set -e
+
+          if [ "$status" -eq 0 ]; then
+            echo "::error::Production transport guard accepted embedded Basic credentials."
+            exit 1
+          fi
+
+          echo "$output" | grep -q "SAP_BASIC_AUTH_USER/SAP_BASIC_AUTH_PASSWORD must not be embedded in a production release"
