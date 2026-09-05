@@ -87,17 +87,20 @@ class AppConfig {
   }
 
   /// Development/staging direct-SAP Basic Authentication User.
-  /// Never include this value in a production release.
-  static const String _sapBasicAuthUser = String.fromEnvironment(
-    'SAP_BASIC_AUTH_USER',
-  );
+  ///
+  /// The release branch of this const expression is always the empty string.
+  /// That means even a mistakenly supplied `--dart-define=SAP_BASIC_AUTH_USER`
+  /// is not selected into the release program constant.
+  static const String _sapBasicAuthUser = kReleaseMode
+      ? ''
+      : String.fromEnvironment('SAP_BASIC_AUTH_USER');
   static String get sapBasicAuthUser => _normalizeEnvValue(_sapBasicAuthUser);
 
   /// Development/staging direct-SAP Basic Authentication Password.
-  /// Never include this value in a production release.
-  static const String _sapBasicAuthPassword = String.fromEnvironment(
-    'SAP_BASIC_AUTH_PASSWORD',
-  );
+  /// See [_sapBasicAuthUser] for why the release program selects `''` here.
+  static const String _sapBasicAuthPassword = kReleaseMode
+      ? ''
+      : String.fromEnvironment('SAP_BASIC_AUTH_PASSWORD');
   static String get sapBasicAuthPassword =>
       _normalizeEnvValue(_sapBasicAuthPassword);
 
