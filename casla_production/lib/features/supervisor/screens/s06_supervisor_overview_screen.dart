@@ -43,6 +43,20 @@ class _WorkerOverviewData {
       assignedQty > 0 ? (completedQty / assignedQty).clamp(0.0, 1.0) : 0.0;
 }
 
+class _TeamFilterOption {
+  final String id;
+  final String name;
+  final String detail;
+  final Set<String> scopeIds;
+
+  const _TeamFilterOption({
+    required this.id,
+    required this.name,
+    required this.detail,
+    required this.scopeIds,
+  });
+}
+
 class S06SupervisorOverviewScreen extends ConsumerStatefulWidget {
   const S06SupervisorOverviewScreen({super.key});
 
@@ -77,11 +91,13 @@ class _S06SupervisorOverviewScreenState
         .workHistoryRepo
         .watchWorkHistory(
           range: _historyRange,
-          dateFrom: _historyRange == HistoryRange.custom ||
+          dateFrom:
+              _historyRange == HistoryRange.custom ||
                   _historyRange == HistoryRange.day
               ? _rangeFrom
               : null,
-          dateTo: _historyRange == HistoryRange.custom ||
+          dateTo:
+              _historyRange == HistoryRange.custom ||
                   _historyRange == HistoryRange.day
               ? _rangeTo
               : null,
@@ -95,11 +111,13 @@ class _S06SupervisorOverviewScreenState
         .workHistoryRepo
         .getWorkHistory(
           range: _historyRange,
-          dateFrom: _historyRange == HistoryRange.custom ||
+          dateFrom:
+              _historyRange == HistoryRange.custom ||
                   _historyRange == HistoryRange.day
               ? _rangeFrom
               : null,
-          dateTo: _historyRange == HistoryRange.custom ||
+          dateTo:
+              _historyRange == HistoryRange.custom ||
                   _historyRange == HistoryRange.day
               ? _rangeTo
               : null,
@@ -141,6 +159,7 @@ class _S06SupervisorOverviewScreenState
   // Filter States
   String _selectedTeamId = 'ALL';
   String _selectedTeamLabel = 'Tất cả tổ';
+  Set<String>? _selectedTeamScopeIds;
 
   DateTime _selectedDate = DateTime.now();
   HistoryRange _historyRange = HistoryRange.day;
@@ -232,26 +251,126 @@ class _S06SupervisorOverviewScreenState
     return _employeesFuture!;
   }
 
+  List<_TeamFilterOption> _sessionTeamOptions(UserSession? session) {
+    if (session == null) return const [];
+
+    final byId = <String, _TeamFilterOption>{};
+    for (final workContext in session.workContexts) {
+      final id = workContext.workId.trim();
+      if (id.isEmpty) continue;
+      byId.putIfAbsent(
+        id,
+        () => _TeamFilterOption(
+          id: id,
+          name: workContext.workName.trim().isNotEmpty
+              ? workContext.workName.trim()
+              : id,
+          detail: [
+            id,
+            if (workContext.plant.trim().isNotEmpty) workContext.plant.trim(),
+            if (workContext.workCenter.trim().isNotEmpty)
+              workContext.workCenter.trim(),
+          ].join(' · '),
+          scopeIds: {id},
+        ),
+      );
+    }
+    if (byId.isNotEmpty) return byId.values.toList(growable: false);
+
+    // Sessions created before `workContexts` was added still retain `toIds`.
+    // Keep them usable, but never invent a name when SAP did not send one.
+    for (final id in session.toIds) {
+      final normalizedId = id.trim();
+      if (normalizedId.isEmpty) continue;
+      byId.putIfAbsent(
+        normalizedId,
+        () => _TeamFilterOption(
+          id: normalizedId,
+          name: session.toIds.length == 1 && session.teamName.trim().isNotEmpty
+              ? session.teamName.trim()
+              : normalizedId,
+          detail: normalizedId,
+          scopeIds: {normalizedId},
+        ),
+      );
+    }
+    return byId.values.toList(growable: false);
+  }
+
+  String _allTeamsLabel(UserSession? session) {
+    final count = _sessionTeamOptions(session).length;
+    return count > 1 ? 'Tất cả tổ ($count)' : 'Tất cả tổ';
+  }
+
+  String _scopeSummary(UserSession? session) {
+    final names = _sessionTeamOptions(
+      session,
+    ).map((option) => option.name).toList(growable: false);
+    if (names.isEmpty) return 'Chưa có phạm vi tổ từ SAP';
+    return names.join(' · ');
+  }
+
+  Future<List<_TeamFilterOption>> _loadTeamFilterOptions() async {
+    final appState = ref.read(appStateProvider);
+    final session = appState.currentSession;
+    final contextOptions = _sessionTeamOptions(session);
+    final localTeams = await appState.db.getTeamsForScope(
+      session?.toIds ?? const <String>[],
+    );
+
+    final options = <_TeamFilterOption>[];
+    for (final contextOption in contextOptions) {
+      final scopeIds = <String>{...contextOption.scopeIds};
+      for (final team in localTeams) {
+        final localId = team['id']?.toString().trim() ?? '';
+        final sapCode = team['ma_to']?.toString().trim() ?? '';
+        if (contextOption.scopeIds.contains(localId) ||
+            contextOption.scopeIds.contains(sapCode)) {
+          if (localId.isNotEmpty) scopeIds.add(localId);
+          if (sapCode.isNotEmpty) scopeIds.add(sapCode);
+        }
+      }
+      options.add(
+        _TeamFilterOption(
+          id: contextOption.id,
+          name: contextOption.name,
+          detail: contextOption.detail,
+          scopeIds: scopeIds,
+        ),
+      );
+    }
+
+    // A legacy session may have no WorkContext display data but can still have
+    // a local team master row. That row is safe to show only when it is inside
+    // the already-authorized `toIds` scope returned by SAP.
+    if (options.isEmpty) {
+      for (final team in localTeams) {
+        final localId = team['id']?.toString().trim() ?? '';
+        final sapCode = team['ma_to']?.toString().trim() ?? '';
+        if (localId.isEmpty && sapCode.isEmpty) continue;
+        options.add(
+          _TeamFilterOption(
+            id: localId.isNotEmpty ? localId : sapCode,
+            name: team['ten_to']?.toString().trim().isNotEmpty == true
+                ? team['ten_to'].toString().trim()
+                : (sapCode.isNotEmpty ? sapCode : localId),
+            detail: sapCode.isNotEmpty ? sapCode : localId,
+            scopeIds: {
+              if (localId.isNotEmpty) localId,
+              if (sapCode.isNotEmpty) sapCode,
+            },
+          ),
+        );
+      }
+    }
+    return options;
+  }
+
   Future<void> _showTeamFilterSheet() async {
     final appState = ref.read(appStateProvider);
-    final scope = appState.currentSession?.toIds.toSet() ?? const <String>{};
-    final allTeams = await appState.db.getTeamsForScope(scope.toList());
+    final session = appState.currentSession;
+    final teams = await _loadTeamFilterOptions();
     if (!mounted) return;
-    final teams = allTeams.isNotEmpty
-        ? allTeams
-        : scope
-              .map(
-                (id) => <String, dynamic>{
-                  'id': id,
-                  'ma_to': id,
-                  'ten_to': scope.length == 1
-                      ? (appState.currentSession?.teamName.isNotEmpty == true
-                            ? appState.currentSession!.teamName
-                            : 'Tổ $id')
-                      : 'Tổ $id',
-                },
-              )
-              .toList();
 
     await showModalBottomSheet<void>(
       context: context,
@@ -283,7 +402,10 @@ class _S06SupervisorOverviewScreenState
                     padding: const EdgeInsets.fromLTRB(10, 0, 10, 18),
                     children: [
                       ListTile(
-                        title: const Text('Tất cả các tổ'),
+                        title: Text(_allTeamsLabel(session)),
+                        subtitle: Text(
+                          'Phạm vi SAP: ${_scopeSummary(session)}',
+                        ),
                         selected: _selectedTeamId == 'ALL',
                         trailing: _selectedTeamId == 'ALL'
                             ? const Icon(Icons.check)
@@ -291,28 +413,25 @@ class _S06SupervisorOverviewScreenState
                         onTap: () {
                           setState(() {
                             _selectedTeamId = 'ALL';
-                            _selectedTeamLabel = 'Tất cả tổ';
+                            _selectedTeamLabel = _allTeamsLabel(session);
+                            _selectedTeamScopeIds = null;
                           });
                           Navigator.pop(sheetContext);
                         },
                       ),
                       for (final team in teams)
                         ListTile(
-                          title: Text(
-                            team['ten_to'] as String? ?? 'Tổ sản xuất',
-                          ),
-                          subtitle: team['ma_to'] == null
-                              ? null
-                              : Text(team['ma_to'].toString()),
-                          selected: _selectedTeamId == team['id'],
-                          trailing: _selectedTeamId == team['id']
+                          title: Text(team.name),
+                          subtitle: Text(team.detail),
+                          selected: _selectedTeamId == team.id,
+                          trailing: _selectedTeamId == team.id
                               ? const Icon(Icons.check)
                               : null,
                           onTap: () {
                             setState(() {
-                              _selectedTeamId = team['id'] as String;
-                              _selectedTeamLabel =
-                                  team['ten_to'] as String? ?? 'Tổ sản xuất';
+                              _selectedTeamId = team.id;
+                              _selectedTeamLabel = team.name;
+                              _selectedTeamScopeIds = team.scopeIds;
                             });
                             Navigator.pop(sheetContext);
                           },
@@ -321,7 +440,7 @@ class _S06SupervisorOverviewScreenState
                         const Padding(
                           padding: EdgeInsets.all(16),
                           child: Text(
-                            'Chưa có dữ liệu tên tổ tương ứng với phạm vi SAP.',
+                            'SAP chưa trả về phạm vi tổ cho phiên này.',
                             style: TextStyle(
                               color: CaslaColors.muted,
                               fontSize: 12.5,
@@ -383,54 +502,93 @@ class _S06SupervisorOverviewScreenState
     });
   }
 
-  Future<void> _showHistoryRangeSheet() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (sheetContext) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(18, 18, 18, 8),
-              child: Align(
-                alignment: Alignment.centerLeft,
+  Widget _buildVisibleRangeSelector() {
+    return Semantics(
+      container: true,
+      label: 'Khoảng thời gian tổng quan. Đang xem $_rangeLabel',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text(
+                'Khoảng thời gian',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: CaslaColors.primaryNavy,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
                 child: Text(
-                  'Khoảng thời gian tổng quan',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w800,
-                    fontSize: 17,
-                    color: CaslaColors.primaryNavy,
+                  'Đang xem: $_rangeLabel',
+                  textAlign: TextAlign.right,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: CaslaColors.muted,
                   ),
                 ),
               ),
-            ),
-            for (final option in const [
-              (HistoryRange.day, 'Một ngày', 'Xem dữ liệu của ngày đang chọn'),
-              (HistoryRange.week, 'Tuần này', 'Từ thứ Hai đến Chủ nhật'),
-              (HistoryRange.month, 'Tháng này', 'Từ ngày 1 đến cuối tháng'),
-              (HistoryRange.custom, 'Tùy chọn', 'Chọn một khoảng ngày cụ thể'),
-            ])
-              ListTile(
-                leading: Icon(
-                  option.$1 == _historyRange
-                      ? Icons.radio_button_checked
-                      : Icons.radio_button_unchecked,
-                  color: option.$1 == _historyRange
+            ],
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _buildRangeChip('Ngày', HistoryRange.day),
+              _buildRangeChip('Tuần', HistoryRange.week),
+              _buildRangeChip('Tháng', HistoryRange.month),
+              _buildRangeChip('Tùy chọn', HistoryRange.custom),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRangeChip(String label, HistoryRange range) {
+    final isSelected = _historyRange == range;
+    return Semantics(
+      button: true,
+      selected: isSelected,
+      label: '$label${isSelected ? ', đang chọn' : ''}',
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          onTap: () => _selectHistoryRange(range),
+          borderRadius: BorderRadius.circular(12),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 48),
+            child: Container(
+              alignment: Alignment.center,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              decoration: BoxDecoration(
+                color: isSelected
+                    ? CaslaColors.primaryNavy
+                    : CaslaColors.surface,
+                border: Border.all(
+                  color: isSelected
                       ? CaslaColors.primaryNavy
-                      : CaslaColors.muted,
+                      : CaslaColors.line,
                 ),
-                title: Text(option.$2),
-                subtitle: Text(option.$3),
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  _selectHistoryRange(option.$1);
-                },
+                borderRadius: BorderRadius.circular(12),
               ),
-            const SizedBox(height: 10),
-          ],
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w800,
+                  color: isSelected ? Colors.white : CaslaColors.primaryNavy,
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -442,9 +600,12 @@ class _S06SupervisorOverviewScreenState
     final emp = appState.currentSession;
     final supervisorName = emp?.userName ?? 'Supervisor';
 
-    final effectiveTeamIds = _selectedTeamId == 'ALL'
-        ? (emp?.toIds ?? const <String>[])
-        : [_selectedTeamId];
+    final effectiveTeamIds =
+        _selectedTeamScopeIds?.toList(growable: false) ??
+        (emp?.toIds ?? const <String>[]);
+    final teamFilterLabel = _selectedTeamId == 'ALL'
+        ? _allTeamsLabel(emp)
+        : _selectedTeamLabel;
 
     return Scaffold(
       backgroundColor: CaslaColors.background,
@@ -613,8 +774,8 @@ class _S06SupervisorOverviewScreenState
                     final rawAssignments =
                         assignmentSnapshot.data ?? const <Assignment>[];
                     final localAssignments = rawAssignments.where((a) {
-                      if (_selectedTeamId != 'ALL' &&
-                          a.teamId != _selectedTeamId) {
+                      if (_selectedTeamScopeIds != null &&
+                          !_selectedTeamScopeIds!.contains(a.teamId)) {
                         return false;
                       }
                       if (!_isInSelectedRange(a.businessDate)) return false;
@@ -762,26 +923,28 @@ class _S06SupervisorOverviewScreenState
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              // Interactive Filter Row
-                              SingleChildScrollView(
-                                scrollDirection: Axis.horizontal,
-                                child: Row(
-                                  children: [
-                                    _buildFilterChip(
-                                      '$_selectedTeamLabel ▾',
-                                      isSelected: true,
-                                      onTap: _showTeamFilterSheet,
-                                    ),
-                                    const SizedBox(width: 8),
-                                    _buildFilterChip(
-                                      '$_rangeLabel ▾',
-                                      onTap: _showHistoryRangeSheet,
-                                    ),
-                                  ],
+                              _buildFilterChip(
+                                '$teamFilterLabel ▾',
+                                isSelected: true,
+                                onTap: _showTeamFilterSheet,
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Phạm vi SAP: ${_scopeSummary(emp)}',
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  height: 1.35,
+                                  color: CaslaColors.muted,
+                                  fontWeight: FontWeight.w600,
                                 ),
                               ),
-
                               const SizedBox(height: 14),
+
+                              _buildVisibleRangeSelector(),
+
+                              const SizedBox(height: 16),
 
                               // KPI Grid Cards (FIXED)
                               GridView.count(
@@ -889,7 +1052,7 @@ class _S06SupervisorOverviewScreenState
                                                 'remaining_qty':
                                                     worker.remainingQty,
                                                 'uom': worker.uom,
-                                                    'date': _rangeFrom,
+                                                'date': _rangeFrom,
                                               },
                                             );
                                           },
@@ -1049,27 +1212,41 @@ class _S06SupervisorOverviewScreenState
     bool isSelected = false,
     VoidCallback? onTap,
   }) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
+    return Semantics(
+      button: true,
+      label: label,
+      child: Material(
+        color: Colors.transparent,
         borderRadius: BorderRadius.circular(20),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-          decoration: BoxDecoration(
-            color: CaslaColors.surface,
-            border: Border.all(
-              color: isSelected ? CaslaColors.accentGold : CaslaColors.line,
-              width: 1.5,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(20),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              minHeight: 48,
+              maxWidth: MediaQuery.sizeOf(context).width - 36,
             ),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Text(
-            label,
-            style: const TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-              color: CaslaColors.primaryNavy,
+            child: Container(
+              alignment: Alignment.center,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: CaslaColors.surface,
+                border: Border.all(
+                  color: isSelected ? CaslaColors.accentGold : CaslaColors.line,
+                  width: 1.5,
+                ),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: CaslaColors.primaryNavy,
+                ),
+              ),
             ),
           ),
         ),

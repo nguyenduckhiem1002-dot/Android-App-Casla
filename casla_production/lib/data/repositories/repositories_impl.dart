@@ -99,6 +99,7 @@ class AuthRepositoryImpl implements AuthRepository {
       role: authorization.role,
       permissions: authorization.permissions,
       toIds: authorization.workContexts.map((w) => w.workId).toList(),
+      workContexts: _toUserWorkContexts(authorization.workContexts),
     );
 
     await db.insertAuditLog({
@@ -161,8 +162,24 @@ class AuthRepositoryImpl implements AuthRepository {
       role: authorization.role,
       permissions: authorization.permissions,
       toIds: authorization.workContexts.map((work) => work.workId).toList(),
+      workContexts: _toUserWorkContexts(authorization.workContexts),
     );
   }
+
+  static List<UserWorkContext> _toUserWorkContexts(
+    List<SapWorkContext> workContexts,
+  ) => workContexts
+      .map(
+        (work) => UserWorkContext(
+          workId: work.workId,
+          workName: work.workName,
+          plant: work.plant,
+          workCenter: work.workCenter,
+          boPhan: work.boPhan,
+          location: work.location,
+        ),
+      )
+      .toList(growable: false);
 
   static void _validateAuthResult(SapLoginResult result) {
     if (result.userUuid.trim().isEmpty ||

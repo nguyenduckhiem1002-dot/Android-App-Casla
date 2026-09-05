@@ -132,6 +132,29 @@ class ProductionRecord {
   });
 }
 
+/// Một phạm vi sản xuất mà SAP cấp cho phiên hiện tại.
+///
+/// Các trường khớp trực tiếp với `ZA_MOB_WorkContext` trong EDMX
+/// `ZUI_MOB_AUTH`; giữ lại tên/mã thực từ SAP để UI không phải suy đoán tên tổ
+/// từ mã SQLite cục bộ.
+class UserWorkContext {
+  final String workId;
+  final String workName;
+  final String plant;
+  final String workCenter;
+  final String boPhan;
+  final String location;
+
+  const UserWorkContext({
+    required this.workId,
+    required this.workName,
+    this.plant = '',
+    this.workCenter = '',
+    this.boPhan = '',
+    this.location = '',
+  });
+}
+
 /// Phiên đăng nhập
 class UserSession {
   final String id;
@@ -150,6 +173,10 @@ class UserSession {
   final Set<Permission> permissions;
   final List<String> toIds;
 
+  /// Full SAP work contexts, not only their ids. `toIds` remains the compact
+  /// authorization scope consumed by repositories and sync code.
+  final List<UserWorkContext> workContexts;
+
   const UserSession({
     required this.id,
     required this.maNv,
@@ -162,6 +189,7 @@ class UserSession {
     required this.role,
     required this.permissions,
     this.toIds = const [],
+    this.workContexts = const [],
   });
 
   UserSession copyWithTokens({
@@ -179,6 +207,7 @@ class UserSession {
     role: role,
     permissions: permissions,
     toIds: toIds,
+    workContexts: workContexts,
   );
 
   String get userName => fullName;

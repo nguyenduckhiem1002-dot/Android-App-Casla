@@ -201,7 +201,7 @@ Nguồn chính thức đã đối chiếu:
 Kiểm chứng sau triển khai:
 
 - `flutter analyze --no-pub`: **No issues found**.
-- `flutter test --no-pub`: **203 tests passed** ở vòng hiện tại, gồm auth race, scope isolation, transaction invariant, cache stream, SAP chaos, offline restart, verified sync, QR parser/validity, schema migration, operation QR lookup, overview team-scope alias và performance benchmark.
+- `flutter test --no-pub`: **204 tests passed** ở vòng hiện tại, gồm auth race, scope isolation, transaction invariant, cache stream, SAP chaos, offline restart, verified sync, QR parser/validity, schema migration, operation QR lookup, overview team-scope alias, SAP Work Context và performance benchmark.
 - `git diff --check`: không phát hiện whitespace error.
 
 Các phần chưa thể hoàn tất chỉ bằng app và cần phối hợp ngoài code:
@@ -236,15 +236,16 @@ Phạm vi còn lại của plan (các mục này cần thêm QA/backend/DevOps h
 
 Đã triển khai trên app Flutter:
 
-- S06 có bộ chọn `Một ngày`, `Tuần này`, `Tháng này` và `Tùy chọn`; request dùng đúng `RangeCode` của OData `getWorkHistory` (`D/W/M/C`). Khoảng ngày custom giới hạn 31 ngày để giữ trải nghiệm và tải dữ liệu ổn định.
+- S06 có bộ chọn luôn hiển thị `Ngày`, `Tuần`, `Tháng` và `Tùy chọn`, kèm nhãn range đang áp dụng; request dùng đúng `RangeCode` của OData `getWorkHistory` (`D/W/M/C`). Khoảng ngày custom giới hạn 31 ngày để giữ trải nghiệm và tải dữ liệu ổn định.
 - KPI, danh sách công nhân và assignment local dùng cùng một khoảng thời gian. Khi đổi range, stream query được thay thế có chủ đích để tránh hiển thị lẫn dữ liệu của range trước.
 - Scope tổ được resolve ở database theo cả khóa local (`team-1`) và mã nghiệp vụ SAP (`ma_to`, ví dụ `TC01`). Cùng một logic được dùng cho worker và assignment, nên “Tất cả tổ” không còn bị rỗng chỉ vì khác dạng mã.
-- Nếu master team local chưa có bản ghi tương ứng, bộ lọc vẫn hiển thị các mã tổ SAP trong phạm vi phiên và không tự mở rộng ra ngoài scope.
+- `UserSession` giữ nguyên mọi `ZA_MOB_WorkContext` từ EDMX (`WorkID`, `WorkName`, `Plant`, `WorkCenter`, `BoPhan`, `Location`) qua login và refresh. S06 dùng `WorkName` do SAP trả về để hiển thị tổ; local master chỉ bổ sung alias khi lọc dữ liệu.
+- Nếu master team local chưa có bản ghi tương ứng, bộ lọc vẫn hiển thị tên/mã tổ SAP trong phạm vi phiên và không tự mở rộng ra ngoài scope.
 - Bổ sung regression test cho worker/assignment/team lookup bằng mã SAP.
 
 Kiểm chứng sau đợt này:
 
 - `flutter analyze --no-pub`: **No issues found**.
 - `flutter test --no-pub test/core/scope_and_order_lookup_test.dart`: **23 tests passed**.
-- `flutter test --no-pub`: **203 tests passed**.
+- `flutter test --no-pub`: **204 tests passed**.
 - `git diff --check`: không phát hiện whitespace error; cảnh báo còn lại chỉ là chuyển đổi line ending LF/CRLF của Git trên Windows.
