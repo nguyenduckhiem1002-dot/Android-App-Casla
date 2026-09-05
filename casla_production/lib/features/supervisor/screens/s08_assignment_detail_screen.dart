@@ -28,6 +28,18 @@ class S08AssignmentDetailScreen extends ConsumerStatefulWidget {
 class _S08AssignmentDetailScreenState
     extends ConsumerState<S08AssignmentDetailScreen> {
   bool _isSubmitting = false;
+  late final Stream<Assignment?> _assignmentStream;
+  late final Stream<List<Map<String, dynamic>>> _recordsStream;
+
+  @override
+  void initState() {
+    super.initState();
+    final appState = ref.read(appStateProvider);
+    _assignmentStream = appState.assignmentRepo.watchAssignment(
+      widget.assignment.id,
+    );
+    _recordsStream = appState.db.watchRecordsByAssignment(widget.assignment.id);
+  }
 
   void _openConfirmCompletionSheet(double remainingMax) {
     String qtyInput = '';
@@ -42,7 +54,7 @@ class _S08AssignmentDetailScreenState
         return StatefulBuilder(
           builder: (context, setSheetState) {
             final qtyNum = double.tryParse(qtyInput) ?? 0.0;
-            final isOverflow = qtyNum > remainingMax;
+            final isOverflow = !qtyNum.isFinite || qtyNum > remainingMax;
 
             return SafeArea(
               child: SingleChildScrollView(
@@ -139,7 +151,7 @@ class _S08AssignmentDetailScreenState
                     const SizedBox(height: 16),
 
                     ElevatedButton(
-                      onPressed: (qtyNum <= 0 || isOverflow)
+                      onPressed: (!qtyNum.isFinite || qtyNum <= 0 || isOverflow)
                           ? null
                           : () async {
                               Navigator.pop(context);
@@ -212,7 +224,6 @@ class _S08AssignmentDetailScreenState
   @override
   Widget build(BuildContext context) {
     final appState = ref.watch(appStateProvider);
-    final asgId = widget.assignment.id;
     final canRecall =
         appState.currentSession?.hasPermission(Permission.recallAssignment) ==
         true;
@@ -255,7 +266,7 @@ class _S08AssignmentDetailScreenState
         ),
       ),
       body: StreamBuilder<Assignment?>(
-        stream: appState.assignmentRepo.watchAssignment(asgId),
+        stream: _assignmentStream,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting &&
               !snapshot.hasData) {
@@ -290,7 +301,7 @@ class _S08AssignmentDetailScreenState
             children: [
               Expanded(
                 child: StreamBuilder<List<Map<String, dynamic>>>(
-                  stream: appState.db.watchRecordsByAssignment(asgId),
+                  stream: _recordsStream,
                   builder: (context, recordsSnapshot) {
                     if (recordsSnapshot.connectionState ==
                             ConnectionState.waiting &&

@@ -51,6 +51,7 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
   bool _obscureConfirm = true;
   String? _errorText;
   bool _isLoading = false;
+  bool _canDismissMandatoryDialog = false;
 
   @override
   void dispose() {
@@ -107,7 +108,7 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
       );
 
       if (!mounted) return;
-      Navigator.of(context).pop();
+      _dismissDialog();
       await _onPasswordChanged();
     } catch (e) {
       if (!mounted) return;
@@ -162,10 +163,17 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
   }
 
   Future<void> _logoutFromMandatoryDialog() async {
-    Navigator.of(context).pop();
+    _dismissDialog();
     await widget.ref.read(appStateProvider).logout();
     if (!widget.hostContext.mounted) return;
     GoRouter.of(widget.hostContext).go('/login');
+  }
+
+  void _dismissDialog() {
+    if (widget.isMandatory && !_canDismissMandatoryDialog) {
+      setState(() => _canDismissMandatoryDialog = true);
+    }
+    Navigator.of(context).pop();
   }
 
   @override
@@ -189,8 +197,10 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
       }
     }
 
-    return AlertDialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+    return PopScope(
+      canPop: !widget.isMandatory || _canDismissMandatoryDialog,
+      child: AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
       title: Row(
         children: [
           Container(
@@ -397,7 +407,7 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
           ],
         ),
       ),
-      actions: [
+        actions: [
         TextButton(
           onPressed: _isLoading
               ? null
@@ -440,7 +450,8 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
                   ),
                 ),
         ),
-      ],
+        ],
+      ),
     );
   }
 }

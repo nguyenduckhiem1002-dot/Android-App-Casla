@@ -7,11 +7,13 @@ class ProductionMath {
 
   /// Giao hiệu lực = Giao ban đầu − Đã thu hồi
   static double calculateEffectiveAssigned(double assigned, double recalled) {
+    if (!assigned.isFinite || !recalled.isFinite) return 0.0;
     return (assigned - recalled).clamp(0.0, double.infinity);
   }
 
   /// Còn lại = Giao hiệu lực − Hoàn thành lũy kế
   static double calculateRemaining(double effectiveAssigned, double completed) {
+    if (!effectiveAssigned.isFinite || !completed.isFinite) return 0.0;
     return (effectiveAssigned - completed).clamp(0.0, double.infinity);
   }
 
@@ -21,6 +23,9 @@ class ProductionMath {
     double completed,
     double recalled,
   ) {
+    if (!assigned.isFinite || !completed.isFinite || !recalled.isFinite) {
+      return 0.0;
+    }
     return (assigned - completed - recalled).clamp(0.0, double.infinity);
   }
 
@@ -29,12 +34,16 @@ class ProductionMath {
     double completed,
     double effectiveAssigned,
   ) {
+    if (!completed.isFinite || !effectiveAssigned.isFinite) return 0.0;
     if (effectiveAssigned <= 0) return 0.0;
     return (completed / effectiveAssigned).clamp(0.0, 1.0);
   }
 
   /// Validate ghi nhận sản lượng (Spec 3.1: 0 < newCompletion <= remaining)
   static String? validateProductionEntry(double newQuantity, double remaining) {
+    if (!newQuantity.isFinite || !remaining.isFinite) {
+      return 'Số lượng hoàn thành không hợp lệ';
+    }
     if (newQuantity <= 0) {
       return 'Số lượng hoàn thành phải lớn hơn 0';
     }
@@ -51,6 +60,9 @@ class ProductionMath {
     String reasonCode,
     String? note,
   ) {
+    if (!newRecall.isFinite || !maxRecall.isFinite) {
+      return 'Số lượng thu hồi không hợp lệ';
+    }
     if (newRecall <= 0) {
       return 'Số lượng thu hồi phải lớn hơn 0';
     }

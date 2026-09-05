@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:casla_production/core/database/casla_database.dart';
 import 'package:casla_production/core/telemetry/field_telemetry.dart';
 import 'package:casla_production/data/repositories/repositories_impl.dart';
+import 'package:casla_production/data/sap/odata_error.dart';
 import 'package:casla_production/domain/entities/work_history.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -158,6 +159,65 @@ void main() {
     final inserted = await db.getEmployeeByCode('MNV00999');
     expect(inserted?['ten'], 'Nhân viên SAP');
     expect(inserted?['to_ids'], isEmpty);
+  });
+
+  test('known authorization rejection clears the active cache namespace',
+      () async {
+    var calls = 0;
+    var rejected = false;
+    var authorizationCallbacks = 0;
+    final repo = WorkHistoryRepositoryImpl(
+      db,
+      cacheSubject: () => 'active-session',
+      onAuthorizationRejected: (_) async => authorizationCallbacks++,
+      loadRemote: ({required range, dateFrom, dateTo}) async {
+        calls++;
+        if (rejected) throw const SapBusinessError('TOKEN_INVALID_OR_EXPIRED');
+        return _result(workerName: 'Bản đã lưu');
+      },
+    );
+
+    await repo.getWorkHistory(range: HistoryRange.day);
+    rejected = true;
+    await expectLater(
+      repo.getWorkHistory(range: HistoryRange.day, forceRefresh: true),
+      throwsA(isA<SapBusinessError>()),
+    );
+
+    expect(authorizationCallbacks, 1);
+    rejected = false;
+    final refreshed = await repo.getWorkHistory(range: HistoryRange.day);
+    expect(refreshed.workers.single.workerName, 'Bản đã lưu');
+    expect(calls, 3, reason: 'the rejected cache must not be reused');
+    repo.dispose();
+  });
+
+  test('watchWorkHistory publishes a background refresh without rebuilding it',
+      () async {
+    var workerName = 'Bản đầu';
+    final repo = WorkHistoryRepositoryImpl(
+      db,
+      cacheSubject: () => 'active-session',
+      loadRemote: ({required range, dateFrom, dateTo}) async =>
+          _result(workerName: workerName),
+    );
+    final values = <String>[];
+    final firstValue = Completer<void>();
+    final subscription = repo
+        .watchWorkHistory(range: HistoryRange.day)
+        .listen((result) {
+          values.add(result.workers.single.workerName);
+          if (!firstValue.isCompleted) firstValue.complete();
+        });
+
+    await firstValue.future;
+    workerName = 'Bản mới';
+    await repo.getWorkHistory(range: HistoryRange.day, forceRefresh: true);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(values, ['Bản đầu', 'Bản mới']);
+    await subscription.cancel();
+    repo.dispose();
   });
 }
 

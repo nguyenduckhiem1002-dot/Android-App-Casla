@@ -27,6 +27,7 @@ class SapODataClient {
   String? _authToken;
   String? _csrfToken;
   List<String>? _cookies;
+  int _transportGeneration = 0;
   late final Dio dio;
   final _logger = Logger(filter: DebugOnlyLogFilter());
 
@@ -81,30 +82,32 @@ class SapODataClient {
           handler.next(options);
         },
         onError: (error, handler) {
-          _logger.e(
-            redactSecrets(
-              'SAP API Error: ${error.response?.statusCode} ${error.message}',
-            ),
-          );
+          // Deliberately do not log URI query, headers, request/response body
+          // or Dio's error message: each can contain credentials in legacy
+          // OData calls. The path/status/type is enough for debug diagnosis.
+          if (kDebugMode) {
+            _logger.e(
+              'SAP request failed: ${error.requestOptions.method} '
+              'status=${error.response?.statusCode ?? '-'} '
+              'type=${error.type.name}',
+            );
+          }
           handler.next(error);
         },
       ),
     );
 
-    // Logging interceptor (with token redaction per Spec Section 10).
-    //
-    // Debug builds only: request and response bodies carry credentials, and
-    // attaching the interceptor in release relied on a downstream level filter
-    // to keep them out of the log. Not attaching it at all is the guarantee, and
-    // it also drops the per-request redaction cost from production.
+    // Keep debug telemetry metadata-only. Dio's LogInterceptor serializes
+    // headers and request/response bodies, where worker passwords, CSRF
+    // tokens and cookies can appear. Redacting after serialization is less
+    // safe than never serializing the secrets in the first place.
     if (kDebugMode) {
       dio.interceptors.add(
-        LogInterceptor(
-          requestHeader: true,
-          responseHeader: true,
-          requestBody: true,
-          responseBody: true,
-          logPrint: (obj) => _logger.d(redactSecrets(obj.toString())),
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            _logger.d('SAP request: ${options.method}');
+            handler.next(options);
+          },
         ),
       );
     }
@@ -112,44 +115,44 @@ class SapODataClient {
 
   /// Masks credentials in a line destined for the log.
   ///
-  /// Dio logs the *encoded* URI, where the single quotes SAP's OData function
-  /// imports require appear as `%27`. The original patterns only matched the raw
-  /// `password='...'` form, so they silently missed every real request and the
-  /// password was printed verbatim. Both forms are covered here.
+  /// Supports SAP's camel-case JSON keys as well as snake-case query keys.
+  /// This remains a defence in depth helper for isolated diagnostic strings;
+  /// normal request logging above never serializes secret-bearing fields.
   @visibleForTesting
   static String redactSecrets(String input) {
-    const secretKeys = [
-      'password',
-      'old_password',
-      'new_password',
-      'access_token',
-      'refresh_token',
-    ];
+    var out = input.replaceAllMapped(
+      RegExp(r'\b(Basic|Bearer)\s+[^\s,;]+', caseSensitive: false),
+      (match) => '${match.group(1)} [REDACTED]',
+    );
 
-    var out = input.replaceAll(RegExp(r'Basic\s+\S+'), 'Basic [REDACTED]');
+    // Header values are all sensitive as a unit. Handle normal log lines and
+    // map-like rendering (`Cookie: ...`) without attempting to preserve a
+    // partly-secret value.
+    out = out.replaceAllMapped(
+      RegExp(
+        r'\b(cookie|set-cookie|x-csrf-token)\s*[:=]\s*[^\r\n,}]*',
+        caseSensitive: false,
+      ),
+      (match) => '${match.group(1)}=[REDACTED]',
+    );
+    out = out.replaceAllMapped(
+      RegExp(
+        r'\bauthorization\s*[:=]\s*(?!(?:Basic|Bearer)\s+\[REDACTED\])[^\r\n,}]*',
+        caseSensitive: false,
+      ),
+      (_) => 'Authorization=[REDACTED]',
+    );
 
-    // The separator varies by what is being logged: `password=` in a URI,
-    // `password: ` in Dio's map rendering of queryParameters.
-    const sep = r'\s*[:=]\s*';
-
-    for (final key in secretKeys) {
-      final patterns = <String>[
-        "$key$sep'[^']*'", // password='secret'
-        '$key$sep"[^"]*"', // password="secret"
-        '$key$sep%27.*?%27', // password=%27secret%27  (what Dio prints)
-        r''
-            '$key$sep'
-            r"[^&\s,}\]\[]+", // password=secret
-      ];
-
-      for (final pattern in patterns) {
-        out = out.replaceAll(
-          RegExp(pattern, caseSensitive: false),
-          '$key=[REDACTED]',
-        );
-      }
-    }
-
+    const secretKey =
+        r'(?:password|old[_-]?password|new[_-]?password|current[_-]?password|worker[_-]?password|access[_-]?token|refresh[_-]?token)';
+    out = out.replaceAllMapped(
+      RegExp(
+        '\\b($secretKey)\\b\\s*[:=]\\s*'
+        r'''(?:%27.*?%27|'[^']*'|"[^"]*"|[^&\s,}\]\[]+)''',
+        caseSensitive: false,
+      ),
+      (match) => '${match.group(1)}=[REDACTED]',
+    );
     return out;
   }
 
@@ -236,6 +239,7 @@ class SapODataClient {
   /// trusted gateway is responsible for adding its upstream SAP credential.
   /// Uses a clean standalone Dio instance to avoid interceptor recursion.
   Future<String?> fetchCsrfToken() async {
+    final requestGeneration = _transportGeneration;
     try {
       ensureConfigured();
       final cleanDio = Dio(
@@ -257,6 +261,10 @@ class SapODataClient {
         ),
       );
 
+      // A logout or a newer login cleared this transport while the fetch was
+      // in flight. Never repopulate its cookies/token afterwards.
+      if (requestGeneration != _transportGeneration) return null;
+
       // Read CSRF Token from response headers.
       final tokenHeader = response.headers['x-csrf-token'];
       if (tokenHeader != null && tokenHeader.isNotEmpty) {
@@ -277,8 +285,10 @@ class SapODataClient {
       return _csrfToken;
     } on SapConfigurationException {
       rethrow;
-    } catch (e) {
-      _logger.w(redactSecrets('Failed to fetch SAP CSRF token: $e'));
+    } catch (error) {
+      if (kDebugMode) {
+        _logger.w('Failed to fetch SAP CSRF token (${error.runtimeType})');
+      }
       return null;
     }
   }
@@ -295,6 +305,7 @@ class SapODataClient {
 
   /// Reset CSRF token & cookies (e.g. on logout).
   void resetCsrfSession() {
+    _transportGeneration++;
     _csrfToken = null;
     _cookies = null;
   }

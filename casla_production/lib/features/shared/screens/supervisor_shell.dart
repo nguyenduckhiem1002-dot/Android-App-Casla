@@ -18,21 +18,26 @@ class SupervisorShell extends ConsumerStatefulWidget {
 
 class _SupervisorShellState extends ConsumerState<SupervisorShell> {
   int _currentIndex = 0;
-  late final Stream<int> _outstandingSyncCount;
+  final Set<int> _visitedTabIndices = {0};
+  Stream<int>? _outstandingSyncCount;
+  String _syncScopeKey = '';
 
-  @override
-  void initState() {
-    super.initState();
+  void _ensureScopedSyncCount(String actorId, List<String> teamIds) {
+    final normalizedTeams = teamIds.toList()..sort();
+    final key = '$actorId|${normalizedTeams.join(',')}';
+    if (key == _syncScopeKey && _outstandingSyncCount != null) return;
+    _syncScopeKey = key;
     _outstandingSyncCount = ref
         .read(appStateProvider)
         .db
-        .watchOutstandingSyncCount();
+        .watchOutstandingSyncCount(actorId: actorId, teamIds: normalizedTeams);
   }
 
   @override
   Widget build(BuildContext context) {
     final session = ref.watch(appStateProvider).currentSession;
     if (session == null) return const SizedBox.shrink();
+    _ensureScopedSyncCount(session.maNv, session.toIds);
     final tabs = <({Widget screen, BottomNavigationBarItem item})>[
       if (session.hasPermission(Permission.viewTeamProduction))
         (
@@ -75,21 +80,18 @@ class _SupervisorShellState extends ConsumerState<SupervisorShell> {
       ),
     ];
     final selectedIndex = _currentIndex.clamp(0, tabs.length - 1);
+    _visitedTabIndices.add(selectedIndex);
 
     return Scaffold(
       body: IndexedStack(
         index: selectedIndex,
-        children: tabs
-            .asMap()
-            .entries
-            .map(
-              (entry) =>
-                  entry.value.screen is S10ConfirmScanScreen &&
-                      selectedIndex != entry.key
-                  ? const SizedBox.shrink()
-                  : entry.value.screen,
-            )
-            .toList(),
+        children: List<Widget>.generate(tabs.length, (index) {
+          if (!_visitedTabIndices.contains(index)) return const SizedBox.shrink();
+          return TickerMode(
+            enabled: index == selectedIndex,
+            child: tabs[index].screen,
+          );
+        }),
       ),
       bottomNavigationBar: Container(
         decoration: const BoxDecoration(
@@ -105,6 +107,7 @@ class _SupervisorShellState extends ConsumerState<SupervisorShell> {
           onTap: (index) {
             setState(() {
               _currentIndex = index;
+              _visitedTabIndices.add(index);
             });
           },
           items: tabs.map((tab) => tab.item).toList(),
@@ -115,7 +118,7 @@ class _SupervisorShellState extends ConsumerState<SupervisorShell> {
 }
 
 class _SyncQueueNavigationIcon extends StatelessWidget {
-  final Stream<int> stream;
+  final Stream<int>? stream;
 
   const _SyncQueueNavigationIcon({required this.stream});
 

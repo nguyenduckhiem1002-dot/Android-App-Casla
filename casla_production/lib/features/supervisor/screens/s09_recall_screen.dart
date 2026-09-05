@@ -35,6 +35,16 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
   bool _isSubmitting = false;
   String? _quantityError;
   String? _noteError;
+  late final Stream<Assignment?> _assignmentStream;
+
+  @override
+  void initState() {
+    super.initState();
+    _assignmentStream = ref
+        .read(appStateProvider)
+        .assignmentRepo
+        .watchAssignment(widget.assignment.id);
+  }
 
   @override
   void dispose() {
@@ -45,7 +55,7 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
 
   Future<void> _submitRecall(double maxRecall) async {
     final qty = double.tryParse(_qtyController.text) ?? 0.0;
-    if (qty <= 0 || qty > maxRecall) {
+    if (!qty.isFinite || qty <= 0 || qty > maxRecall) {
       setState(() {
         _quantityError =
             'Nhập số lượng lớn hơn 0 và không quá ${maxRecall.toStringAsFixed(0)}.';
@@ -118,9 +128,6 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final appState = ref.watch(appStateProvider);
-    final asgId = widget.assignment.id;
-
     return Scaffold(
       backgroundColor: CaslaColors.background,
       appBar: AppBar(
@@ -157,7 +164,7 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
         ),
       ),
       body: StreamBuilder<Assignment?>(
-        stream: appState.assignmentRepo.watchAssignment(asgId),
+        stream: _assignmentStream,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting &&
               !snapshot.hasData) {

@@ -49,14 +49,27 @@ class SapPpOpAllocGateway implements SapWriteGateway {
   @override
   Future<bool> refreshSession() => session.refreshSession();
 
+  /// Clears request-scoped SAP transport state when the app changes identity.
+  /// The gateway owns this client, so no old CSRF token or cookies can leak
+  /// into the next login's write/history requests.
+  void resetTransportSession() {
+    client.setAuthToken(null);
+    client.resetCsrfSession();
+  }
+
   @override
   Future<SapWriteResult> push(SyncPushRequest request) async {
+    final sessionGeneration = session.generation;
     final accessToken = session.accessToken;
     if (accessToken == null || accessToken.isEmpty) {
+      if (!session.isGenerationCurrent(sessionGeneration)) {
+        throw const SapSessionInvalidatedException();
+      }
       // Nothing to send with — the engine's auth-refresh path handles this
       // exactly like an expired token.
       throw const SapBusinessError('TOKEN_INVALID_OR_EXPIRED');
     }
+    _ensureSessionCurrent(sessionGeneration, accessToken);
 
     final syncItemUUID = request.idempotencyKey;
     if (syncItemUUID == null || syncItemUUID.isEmpty) {
@@ -70,13 +83,28 @@ class SapPpOpAllocGateway implements SapWriteGateway {
 
     switch (request.entityType) {
       case 'ASSIGNMENT':
-        return _submitInitialAssign(request, accessToken, deviceId);
+        return _submitInitialAssign(
+          request,
+          accessToken,
+          deviceId,
+          sessionGeneration,
+        );
       case 'PRODUCTION':
       case 'PRODUCTION_RECORD':
-        return _submitConfirm(request, accessToken, deviceId);
+        return _submitConfirm(
+          request,
+          accessToken,
+          deviceId,
+          sessionGeneration,
+        );
       case 'RECALL':
       case 'RECALL_RECORD':
-        return _submitRecall(request, accessToken, deviceId);
+        return _submitRecall(
+          request,
+          accessToken,
+          deviceId,
+          sessionGeneration,
+        );
       default:
         throw StateError(
           'ZUI_PP_OPALLOC không hỗ trợ entity_type "${request.entityType}".',
@@ -88,6 +116,7 @@ class SapPpOpAllocGateway implements SapWriteGateway {
     SyncPushRequest request,
     String accessToken,
     String deviceId,
+    int sessionGeneration,
   ) async {
     final assignment = request.source;
     final keys = await db.getSapOperationKeys(assignment['id'] as String);
@@ -108,6 +137,7 @@ class SapPpOpAllocGateway implements SapWriteGateway {
       request: request,
       accessToken: accessToken,
       deviceId: deviceId,
+      sessionGeneration: sessionGeneration,
       params: {
         'ProductionOrder': keys.productionOrder,
         'Operation': keys.operation,
@@ -127,6 +157,7 @@ class SapPpOpAllocGateway implements SapWriteGateway {
     SyncPushRequest request,
     String accessToken,
     String deviceId,
+    int sessionGeneration,
   ) async {
     final record = request.source;
     final assignmentId = record['phan_cong_id'] as String;
@@ -152,6 +183,7 @@ class SapPpOpAllocGateway implements SapWriteGateway {
       request: request,
       accessToken: accessToken,
       deviceId: deviceId,
+      sessionGeneration: sessionGeneration,
       params: {
         'ProductionOrder': keys.productionOrder,
         'Operation': keys.operation,
@@ -175,6 +207,7 @@ class SapPpOpAllocGateway implements SapWriteGateway {
     SyncPushRequest request,
     String accessToken,
     String deviceId,
+    int sessionGeneration,
   ) async {
     final record = request.source;
     final assignmentId = record['phan_cong_id'] as String;
@@ -200,6 +233,7 @@ class SapPpOpAllocGateway implements SapWriteGateway {
       request: request,
       accessToken: accessToken,
       deviceId: deviceId,
+      sessionGeneration: sessionGeneration,
       params: {
         'ProductionOrder': keys.productionOrder,
         'Operation': keys.operation,
@@ -226,16 +260,20 @@ class SapPpOpAllocGateway implements SapWriteGateway {
     required SyncPushRequest request,
     required String accessToken,
     required String deviceId,
+    required int sessionGeneration,
     required Map<String, dynamic> params,
   }) async {
     try {
       // Same CSRF dance SapAuthController does before every mutating POST —
       // this service is behind the same SAP Gateway CSRF protection.
+      _ensureSessionCurrent(sessionGeneration, accessToken);
       await client.fetchCsrfToken();
+      _ensureSessionCurrent(sessionGeneration, accessToken);
       final response = await client.dio.post(
         '$_kEntitySet/$_kNamespace.$action',
         data: params,
       );
+      _ensureSessionCurrent(sessionGeneration, accessToken);
       final body = odataActionResult(response);
       final status = (body['Status'] ?? '').toString();
 
@@ -253,7 +291,13 @@ class SapPpOpAllocGateway implements SapWriteGateway {
     } on DioException catch (error) {
       final code = odataErrorMessage(error);
       if (code != null && _ambiguousReceiptCodes.contains(code)) {
-        return _reconcile(request, accessToken, deviceId, ambiguousCode: code);
+        return _reconcile(
+          request,
+          accessToken,
+          deviceId,
+          sessionGeneration: sessionGeneration,
+          ambiguousCode: code,
+        );
       }
       rethrowAsBusinessError(error);
     }
@@ -264,10 +308,13 @@ class SapPpOpAllocGateway implements SapWriteGateway {
     SyncPushRequest request,
     String accessToken,
     String deviceId, {
+    required int sessionGeneration,
     required String ambiguousCode,
   }) async {
     try {
+      _ensureSessionCurrent(sessionGeneration, accessToken);
       await client.fetchCsrfToken();
+      _ensureSessionCurrent(sessionGeneration, accessToken);
       final response = await client.dio.post(
         '$_kEntitySet/$_kNamespace.getSyncStatus',
         data: {
@@ -276,6 +323,7 @@ class SapPpOpAllocGateway implements SapWriteGateway {
           'SyncItemUUID': request.idempotencyKey,
         },
       );
+      _ensureSessionCurrent(sessionGeneration, accessToken);
       final body = odataActionResult(response);
       final status = (body['Status'] ?? '').toString();
 
@@ -320,6 +368,8 @@ class SapPpOpAllocGateway implements SapWriteGateway {
         dateFrom: dateFrom,
         dateTo: dateTo,
       );
+    } on SapSessionInvalidatedException {
+      rethrow;
     } catch (error) {
       if (classifySyncError(error).kind != SyncFailureKind.auth) rethrow;
       // A revoked session (e.g. right after a password change) fails the
@@ -335,10 +385,15 @@ class SapPpOpAllocGateway implements SapWriteGateway {
     DateTime? dateFrom,
     DateTime? dateTo,
   }) async {
+    final sessionGeneration = session.generation;
     final accessToken = session.accessToken;
     if (accessToken == null || accessToken.isEmpty) {
+      if (!session.isGenerationCurrent(sessionGeneration)) {
+        throw const SapSessionInvalidatedException();
+      }
       throw const SapBusinessError('TOKEN_INVALID_OR_EXPIRED');
     }
+    _ensureSessionCurrent(sessionGeneration, accessToken);
     final deviceId = DeviceInfoHelper.deviceId;
 
     final dateFromStr = dateFrom != null
@@ -349,7 +404,9 @@ class SapPpOpAllocGateway implements SapWriteGateway {
         : null;
 
     try {
+      _ensureSessionCurrent(sessionGeneration, accessToken);
       await client.fetchCsrfToken();
+      _ensureSessionCurrent(sessionGeneration, accessToken);
       final response = await client.dio.post(
         '$_kEntitySet/$_kNamespace.getWorkHistory',
         data: {
@@ -362,6 +419,7 @@ class SapPpOpAllocGateway implements SapWriteGateway {
           'SummaryOnly': false,
         },
       );
+      _ensureSessionCurrent(sessionGeneration, accessToken);
       return _parseHistoryResult(odataActionResult(response));
     } on DioException catch (error) {
       rethrowAsBusinessError(error);
@@ -449,5 +507,12 @@ class SapPpOpAllocGateway implements SapWriteGateway {
   static String? _nullIfEmpty(Object? value) {
     final text = value?.toString();
     return (text == null || text.isEmpty) ? null : text;
+  }
+
+  void _ensureSessionCurrent(int expectedGeneration, String expectedToken) {
+    if (!session.isGenerationCurrent(expectedGeneration) ||
+        session.accessToken != expectedToken) {
+      throw const SapSessionInvalidatedException();
+    }
   }
 }

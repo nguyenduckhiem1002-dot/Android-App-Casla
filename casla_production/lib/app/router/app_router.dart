@@ -9,6 +9,7 @@ import '../../main.dart';
 import 'app_route_observer.dart';
 
 import '../../features/authentication/screens/s02b_account_login_screen.dart';
+import '../../features/account/screens/mandatory_password_change_screen.dart';
 import '../../features/shared/screens/supervisor_shell.dart';
 import '../../features/supervisor/screens/s06b_employee_daily_detail_screen.dart';
 import '../../features/supervisor/screens/s07_create_assignment_wizard_screen.dart';
@@ -41,6 +42,8 @@ final routerProvider = Provider<GoRouter>((ref) {
     redirect: (context, state) {
       final isLoggedIn = appState.isLoggedIn;
       final isGoingToLogin = state.matchedLocation == '/login';
+      final isPasswordChangeRoute =
+          state.matchedLocation == '/password-change-required';
 
       if (!isLoggedIn && !isGoingToLogin) {
         return '/login';
@@ -52,6 +55,12 @@ final routerProvider = Provider<GoRouter>((ref) {
         final homeRoute = session.role == UserRole.worker
             ? '/history'
             : '/supervisor';
+
+        if (session.passwordChangeRequired) {
+          return isPasswordChangeRoute ? null : '/password-change-required';
+        }
+
+        if (isPasswordChangeRoute) return homeRoute;
 
         if (isGoingToLogin) {
           return homeRoute;
@@ -86,9 +95,13 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/login',
         builder: (context, state) {
-          final initialUsername = state.extra as String?;
+          final initialUsername = state.extra is String ? state.extra as String : null;
           return S02bAccountLoginScreen(initialUsername: initialUsername);
         },
+      ),
+      GoRoute(
+        path: '/password-change-required',
+        builder: (context, state) => const MandatoryPasswordChangeScreen(),
       ),
       GoRoute(
         path: '/supervisor',

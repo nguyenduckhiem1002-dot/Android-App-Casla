@@ -33,6 +33,7 @@ abstract class AssignmentRepository {
   });
 
   Stream<List<Assignment>> watchWorkerAssignments(String workerId);
+  Stream<List<Assignment>> watchAssignmentsByTeams(List<String> teamIds);
   Stream<List<Assignment>> watchAllAssignments();
   Stream<Assignment?> watchAssignment(String id);
   Future<Assignment?> getAssignmentById(String id);
@@ -85,5 +86,13 @@ abstract class WorkHistoryRepository {
     DateTime? dateFrom,
     DateTime? dateTo,
     bool forceRefresh = false,
+  });
+
+  /// Emits the cached snapshot immediately, then emits a replacement whenever
+  /// stale-while-revalidate obtains newer SAP data for this exact range.
+  Stream<WorkHistoryResult> watchWorkHistory({
+    required HistoryRange range,
+    DateTime? dateFrom,
+    DateTime? dateTo,
   });
 }

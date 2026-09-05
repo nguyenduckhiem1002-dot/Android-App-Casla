@@ -1,4 +1,5 @@
 // Data Layer — Repository Implementations
+// ignore_for_file: prefer_initializing_formals
 
 import 'dart:async';
 // Spec: Section 9.1 (Business contracts)
@@ -35,10 +36,6 @@ class AuthRepositoryImpl implements AuthRepository {
     _sapAuth = SapAuthController(_sapClient);
   }
 
-  /// Exposed so [AppState] can reuse the same authenticated client for token
-  /// refresh, rather than standing up a second one.
-  SapAuthController get authController => _sapAuth;
-
   @override
   Future<UserSession> loginByCredentials(
     String username,
@@ -59,6 +56,8 @@ class AuthRepositoryImpl implements AuthRepository {
         'Đăng nhập thất bại. Vui lòng kiểm tra lại tài khoản hoặc mật khẩu.',
       );
     }
+
+    _validateAuthResult(result);
 
     final authorization = parseAuthorization(
       permissions: result.permissions,
@@ -116,13 +115,85 @@ class AuthRepositoryImpl implements AuthRepository {
     return session;
   }
 
+  /// Refreshes the active account while re-reading SAP's effective grants.
+  ///
+  /// A refresh result is not merely a new access token: permissions and work
+  /// contexts may have been changed on SAP since login. Returning a fully
+  /// rebuilt [UserSession] lets [SessionCoordinator] fail closed when the
+  /// identity or the refreshed scope no longer matches the signed-in user.
+  Future<UserSession?> refreshSession(UserSession current) async {
+    if (current.refreshToken.trim().isEmpty) return null;
+
+    final result = await _sapAuth.refresh(
+      refreshToken: current.refreshToken,
+      deviceId: await DeviceInfoHelper.getDeviceId(),
+    );
+    if (!result.isSuccess) return null;
+    _validateAuthResult(result);
+
+    // Never accept a token response for another account, even if a faulty or
+    // compromised upstream returned an otherwise well-formed payload.
+    if (result.userUuid != current.id) return null;
+
+    final authorization = parseAuthorization(
+      permissions: result.permissions,
+      workContexts: result.workContexts,
+    );
+    final workerId = result.workerId.trim().isNotEmpty
+        ? result.workerId.trim()
+        : current.maNv;
+
+    return UserSession(
+      id: result.userUuid,
+      maNv: workerId,
+      fullName: result.fullName.trim().isNotEmpty
+          ? result.fullName.trim()
+          : current.fullName,
+      email: result.email.trim().isNotEmpty ? result.email.trim() : current.email,
+      teamName: authorization.workContexts.isNotEmpty
+          ? authorization.workContexts.first.workName
+          : current.teamName,
+      accessToken: result.accessToken,
+      refreshToken: result.refreshToken,
+      passwordChangeRequired: result.passwordChangeRequired,
+      role: authorization.role,
+      permissions: authorization.permissions,
+      toIds: authorization.workContexts.map((work) => work.workId).toList(),
+    );
+  }
+
+  static void _validateAuthResult(SapLoginResult result) {
+    if (result.userUuid.trim().isEmpty ||
+        result.accessToken.trim().isEmpty ||
+        result.refreshToken.trim().isEmpty) {
+      throw Exception('SAP trả về phiên đăng nhập không hợp lệ.');
+    }
+  }
+
+  /// Clears the shared auth client's transient SAP state. This is deliberately
+  /// separate from remote logout, which uses its own client below so a slow
+  /// revoke cannot restore cookies into a newer login attempt.
+  void resetTransportSession() {
+    _sapClient.setAuthToken(null);
+    _sapClient.resetCsrfSession();
+  }
+
   @override
   Future<void> logout({String? accessToken}) async {
-    if (accessToken != null && accessToken.isNotEmpty) {
-      await _sapAuth.logout(
-        accessToken: accessToken,
-        deviceId: await DeviceInfoHelper.getDeviceId(),
-      );
+    try {
+      if (accessToken != null && accessToken.isNotEmpty) {
+        // A new instance has no shared CSRF/cookie jar with a login or refresh
+        // already in progress. Its `finally` still clears its own state.
+        final logoutClient = SapODataClient(
+          baseUrl: AppConfig.sapAuthServiceUrl,
+        );
+        await SapAuthController(logoutClient).logout(
+          accessToken: accessToken,
+          deviceId: await DeviceInfoHelper.getDeviceId(),
+        );
+      }
+    } finally {
+      resetTransportSession();
     }
   }
 
@@ -231,7 +302,9 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
     required String createdBy,
     String? workerPassword,
   }) async {
-    if (assignedQuantity <= 0) throw Exception('Số lượng giao phải lớn hơn 0');
+    if (!assignedQuantity.isFinite || assignedQuantity <= 0) {
+      throw Exception('Số lượng giao phải là một số dương hợp lệ');
+    }
 
     final id = IdGenerator.newId();
     final idempotencyKey = IdGenerator.newIdempotencyKey();
@@ -308,6 +381,18 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
   @override
   Stream<List<Assignment>> watchWorkerAssignments(String workerId) {
     return db.watchAssignmentsByWorker(workerId).asyncMap((entities) async {
+      return _mapToAssignmentsBatch(entities);
+    });
+  }
+
+  @override
+  Stream<List<Assignment>> watchAssignmentsByTeams(List<String> teamIds) {
+    final normalized = teamIds
+        .map((teamId) => teamId.trim())
+        .where((teamId) => teamId.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    return db.watchAssignmentsByTeams(normalized).asyncMap((entities) async {
       return _mapToAssignmentsBatch(entities);
     });
   }
@@ -505,7 +590,6 @@ class ProductionRepositoryImpl implements ProductionRepository {
       record: recordRow,
       queueItem: queueItem,
       auditLog: auditLog,
-      assignmentStatus: (remaining - quantity) <= 0.0001 ? 'COMPLETED' : null,
     );
 
     if (workerPassword?.isNotEmpty == true) {
@@ -656,7 +740,6 @@ class RecallRepositoryImpl implements RecallRepository {
       record: recallRow,
       queueItem: queueItem,
       auditLog: auditLog,
-      assignmentStatus: (maxRecall - quantity) <= 0.0001 ? 'RECALLED' : null,
     );
 
     if (workerPassword?.isNotEmpty == true) {
@@ -693,6 +776,13 @@ typedef WorkHistoryLoader =
       DateTime? dateTo,
     });
 
+class WorkHistorySessionChangedException implements Exception {
+  const WorkHistorySessionChangedException();
+
+  @override
+  String toString() => 'WorkHistorySessionChangedException';
+}
+
 class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
   final CaslaDatabase db;
   final WorkHistoryLoader loadRemote;
@@ -700,8 +790,13 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
   final Duration freshFor;
   final FieldTelemetry telemetry;
   final DateTime Function() _now;
+  final bool Function(String subject) _isCacheSubjectCurrent;
+  final FutureOr<void> Function(String subject)? _onAuthorizationRejected;
 
   final Map<String, Future<WorkHistoryResult>> _inFlight = {};
+  // ignore: close_sinks
+  // Closed explicitly by [dispose], which AppState owns for the app lifetime.
+  final _updates = StreamController<_WorkHistoryUpdate>.broadcast();
 
   WorkHistoryRepositoryImpl(
     this.db, {
@@ -710,8 +805,12 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
     this.freshFor = const Duration(minutes: 2),
     FieldTelemetry? telemetry,
     DateTime Function()? now,
+    bool Function(String subject)? isCacheSubjectCurrent,
+    FutureOr<void> Function(String subject)? onAuthorizationRejected,
   }) : telemetry = telemetry ?? FieldTelemetry.instance,
-       _now = now ?? DateTime.now;
+       _now = now ?? DateTime.now,
+       _isCacheSubjectCurrent = isCacheSubjectCurrent ?? ((_) => true),
+       _onAuthorizationRejected = onAuthorizationRejected;
 
   @override
   Future<WorkHistoryResult> getWorkHistory({
@@ -745,6 +844,8 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
       }
     }
 
+    _ensureSubjectCurrent(subject);
+
     final cacheKey = _cacheKey(
       subject: subject,
       range: range,
@@ -765,6 +866,7 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
     }
 
     final cached = await _readCache(cacheKey);
+    _ensureSubjectCurrent(subject);
     if (cached != null) {
       final age = _now().difference(cached.fetchedAt);
       if (age >= freshFor) {
@@ -794,6 +896,74 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
       dateFrom: dateFrom,
       dateTo: dateTo,
     );
+  }
+
+  @override
+  Stream<WorkHistoryResult> watchWorkHistory({
+    required HistoryRange range,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+  }) {
+    final subject = cacheSubject()?.trim();
+    if (subject == null || subject.isEmpty) {
+      return Stream<WorkHistoryResult>.fromFuture(
+        getWorkHistory(range: range, dateFrom: dateFrom, dateTo: dateTo),
+      );
+    }
+    final cacheKey = _cacheKey(
+      subject: subject,
+      range: range,
+      dateFrom: dateFrom,
+      dateTo: dateTo,
+    );
+
+    late final StreamController<WorkHistoryResult> controller;
+    StreamSubscription<_WorkHistoryUpdate>? updatesSubscription;
+    var isLoading = false;
+    WorkHistoryResult? lastEmitted;
+
+    void emitIfNew(WorkHistoryResult result) {
+      if (controller.isClosed || identical(lastEmitted, result)) return;
+      lastEmitted = result;
+      controller.add(result);
+    }
+
+    Future<void> emitCurrent() async {
+      if (isLoading || controller.isClosed) return;
+      isLoading = true;
+      try {
+        final result = await getWorkHistory(
+          range: range,
+          dateFrom: dateFrom,
+          dateTo: dateTo,
+        );
+        if (_isCacheSubjectCurrent(subject)) {
+          emitIfNew(result);
+        }
+      } catch (error, stackTrace) {
+        if (!controller.isClosed) controller.addError(error, stackTrace);
+      } finally {
+        isLoading = false;
+      }
+    }
+
+    controller = StreamController<WorkHistoryResult>(
+      onListen: () {
+        // Subscribe before the first get: a SWR refresh that finishes while
+        // the initial cached value is emitted still reaches this stream.
+        updatesSubscription = _updates.stream
+            .where((update) => update.cacheKey == cacheKey)
+            .listen((update) {
+              if (_isCacheSubjectCurrent(subject)) emitIfNew(update.result);
+            });
+        unawaited(emitCurrent());
+      },
+      onCancel: () async {
+        await updatesSubscription?.cancel();
+        if (!controller.isClosed) await controller.close();
+      },
+    );
+    return controller.stream;
   }
 
   Future<void> _ignoreRefreshFailure(Future<WorkHistoryResult> refresh) async {
@@ -840,6 +1010,7 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
     DateTime? dateFrom,
     DateTime? dateTo,
   }) async {
+    _ensureSubjectCurrent(subject);
     final stopwatch = Stopwatch()..start();
     late final WorkHistoryResult result;
     try {
@@ -853,14 +1024,18 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
         FieldMetric.workHistoryRemoteSuccess,
         stopwatch.elapsed,
       );
-    } catch (_) {
+    } catch (error) {
       stopwatch.stop();
       telemetry.recordDuration(
         FieldMetric.workHistoryRemoteFailure,
         stopwatch.elapsed,
       );
+      if (classifySyncError(error).kind == SyncFailureKind.auth) {
+        await _handleAuthorizationRejected(subject);
+      }
       rethrow;
     }
+    _ensureSubjectCurrent(subject);
     final fetchedAt = _now();
 
     await db.replaceWorkHistoryCache(
@@ -921,7 +1096,33 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
         {'worker_id': worker.key, 'worker_name': worker.value},
     ]);
 
+    if (!_isCacheSubjectCurrent(subject)) {
+      // A logout/scope change happened while SQLite was committing. Cache data
+      // is disposable, so remove the old namespace rather than retain it.
+      await db.clearWorkHistoryCacheForSubject(subject);
+      throw const WorkHistorySessionChangedException();
+    }
+    if (!_updates.isClosed) {
+      _updates.add(_WorkHistoryUpdate(cacheKey: cacheKey, result: result));
+    }
+
     return result;
+  }
+
+  void _ensureSubjectCurrent(String subject) {
+    if (!_isCacheSubjectCurrent(subject)) {
+      throw const WorkHistorySessionChangedException();
+    }
+  }
+
+  Future<void> _handleAuthorizationRejected(String subject) async {
+    await db.clearWorkHistoryCacheForSubject(subject);
+    final callback = _onAuthorizationRejected;
+    if (callback != null) await callback(subject);
+  }
+
+  void dispose() {
+    _updates.close();
   }
 
   Future<_CachedWorkHistory?> _readCache(String cacheKey) async {
@@ -1013,6 +1214,13 @@ class _CachedWorkHistory {
   final DateTime fetchedAt;
 
   const _CachedWorkHistory({required this.result, required this.fetchedAt});
+}
+
+class _WorkHistoryUpdate {
+  final String cacheKey;
+  final WorkHistoryResult result;
+
+  const _WorkHistoryUpdate({required this.cacheKey, required this.result});
 }
 
 MutationReceipt _mutationReceipt(String id, SyncFailure? failure) {

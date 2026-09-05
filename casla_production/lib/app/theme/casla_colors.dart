@@ -15,7 +15,8 @@ class CaslaColors {
   // Accent Gold — CTA, focus, trạng thái pending
   static const Color accentGold = Color(0xFFC9A24B);
   static const Color gold100 = Color(0xFFF6EAD2);
-  static const Color gold700 = Color(0xFFA8823A);
+  // Darkened status text remains legible on white and the light gold surface.
+  static const Color gold700 = Color(0xFF765515);
 
   // Surface & Background
   static const Color surface = Color(0xFFFFFFFF);
@@ -23,7 +24,8 @@ class CaslaColors {
   static const Color line = Color(0xFFE7E9EE);
 
   // Muted
-  static const Color muted = Color(0xFF8A8F9B);
+  // 5.3:1 on white (the former #8A8F9B was below WCAG AA for normal text).
+  static const Color muted = Color(0xFF626A78);
   static const Color muted100 = Color(0xFFEEF0F3);
 
   // Status — Success
@@ -35,7 +37,7 @@ class CaslaColors {
   static const Color dangerBg = Color(0xFFFBEAEA);
 
   // Status — Pending
-  static const Color pending = Color(0xFFB98A2A);
+  static const Color pending = Color(0xFF85601A);
   static const Color pendingBg = Color(0xFFFBF1DD);
 
   // Identity bar sub-text

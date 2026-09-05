@@ -1,5 +1,9 @@
+// ignore_for_file: prefer_initializing_formals
+
 import '../database/casla_database.dart';
+import '../../data/sap/sap_session_provider.dart';
 import 'sap_write_gateway.dart';
+import 'sync_access_scope.dart';
 import 'sync_failure.dart';
 import 'sync_push.dart';
 
@@ -27,14 +31,41 @@ class VerifiedSyncReport {
 class VerifiedSyncCoordinator {
   final CaslaDatabase database;
   final SapWriteGateway gateway;
+  final bool Function()? _canExecute;
+  final SyncAccessScopeProvider? _scopeProvider;
   final Set<String> _workersInFlight = <String>{};
 
-  VerifiedSyncCoordinator({required this.database, required this.gateway});
+  VerifiedSyncCoordinator({
+    required this.database,
+    required this.gateway,
+    bool Function()? canExecute,
+    SyncAccessScopeProvider? scopeProvider,
+  }) : _canExecute = canExecute,
+       _scopeProvider = scopeProvider;
 
   Future<VerifiedSyncReport> syncVerifiedWorkerChain({
     required String anchorQueueItemId,
     required String workerPassword,
   }) async {
+    if (_canExecute?.call() == false) {
+      return const VerifiedSyncReport(
+        outcome: VerifiedSyncOutcome.blocked,
+        syncedCount: 0,
+        totalCount: 0,
+        message: 'Phiên đăng nhập không còn hợp lệ. Vui lòng đăng nhập lại.',
+      );
+    }
+
+    final scope = _scopeProvider?.call();
+    if (_scopeProvider != null && (scope == null || !scope.isUsable)) {
+      return const VerifiedSyncReport(
+        outcome: VerifiedSyncOutcome.blocked,
+        syncedCount: 0,
+        totalCount: 0,
+        message: 'Bạn không còn quyền xử lý hàng đợi này.',
+      );
+    }
+
     if (workerPassword.trim().isEmpty) {
       return const VerifiedSyncReport(
         outcome: VerifiedSyncOutcome.blocked,
@@ -44,7 +75,11 @@ class VerifiedSyncCoordinator {
       );
     }
 
-    final anchor = await database.getSyncQueueItemById(anchorQueueItemId);
+    final anchor = await database.getSyncQueueItemById(
+      anchorQueueItemId,
+      actorId: scope?.actorId,
+      teamIds: scope?.teamIds,
+    );
     if (anchor == null) {
       return const VerifiedSyncReport(
         outcome: VerifiedSyncOutcome.notFound,
@@ -74,7 +109,11 @@ class VerifiedSyncCoordinator {
     }
 
     try {
-      final items = await database.getVerifiableSyncItemsForWorker(workerId);
+      final items = await database.getVerifiableSyncItemsForWorker(
+        workerId,
+        actorId: scope?.actorId,
+        teamIds: scope?.teamIds,
+      );
       if (items.isEmpty) {
         return const VerifiedSyncReport(
           outcome: VerifiedSyncOutcome.notFound,
@@ -86,6 +125,14 @@ class VerifiedSyncCoordinator {
 
       var synced = 0;
       for (final item in items) {
+        if (_canExecute?.call() == false || !_isScopeStillActive(scope)) {
+          return VerifiedSyncReport(
+            outcome: VerifiedSyncOutcome.blocked,
+            syncedCount: synced,
+            totalCount: items.length,
+            message: 'Phiên đăng nhập đã thay đổi. Giao dịch chưa gửi được giữ nguyên.',
+          );
+        }
         final source = await database.getSyncSourceRow(
           item['entity_type'] as String,
           item['entity_id'] as String,
@@ -110,17 +157,8 @@ class VerifiedSyncCoordinator {
           );
         }
 
-        var failure = await pushAndRecord(
-          database: database,
-          gateway: gateway,
-          backoff: SyncBackoff(),
-          queueItem: item,
-          source: source,
-          workerPassword: workerPassword,
-        );
-
-        if (failure?.kind == SyncFailureKind.auth &&
-            await gateway.refreshSession()) {
+        SyncFailure? failure;
+        try {
           failure = await pushAndRecord(
             database: database,
             gateway: gateway,
@@ -129,6 +167,35 @@ class VerifiedSyncCoordinator {
             source: source,
             workerPassword: workerPassword,
           );
+        } on SapSessionInvalidatedException {
+          return VerifiedSyncReport(
+            outcome: VerifiedSyncOutcome.blocked,
+            syncedCount: synced,
+            totalCount: items.length,
+            message: 'Phiên đăng nhập đã thay đổi. Giao dịch chưa gửi được giữ nguyên.',
+          );
+        }
+
+        if (failure?.kind == SyncFailureKind.auth &&
+            await gateway.refreshSession()) {
+          try {
+            failure = await pushAndRecord(
+              database: database,
+              gateway: gateway,
+              backoff: SyncBackoff(),
+              queueItem: item,
+              source: source,
+              workerPassword: workerPassword,
+            );
+          } on SapSessionInvalidatedException {
+            return VerifiedSyncReport(
+              outcome: VerifiedSyncOutcome.blocked,
+              syncedCount: synced,
+              totalCount: items.length,
+              message:
+                  'Phiên đăng nhập đã thay đổi. Giao dịch chưa gửi được giữ nguyên.',
+            );
+          }
         }
 
         if (failure == null) {
@@ -182,5 +249,11 @@ class VerifiedSyncCoordinator {
     final assignment = await database.getAssignmentById(assignmentId);
     final sapId = assignment?['sap_id']?.toString().trim();
     return sapId != null && sapId.isNotEmpty;
+  }
+
+  bool _isScopeStillActive(SyncAccessScope? expected) {
+    final provider = _scopeProvider;
+    if (provider == null) return true;
+    return expected?.matches(provider()) ?? false;
   }
 }

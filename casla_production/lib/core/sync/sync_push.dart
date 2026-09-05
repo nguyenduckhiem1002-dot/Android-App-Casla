@@ -11,6 +11,7 @@
 // has to happen in one place.
 
 import '../database/casla_database.dart';
+import '../../data/sap/sap_session_provider.dart';
 import 'sap_write_gateway.dart';
 import 'sync_failure.dart';
 
@@ -46,6 +47,10 @@ Future<SyncFailure?> pushAndRecord({
       sapId: result.sapId,
     );
     return null;
+  } on SapSessionInvalidatedException {
+    // Logout/account-switch won the race. Do not increment retries or stamp a
+    // status from an I/O operation that no longer belongs to this session.
+    rethrow;
   } catch (error) {
     final failure = classifySyncError(error);
     return _writeFailure(

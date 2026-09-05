@@ -64,7 +64,38 @@ void main() {
       final out = SapODataClient.redactSecrets(line);
 
       expect(out, isNot(contains('c3ZjOnNlY3JldA')));
-      expect(out, contains('Basic [REDACTED]'));
+      expect(out, contains('Authorization=[REDACTED]'));
+    });
+
+    test('masks SAP camel-case JSON credentials and cookie headers', () {
+      const line =
+          'data: {WorkerPassword: "worker-secret", CurrentPassword: "old-secret", '
+          'NewPassword: "new-secret", AccessToken: "access-123", '
+          'RefreshToken: "refresh-456"} Cookie: JSESSIONID=abc; sap-user=def '
+          'x-csrf-token: csrf-value';
+
+      final out = SapODataClient.redactSecrets(line);
+
+      for (final secret in const [
+        'worker-secret',
+        'old-secret',
+        'new-secret',
+        'access-123',
+        'refresh-456',
+        'JSESSIONID=abc',
+        'csrf-value',
+      ]) {
+        expect(out, isNot(contains(secret)));
+      }
+    });
+
+    test('masks Bearer credentials', () {
+      const line = 'Authorization: Bearer live-token-value';
+
+      final out = SapODataClient.redactSecrets(line);
+
+      expect(out, isNot(contains('live-token-value')));
+      expect(out, contains('Authorization=[REDACTED]'));
     });
 
     test('leaves non-secret content alone', () {

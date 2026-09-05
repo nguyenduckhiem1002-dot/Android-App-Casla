@@ -45,7 +45,9 @@ class _EmployeeDetailSkeleton extends StatelessWidget {
 class _S06bEmployeeDailyDetailScreenState
     extends ConsumerState<S06bEmployeeDailyDetailScreen> {
   late DateTime _selectedDate;
-  Future<WorkHistoryResult>? _historyFuture;
+  late Stream<WorkHistoryResult> _historyStream;
+  late Stream<List<Assignment>> _assignmentStream;
+  late Stream<List<Map<String, dynamic>>> _productionStream;
 
   String _dateStr(DateTime d) => DateFormat('yyyy-MM-dd').format(d);
 
@@ -53,10 +55,28 @@ class _S06bEmployeeDailyDetailScreenState
   void initState() {
     super.initState();
     _selectedDate = (widget.worker['date'] as DateTime?) ?? DateTime.now();
-    _historyFuture = _fetchHistory();
+    _resetDataStreams();
   }
 
-  Future<WorkHistoryResult> _fetchHistory() {
+  String get _workerId => widget.worker['id']?.toString() ?? '';
+
+  void _resetDataStreams() {
+    final appState = ref.read(appStateProvider);
+    final date = _dateStr(_selectedDate);
+    _historyStream = appState.workHistoryRepo.watchWorkHistory(
+      range: HistoryRange.custom,
+      dateFrom: _selectedDate,
+      dateTo: _selectedDate,
+    );
+    _assignmentStream = appState.assignmentRepo.watchWorkerAssignments(_workerId);
+    _productionStream = appState.db.watchProductionHistory(
+      _workerId,
+      fromBusinessDate: date,
+      toBusinessDate: date,
+    );
+  }
+
+  Future<WorkHistoryResult> _fetchHistory({bool forceRefresh = false}) {
     return ref
         .read(appStateProvider)
         .workHistoryRepo
@@ -64,20 +84,18 @@ class _S06bEmployeeDailyDetailScreenState
           range: HistoryRange.custom,
           dateFrom: _selectedDate,
           dateTo: _selectedDate,
+          forceRefresh: forceRefresh,
         );
   }
 
   Future<void> _refresh() async {
-    final next = _fetchHistory();
-    setState(() => _historyFuture = next);
     try {
-      await next;
+      await _fetchHistory(forceRefresh: true);
     } catch (_) {}
   }
 
   @override
   Widget build(BuildContext context) {
-    final appState = ref.watch(appStateProvider);
     final workerName = widget.worker['ten']?.toString() ?? 'Nhân viên';
     final workerCode = widget.worker['ma_nv']?.toString() ?? 'Chưa có mã';
     final workerTeam =
@@ -151,7 +169,7 @@ class _S06bEmployeeDailyDetailScreenState
                     if (picked != null) {
                       setState(() {
                         _selectedDate = picked;
-                        _historyFuture = _fetchHistory();
+                        _resetDataStreams();
                       });
                     }
                   },
@@ -170,22 +188,16 @@ class _S06bEmployeeDailyDetailScreenState
           Expanded(
             child: RefreshIndicator(
               onRefresh: _refresh,
-              child: FutureBuilder<WorkHistoryResult>(
-                future: _historyFuture,
+              child: StreamBuilder<WorkHistoryResult>(
+                stream: _historyStream,
                 builder: (context, sapSnapshot) {
                   return StreamBuilder<List<Assignment>>(
-                    stream: appState.assignmentRepo.watchWorkerAssignments(
-                      workerId,
-                    ),
+                    stream: _assignmentStream,
                     builder: (context, assignmentSnapshot) {
                       final dateFormatted = _dateStr(_selectedDate);
 
                       return StreamBuilder<List<Map<String, dynamic>>>(
-                        stream: appState.db.watchProductionHistory(
-                          workerId,
-                          fromBusinessDate: dateFormatted,
-                          toBusinessDate: dateFormatted,
-                        ),
+                        stream: _productionStream,
                         builder: (context, prodSnapshot) {
                           final isSapLoading =
                               sapSnapshot.connectionState ==

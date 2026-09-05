@@ -125,7 +125,8 @@ class _S07CreateAssignmentWizardScreenState
       builder: (context) => _SearchablePickerSheet(
         title: 'Chọn công nhân',
         searchHint: 'Tìm theo tên hoặc mã nhân viên',
-        emptyMessage: 'Không có công nhân trong phạm vi được phân quyền.',
+        emptyMessage:
+            'Chưa có công nhân trong phạm vi trên thiết bị. Hãy kiểm tra đồng bộ danh mục SAP hoặc liên hệ quản trị.',
         items: workers,
         itemTitle: (item) => item['ten']?.toString() ?? 'Công nhân',
         itemSubtitle: (item) {
@@ -205,7 +206,8 @@ class _S07CreateAssignmentWizardScreenState
       builder: (context) => _SearchablePickerSheet(
         title: 'Chọn sản phẩm',
         searchHint: 'Tìm theo sản phẩm, mã hoặc đơn hàng',
-        emptyMessage: 'Hiện không có đơn hàng nào đang mở.',
+        emptyMessage:
+            'Chưa có đơn hàng mở trên thiết bị. Ứng dụng cần dịch vụ danh mục SAP để tải dữ liệu mới.',
         items: openOrders,
         itemTitle: (item) => item['ten_sp']?.toString() ?? 'Sản phẩm',
         itemSubtitle: (item) => [
@@ -252,8 +254,10 @@ class _S07CreateAssignmentWizardScreenState
     }
 
     final qty = double.tryParse(_qtyController.text) ?? 0.0;
-    if (qty <= 0) {
-      setState(() => _quantityError = 'Số lượng giao phải lớn hơn 0.');
+    if (!qty.isFinite || qty <= 0) {
+      setState(
+        () => _quantityError = 'Số lượng giao phải là một số dương hợp lệ.',
+      );
       return;
     }
     setState(() => _quantityError = null);

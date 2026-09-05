@@ -22,9 +22,11 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../../data/sap/sap_session_provider.dart';
 import '../database/casla_database.dart';
 import '../network/connectivity_monitor.dart';
 import 'sap_write_gateway.dart';
+import 'sync_access_scope.dart';
 import 'sync_failure.dart';
 import 'sync_push.dart';
 
@@ -71,6 +73,8 @@ class SyncEngine {
   final SyncBackoff _backoff;
   final Duration _pollInterval;
   final int _batchSize;
+  final bool Function()? _canRun;
+  final SyncAccessScopeProvider? _scopeProvider;
 
   Timer? _timer;
   StreamSubscription<bool>? _connectivitySubscription;
@@ -85,12 +89,16 @@ class SyncEngine {
     SyncBackoff? backoff,
     Duration pollInterval = const Duration(seconds: 30),
     int batchSize = 50,
+    bool Function()? canRun,
+    SyncAccessScopeProvider? scopeProvider,
   }) : _database = database,
        _gateway = gateway,
        _connectivity = connectivity,
        _backoff = backoff ?? SyncBackoff(),
        _pollInterval = pollInterval,
-       _batchSize = batchSize;
+       _batchSize = batchSize,
+       _canRun = canRun,
+       _scopeProvider = scopeProvider;
 
   /// Emits once per completed pass.
   Stream<SyncRunReport> get reports => _reports.stream;
@@ -128,6 +136,11 @@ class SyncEngine {
   /// twice, so a second caller is turned away rather than queued.
   Future<SyncRunReport> runOnce() async {
     if (_running) return SyncRunReport.skippedRun;
+    if (_canRun?.call() == false) {
+      final report = SyncRunReport.skippedRun;
+      _publish(report);
+      return report;
+    }
     _running = true;
     try {
       if (!await _connectivity.isOnline()) {
@@ -136,7 +149,17 @@ class SyncEngine {
         return report;
       }
 
-      final items = await _database.getDueSyncItems(limit: _batchSize);
+      final scope = _scopeProvider?.call();
+      if (_scopeProvider != null && (scope == null || !scope.isUsable)) {
+        final report = SyncRunReport.skippedRun;
+        _publish(report);
+        return report;
+      }
+      final items = await _database.getDueSyncItems(
+        limit: _batchSize,
+        actorId: scope?.actorId,
+        teamIds: scope?.teamIds,
+      );
       var pushed = 0;
       var transient = 0;
       var permanent = 0;
@@ -144,11 +167,36 @@ class SyncEngine {
       var sessionRefreshed = false;
 
       for (final item in items) {
-        final outcome = await _pushItem(
-          item,
-          allowSessionRefresh: !sessionRefreshed,
-          onSessionRefreshed: () => sessionRefreshed = true,
-        );
+        if (_canRun?.call() == false || !_isScopeStillActive(scope)) {
+          final report = SyncRunReport(
+            pushed: pushed,
+            transientFailures: transient,
+            permanentFailures: permanent,
+            needsVerification: needsVerification,
+            skipped: true,
+          );
+          _publish(report);
+          return report;
+        }
+
+        late final _Outcome outcome;
+        try {
+          outcome = await _pushItem(
+            item,
+            allowSessionRefresh: !sessionRefreshed,
+            onSessionRefreshed: () => sessionRefreshed = true,
+          );
+        } on SapSessionInvalidatedException {
+          final report = SyncRunReport(
+            pushed: pushed,
+            transientFailures: transient,
+            permanentFailures: permanent,
+            needsVerification: needsVerification,
+            skipped: true,
+          );
+          _publish(report);
+          return report;
+        }
 
         switch (outcome) {
           case _Outcome.pushed:
@@ -253,6 +301,12 @@ class SyncEngine {
     } catch (_) {
       return false;
     }
+  }
+
+  bool _isScopeStillActive(SyncAccessScope? expected) {
+    final provider = _scopeProvider;
+    if (provider == null) return true;
+    return expected?.matches(provider()) ?? false;
   }
 
   void _publish(SyncRunReport report) {

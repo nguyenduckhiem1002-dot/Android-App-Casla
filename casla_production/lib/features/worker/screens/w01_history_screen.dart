@@ -28,13 +28,24 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
   HistoryRange _range = HistoryRange.month;
   DateTime? _customDateFrom;
   DateTime? _customDateTo;
-  late Future<WorkHistoryResult> _future;
+  late Stream<WorkHistoryResult> _historyStream;
   int _visibleEntryCount = _historyEntryPageSize;
 
   @override
   void initState() {
     super.initState();
-    _future = _load();
+    _historyStream = _watchHistory();
+  }
+
+  Stream<WorkHistoryResult> _watchHistory() {
+    return ref
+        .read(appStateProvider)
+        .workHistoryRepo
+        .watchWorkHistory(
+          range: _range,
+          dateFrom: _range == HistoryRange.custom ? _customDateFrom : null,
+          dateTo: _range == HistoryRange.custom ? _customDateTo : null,
+        );
   }
 
   Future<WorkHistoryResult> _load({bool forceRefresh = false}) {
@@ -58,22 +69,19 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
     setState(() {
       _range = range;
       _visibleEntryCount = _historyEntryPageSize;
-      _future = _load();
+      _historyStream = _watchHistory();
     });
   }
 
   Future<void> _refresh() async {
     try {
-      final result = await _load(forceRefresh: true);
+      await _load(forceRefresh: true);
       if (!mounted) return;
       setState(() {
         _visibleEntryCount = _historyEntryPageSize;
-        _future = Future.value(result);
       });
     } catch (_) {
       if (!mounted) return;
-      final cached = _load();
-      setState(() => _future = cached);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
@@ -81,11 +89,8 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
           ),
         ),
       );
-      try {
-        await cached;
-      } catch (_) {
-        // No cached snapshot exists; FutureBuilder will render its normal error.
-      }
+      // Keep the same stream alive: when it has a cached snapshot, it remains
+      // on-screen instead of being replaced by an error-only FutureBuilder.
     }
   }
 
@@ -121,7 +126,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
       _customDateFrom = DateTime(picked.year, picked.month, picked.day);
       _customDateTo = DateTime(picked.year, picked.month, picked.day);
       _visibleEntryCount = _historyEntryPageSize;
-      _future = _load();
+      _historyStream = _watchHistory();
     });
   }
 
@@ -187,7 +192,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
         picked.end.day,
       );
       _visibleEntryCount = _historyEntryPageSize;
-      _future = _load();
+      _historyStream = _watchHistory();
     });
   }
 
@@ -364,8 +369,8 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
       ),
       body: RefreshIndicator(
         onRefresh: _refresh,
-        child: FutureBuilder<WorkHistoryResult>(
-          future: _future,
+        child: StreamBuilder<WorkHistoryResult>(
+          stream: _historyStream,
           builder: (context, snapshot) {
             return SingleChildScrollView(
               physics: const AlwaysScrollableScrollPhysics(),
@@ -375,12 +380,14 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
                 children: [
                   _buildRangeTabs(),
                   const SizedBox(height: 14),
-                  if (snapshot.connectionState == ConnectionState.waiting)
+                  if (snapshot.connectionState == ConnectionState.waiting &&
+                      !snapshot.hasData)
                     const _HistorySkeleton()
-                  else if (snapshot.hasError)
-                    _buildError(snapshot.error!)
-                  else if (snapshot.hasData)
+                  else if (snapshot.hasData) ...[
+                    if (snapshot.hasError) _buildCachedRefreshWarning(),
                     _buildContent(snapshot.data!),
+                  ] else if (snapshot.hasError)
+                    _buildError(snapshot.error!)
                 ],
               ),
             );
@@ -482,31 +489,40 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
   Widget _rangeTab(String label, HistoryRange range) {
     final selected = range == _range;
     return Expanded(
-      child: GestureDetector(
-        onTap: () => _selectRange(range),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          decoration: BoxDecoration(
-            color: selected ? CaslaColors.surface : Colors.transparent,
+      child: Semantics(
+        button: true,
+        selected: selected,
+        label: label,
+        child: SizedBox(
+          height: 48,
+          child: InkWell(
+            onTap: () => _selectRange(range),
             borderRadius: BorderRadius.circular(8),
-            boxShadow: selected
-                ? [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.06),
-                      blurRadius: 4,
-                      offset: const Offset(0, 1),
-                    ),
-                  ]
-                : null,
-          ),
-          child: Text(
-            label,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-              color: selected ? CaslaColors.primaryNavy : CaslaColors.muted,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: selected ? CaslaColors.surface : Colors.transparent,
+                borderRadius: BorderRadius.circular(8),
+                boxShadow: selected
+                    ? [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.06),
+                          blurRadius: 4,
+                          offset: const Offset(0, 1),
+                        ),
+                      ]
+                    : null,
+              ),
+              child: Text(
+                label,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                  color: selected ? CaslaColors.primaryNavy : CaslaColors.muted,
+                ),
+              ),
             ),
           ),
         ),
@@ -568,6 +584,30 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
               foregroundColor: Colors.white,
             ),
             child: Text(needsReLogin ? 'Đăng nhập lại' : 'Thử lại'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCachedRefreshWarning() {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: CaslaColors.pendingBg,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: const Row(
+        children: [
+          Icon(Icons.cloud_off_outlined, color: CaslaColors.bannerText, size: 17),
+          SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Không thể làm mới từ SAP. Đang hiển thị dữ liệu gần nhất trên máy.',
+              style: TextStyle(color: CaslaColors.bannerText, fontSize: 12),
+            ),
           ),
         ],
       ),

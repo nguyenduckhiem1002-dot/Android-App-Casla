@@ -7,9 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme/casla_colors.dart';
-import '../../../main.dart';
 import '../../account/screens/s13_account_screen.dart';
-import '../../account/widgets/change_password_dialog.dart';
 import '../../worker/screens/w01_history_screen.dart';
 
 class WorkerShell extends ConsumerStatefulWidget {
@@ -21,31 +19,22 @@ class WorkerShell extends ConsumerStatefulWidget {
 
 class _WorkerShellState extends ConsumerState<WorkerShell> {
   int _currentIndex = 0;
-  bool _hasCheckedMandatoryPassword = false;
-
-  @override
-  void initState() {
-    super.initState();
-    // Same check S06SupervisorOverviewScreen does for the supervisor role —
-    // a worker account can just as well log in with PasswordChangeRequired
-    // set (confirmed against a real account: 'duck', Status 'P').
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_hasCheckedMandatoryPassword && mounted) {
-        _hasCheckedMandatoryPassword = true;
-        final session = ref.read(appStateProvider).currentSession;
-        if (session?.passwordChangeRequired == true) {
-          showChangePasswordDialog(context, isMandatory: true, ref: ref);
-        }
-      }
-    });
-  }
+  final Set<int> _visitedTabIndices = {0};
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: IndexedStack(
         index: _currentIndex,
-        children: const [W01HistoryScreen(), S13AccountScreen()],
+        children: [
+          const W01HistoryScreen(),
+          _visitedTabIndices.contains(1)
+              ? TickerMode(
+                  enabled: _currentIndex == 1,
+                  child: const S13AccountScreen(),
+                )
+              : const SizedBox.shrink(),
+        ],
       ),
       bottomNavigationBar: Container(
         decoration: const BoxDecoration(
@@ -58,7 +47,10 @@ class _WorkerShellState extends ConsumerState<WorkerShell> {
           unselectedItemColor: CaslaColors.muted,
           selectedFontSize: 11,
           unselectedFontSize: 11,
-          onTap: (index) => setState(() => _currentIndex = index),
+          onTap: (index) => setState(() {
+            _currentIndex = index;
+            _visitedTabIndices.add(index);
+          }),
           items: const [
             BottomNavigationBarItem(
               icon: Icon(Icons.history),

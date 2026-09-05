@@ -33,6 +33,19 @@ const Map<String, String> _entitySourceTables = {
   'RECALL_RECORD': 'recall_records',
 };
 
+/// A business-rule rejection detected while holding the SQLite transaction.
+///
+/// UI repositories may validate early for responsiveness, but only this layer
+/// can make the check and the insert indivisible when two taps/devices race.
+class MutationValidationException implements Exception {
+  final String message;
+
+  const MutationValidationException(this.message);
+
+  @override
+  String toString() => message;
+}
+
 class CaslaDatabase {
   static const bool _seedDemoData = bool.fromEnvironment(
     'ENABLE_DEMO_DATA',
@@ -516,6 +529,14 @@ class CaslaDatabase {
   static double _toDouble(Object? value) =>
       value is num ? value.toDouble() : 0.0;
 
+  static double _requireFinitePositive(Object? value, String message) {
+    final quantity = _toDouble(value);
+    if (!quantity.isFinite || quantity <= 0) {
+      throw MutationValidationException(message);
+    }
+    return quantity;
+  }
+
   // ─── Auth / Employee Queries ──────────────────────────────────────
 
   Future<Map<String, dynamic>?> getEmployeeByCode(String code) async {
@@ -612,32 +633,49 @@ class CaslaDatabase {
   /// Reads one fully materialized WorkHistory result from the local cache.
   Future<Map<String, dynamic>?> getWorkHistoryCache(String cacheKey) async {
     final db = await _database;
-    final metaRows = await db.query(
-      'work_history_cache_meta',
-      where: 'cache_key = ?',
-      whereArgs: [cacheKey],
-      limit: 1,
-    );
-    if (metaRows.isEmpty) return null;
+    return db.transaction((txn) async {
+      final metaRows = await txn.query(
+        'work_history_cache_meta',
+        where: 'cache_key = ?',
+        whereArgs: [cacheKey],
+        limit: 1,
+      );
+      if (metaRows.isEmpty) return null;
 
-    final entryRows = await db.query(
-      'work_history_cache_entries',
-      where: 'cache_key = ?',
-      whereArgs: [cacheKey],
-      orderBy: 'sequence_no ASC',
-    );
-    final workerRows = await db.query(
-      'work_history_cache_workers',
-      where: 'cache_key = ?',
-      whereArgs: [cacheKey],
-      orderBy: 'sequence_no ASC',
-    );
+      // A single read transaction prevents a concurrent refresh from handing
+      // the UI a new header paired with old child rows (or vice versa).
+      final entryRows = await txn.query(
+        'work_history_cache_entries',
+        where: 'cache_key = ?',
+        whereArgs: [cacheKey],
+        orderBy: 'sequence_no ASC',
+      );
+      final workerRows = await txn.query(
+        'work_history_cache_workers',
+        where: 'cache_key = ?',
+        whereArgs: [cacheKey],
+        orderBy: 'sequence_no ASC',
+      );
 
-    return {
-      'meta': Map<String, dynamic>.from(metaRows.single),
-      'entries': _rows(entryRows),
-      'workers': _rows(workerRows),
-    };
+      return {
+        'meta': Map<String, dynamic>.from(metaRows.single),
+        'entries': _rows(entryRows),
+        'workers': _rows(workerRows),
+      };
+    });
+  }
+
+  /// Removes a cache namespace after a known authorization rejection. Queue
+  /// data is deliberately untouched: it is durable work, not a read cache.
+  Future<void> clearWorkHistoryCacheForSubject(String subjectId) async {
+    final db = await _database;
+    await db.transaction((txn) async {
+      await txn.delete(
+        'work_history_cache_meta',
+        where: 'subject_id = ?',
+        whereArgs: [subjectId],
+      );
+    });
   }
 
   /// Atomically replaces one WorkHistory cache window.
@@ -691,7 +729,47 @@ class CaslaDatabase {
         });
       }
       await batch.commit(noResult: true);
+
+      // Cache retention is bounded independently from the durable outbox.
+      // Deleting cache metadata cascades only to its entry/summary children.
+      final expiredBefore = DateTime.now()
+          .subtract(const Duration(days: 30))
+          .millisecondsSinceEpoch;
+      await txn.delete(
+        'work_history_cache_meta',
+        where: 'fetched_at_utc < ?',
+        whereArgs: [expiredBefore],
+      );
+      await _deleteCacheKeysAfterOffset(
+        txn,
+        where: 'subject_id = ?',
+        whereArgs: [subjectId],
+        offset: 20,
+      );
+      await _deleteCacheKeysAfterOffset(txn, offset: 100);
     });
+  }
+
+  Future<void> _deleteCacheKeysAfterOffset(
+    Transaction txn, {
+    String? where,
+    List<Object?>? whereArgs,
+    required int offset,
+  }) async {
+    final clause = where == null ? '' : 'WHERE $where';
+    final rows = await txn.rawQuery(
+      'SELECT cache_key FROM work_history_cache_meta '
+      '$clause ORDER BY fetched_at_utc DESC, cache_key DESC '
+      'LIMIT -1 OFFSET ?',
+      [...?whereArgs, offset],
+    );
+    for (final row in rows) {
+      await txn.delete(
+        'work_history_cache_meta',
+        where: 'cache_key = ?',
+        whereArgs: [row['cache_key']],
+      );
+    }
   }
 
   /// Workers belonging to any of [teamIds].
@@ -860,6 +938,10 @@ class CaslaDatabase {
     required Map<String, dynamic> queueItem,
     required Map<String, dynamic> auditLog,
   }) async {
+    _requireFinitePositive(
+      assignment['assigned_quantity'],
+      'Số lượng giao phải là một số dương hợp lệ.',
+    );
     final db = await _database;
     await db.transaction((txn) async {
       await txn.insert('assignments', assignment);
@@ -971,17 +1053,64 @@ class CaslaDatabase {
     required Map<String, dynamic> record,
     required Map<String, dynamic> queueItem,
     required Map<String, dynamic> auditLog,
-    String? assignmentStatus,
   }) async {
+    final assignmentId = record['phan_cong_id']?.toString();
+    if (assignmentId == null || assignmentId.isEmpty) {
+      throw const MutationValidationException('Phân công không tồn tại.');
+    }
+    final quantity = _requireFinitePositive(
+      record['quantity'],
+      'Số lượng hoàn thành phải là một số dương hợp lệ.',
+    );
+
     final db = await _database;
     await db.transaction((txn) async {
+      final assignmentRows = await txn.query(
+        'assignments',
+        columns: ['assigned_quantity', 'status'],
+        where: 'id = ?',
+        whereArgs: [assignmentId],
+        limit: 1,
+      );
+      if (assignmentRows.isEmpty) {
+        throw const MutationValidationException('Phân công không tồn tại.');
+      }
+
+      final assignment = assignmentRows.single;
+      if ((assignment['status']?.toString().toUpperCase() ?? '') != 'OPEN') {
+        throw const MutationValidationException('Phân công đã đóng hoặc bị thu hồi.');
+      }
+
+      final completedRows = await txn.rawQuery(
+        'SELECT COALESCE(SUM(quantity), 0) AS total '
+        'FROM production_records WHERE phan_cong_id = ?',
+        [assignmentId],
+      );
+      final recalledRows = await txn.rawQuery(
+        'SELECT COALESCE(SUM(quantity), 0) AS total '
+        'FROM recall_records WHERE phan_cong_id = ?',
+        [assignmentId],
+      );
+      final assigned = _toDouble(assignment['assigned_quantity']);
+      final completed = _toDouble(completedRows.single['total']);
+      final recalled = _toDouble(recalledRows.single['total']);
+      final remaining = (assigned - recalled - completed).clamp(
+        0.0,
+        double.infinity,
+      ).toDouble();
+      if (quantity > remaining + 0.0001) {
+        throw MutationValidationException(
+          'Số lượng vượt quá số lượng còn lại (${remaining.toInt()}).',
+        );
+      }
+
       await txn.insert('production_records', record);
-      if (assignmentStatus != null) {
+      if (remaining - quantity <= 0.0001) {
         await txn.update(
           'assignments',
-          {'status': assignmentStatus},
+          {'status': 'COMPLETED'},
           where: 'id = ?',
-          whereArgs: [record['phan_cong_id']],
+          whereArgs: [assignmentId],
         );
       }
       await txn.insert('sync_queue', queueItem);
@@ -1160,17 +1289,71 @@ class CaslaDatabase {
     required Map<String, dynamic> record,
     required Map<String, dynamic> queueItem,
     required Map<String, dynamic> auditLog,
-    String? assignmentStatus,
   }) async {
+    final assignmentId = record['phan_cong_id']?.toString();
+    if (assignmentId == null || assignmentId.isEmpty) {
+      throw const MutationValidationException('Phân công không tồn tại.');
+    }
+    final quantity = _requireFinitePositive(
+      record['quantity'],
+      'Số lượng thu hồi phải là một số dương hợp lệ.',
+    );
+    final reasonCode = record['reason_code']?.toString();
+    final note = record['note']?.toString();
+    if (reasonCode == 'OTHER' && (note == null || note.trim().isEmpty)) {
+      throw const MutationValidationException(
+        'Vui lòng nhập ghi chú khi chọn lý do "Khác".',
+      );
+    }
+
     final db = await _database;
     await db.transaction((txn) async {
+      final assignmentRows = await txn.query(
+        'assignments',
+        columns: ['assigned_quantity', 'status'],
+        where: 'id = ?',
+        whereArgs: [assignmentId],
+        limit: 1,
+      );
+      if (assignmentRows.isEmpty) {
+        throw const MutationValidationException('Phân công không tồn tại.');
+      }
+
+      final assignment = assignmentRows.single;
+      if ((assignment['status']?.toString().toUpperCase() ?? '') != 'OPEN') {
+        throw const MutationValidationException('Phân công đã đóng hoặc bị thu hồi.');
+      }
+
+      final completedRows = await txn.rawQuery(
+        'SELECT COALESCE(SUM(quantity), 0) AS total '
+        'FROM production_records WHERE phan_cong_id = ?',
+        [assignmentId],
+      );
+      final recalledRows = await txn.rawQuery(
+        'SELECT COALESCE(SUM(quantity), 0) AS total '
+        'FROM recall_records WHERE phan_cong_id = ?',
+        [assignmentId],
+      );
+      final assigned = _toDouble(assignment['assigned_quantity']);
+      final completed = _toDouble(completedRows.single['total']);
+      final recalled = _toDouble(recalledRows.single['total']);
+      final maxRecall = (assigned - completed - recalled).clamp(
+        0.0,
+        double.infinity,
+      ).toDouble();
+      if (quantity > maxRecall + 0.0001) {
+        throw MutationValidationException(
+          'Số lượng thu hồi vượt quá hạn mức tối đa (${maxRecall.toInt()}).',
+        );
+      }
+
       await txn.insert('recall_records', record);
-      if (assignmentStatus != null) {
+      if (maxRecall - quantity <= 0.0001) {
         await txn.update(
           'assignments',
-          {'status': assignmentStatus},
+          {'status': 'RECALLED'},
           where: 'id = ?',
-          whereArgs: [record['phan_cong_id']],
+          whereArgs: [assignmentId],
         );
       }
       await txn.insert('sync_queue', queueItem);
@@ -1230,7 +1413,26 @@ class CaslaDatabase {
     });
   }
 
-  Stream<List<Map<String, dynamic>>> watchSyncFeed() {
+  Stream<List<Map<String, dynamic>>> watchSyncFeed({
+    String? actorId,
+    List<String>? teamIds,
+  }) {
+    if (_scopeWasRequested(actorId, teamIds)) {
+      if (!_hasUsableSyncScope(actorId, teamIds)) {
+        return Stream<List<Map<String, dynamic>>>.value(
+          const <Map<String, dynamic>>[],
+        );
+      }
+      return _watch(_syncQueueController, () async {
+        final db = await _database;
+        return _queryScopedSyncQueue(
+          db,
+          actorId: actorId!,
+          teamIds: teamIds!,
+          orderBy: 'q.created_at_utc DESC',
+        );
+      });
+    }
     return _watch(_syncQueueController, () async {
       final db = await _database;
       return _rows(
@@ -1239,7 +1441,24 @@ class CaslaDatabase {
     });
   }
 
-  Future<Map<String, dynamic>?> getSyncQueueItemById(String id) async {
+  Future<Map<String, dynamic>?> getSyncQueueItemById(
+    String id, {
+    String? actorId,
+    List<String>? teamIds,
+  }) async {
+    if (_scopeWasRequested(actorId, teamIds)) {
+      if (!_hasUsableSyncScope(actorId, teamIds)) return null;
+      final db = await _database;
+      final rows = await _queryScopedSyncQueue(
+        db,
+        actorId: actorId!,
+        teamIds: teamIds!,
+        queueWhere: 'q.id = ?',
+        queueWhereArgs: [id],
+        limit: 1,
+      );
+      return rows.isEmpty ? null : rows.single;
+    }
     final db = await _database;
     final rows = await db.query(
       'sync_queue',
@@ -1254,9 +1473,32 @@ class CaslaDatabase {
   /// Assignments are returned before their production/recall descendants so
   /// SAP always has the OriginalTransactionUUID lineage first.
   Future<List<Map<String, dynamic>>> getVerifiableSyncItemsForWorker(
-    String workerId,
+    String workerId, {
+    String? actorId,
+    List<String>? teamIds,
+  }
   ) async {
     final db = await _database;
+    if (_scopeWasRequested(actorId, teamIds)) {
+      if (!_hasUsableSyncScope(actorId, teamIds)) return const [];
+      return _queryScopedSyncQueue(
+        db,
+        actorId: actorId!,
+        teamIds: teamIds!,
+        queueWhere: '''
+          (q.status IN ('PENDING', 'NEEDS_VERIFICATION')
+            OR q.last_error_code = 'WORKER_AUTH_FAILED')
+          AND COALESCE(
+            direct_assignment.nhan_vien_id,
+            parent_assignment.nhan_vien_id
+          ) = ?
+        ''',
+        queueWhereArgs: [workerId],
+        orderBy:
+            "CASE WHEN q.entity_type = 'ASSIGNMENT' THEN 0 ELSE 1 END ASC, "
+            'q.created_at_utc ASC, q.id ASC',
+      );
+    }
     return _rows(
       await db.rawQuery(
         '''
@@ -1307,7 +1549,22 @@ class CaslaDatabase {
 
   /// Every transaction still waiting for SAP, regardless of whether it is
   /// retrying automatically, needs verification, or needs operator attention.
-  Stream<int> watchOutstandingSyncCount() {
+  Stream<int> watchOutstandingSyncCount({
+    String? actorId,
+    List<String>? teamIds,
+  }) {
+    if (_scopeWasRequested(actorId, teamIds)) {
+      if (!_hasUsableSyncScope(actorId, teamIds)) return Stream<int>.value(0);
+      return _watch(_syncQueueController, () async {
+        final db = await _database;
+        return _queryScopedSyncQueue(
+          db,
+          actorId: actorId!,
+          teamIds: teamIds!,
+          select: 'COUNT(*) AS c',
+        );
+      }).map((rows) => (rows.single['c'] as num).toInt());
+    }
     return _watch(_syncQueueController, () async {
       final db = await _database;
       return _rows(await db.rawQuery('SELECT COUNT(*) AS c FROM sync_queue'));
@@ -1339,9 +1596,25 @@ class CaslaDatabase {
   Future<List<Map<String, dynamic>>> getDueSyncItems({
     int? nowUtc,
     int limit = 50,
+    String? actorId,
+    List<String>? teamIds,
   }) async {
     final db = await _database;
     final now = nowUtc ?? DateTime.now().millisecondsSinceEpoch;
+    if (_scopeWasRequested(actorId, teamIds)) {
+      if (!_hasUsableSyncScope(actorId, teamIds)) return const [];
+      return _queryScopedSyncQueue(
+        db,
+        actorId: actorId!,
+        teamIds: teamIds!,
+        queueWhere:
+            "q.status = 'PENDING' "
+            'AND (q.next_retry_at_utc IS NULL OR q.next_retry_at_utc <= ?)',
+        queueWhereArgs: [now],
+        orderBy: 'q.priority ASC, q.created_at_utc ASC',
+        limit: limit,
+      );
+    }
     return _rows(
       await db.query(
         'sync_queue',
@@ -1370,6 +1643,91 @@ class CaslaDatabase {
       limit: 1,
     );
     return rows.isEmpty ? null : Map<String, dynamic>.from(rows.first);
+  }
+
+  Future<bool> isSyncQueueItemInScope(
+    String id, {
+    required String actorId,
+    required List<String> teamIds,
+  }) async {
+    if (!_hasUsableSyncScope(actorId, teamIds)) return false;
+    final db = await _database;
+    final rows = await _queryScopedSyncQueue(
+      db,
+      actorId: actorId,
+      teamIds: teamIds,
+      select: 'q.id',
+      queueWhere: 'q.id = ?',
+      queueWhereArgs: [id],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
+  }
+
+  static bool _scopeWasRequested(String? actorId, List<String>? teamIds) =>
+      actorId != null || teamIds != null;
+
+  static bool _hasUsableSyncScope(String? actorId, List<String>? teamIds) =>
+      actorId?.trim().isNotEmpty == true &&
+      teamIds != null &&
+      teamIds.any((teamId) => teamId.trim().isNotEmpty);
+
+  Future<List<Map<String, dynamic>>> _queryScopedSyncQueue(
+    DatabaseExecutor executor, {
+    required String actorId,
+    required List<String> teamIds,
+    String select = 'q.*',
+    String queueWhere = '1 = 1',
+    List<Object?> queueWhereArgs = const [],
+    String? orderBy,
+    int? limit,
+  }) async {
+    final normalizedTeams = teamIds
+        .map((teamId) => teamId.trim())
+        .where((teamId) => teamId.isNotEmpty)
+        .toSet()
+        .toList();
+    if (actorId.trim().isEmpty || normalizedTeams.isEmpty) return const [];
+    final teamPlaceholders = List.filled(normalizedTeams.length, '?').join(', ');
+    final limitClause = limit == null ? '' : 'LIMIT ?';
+    final orderClause = orderBy == null ? '' : 'ORDER BY $orderBy';
+    final rows = await executor.rawQuery(
+      '''
+      SELECT $select
+      FROM sync_queue q
+      LEFT JOIN assignments direct_assignment
+        ON q.entity_type = 'ASSIGNMENT'
+       AND direct_assignment.id = q.entity_id
+      LEFT JOIN production_records production
+        ON q.entity_type IN ('PRODUCTION', 'PRODUCTION_RECORD')
+       AND production.id = q.entity_id
+      LEFT JOIN recall_records recall
+        ON q.entity_type IN ('RECALL', 'RECALL_RECORD')
+       AND recall.id = q.entity_id
+      LEFT JOIN assignments parent_assignment
+        ON parent_assignment.id = COALESCE(
+          production.phan_cong_id,
+          recall.phan_cong_id
+        )
+      WHERE ($queueWhere)
+        AND COALESCE(
+          direct_assignment.created_by,
+          production.created_by,
+          recall.created_by
+        ) = ?
+        AND COALESCE(direct_assignment.to_id, parent_assignment.to_id)
+            IN ($teamPlaceholders)
+      $orderClause
+      $limitClause
+      ''',
+      [
+        ...queueWhereArgs,
+        actorId.trim(),
+        ...normalizedTeams,
+        ?limit,
+      ],
+    );
+    return _rows(rows);
   }
 
   Future<void> deleteSyncQueueItem(String id) async {

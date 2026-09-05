@@ -17,8 +17,23 @@ class S12SyncScreen extends ConsumerStatefulWidget {
 }
 
 class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
+  static const int _syncPageSize = 50;
   int _selectedTabIndex = 0;
+  int _visibleItemCount = _syncPageSize;
   final Set<String> _syncingIds = <String>{};
+  Stream<List<Map<String, dynamic>>>? _feedStream;
+  String _scopeKey = '';
+
+  void _ensureScopedFeed(String actorId, List<String> teamIds) {
+    final normalizedTeams = teamIds.toList()..sort();
+    final key = '$actorId|${normalizedTeams.join(',')}';
+    if (key == _scopeKey && _feedStream != null) return;
+    _scopeKey = key;
+    _feedStream = ref
+        .read(appStateProvider)
+        .db
+        .watchSyncFeed(actorId: actorId, teamIds: normalizedTeams);
+  }
 
   bool _isVerifiable(Map<String, dynamic> item) =>
       item['status'] == 'NEEDS_VERIFICATION' ||
@@ -26,46 +41,47 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
 
   Future<void> _verify(Map<String, dynamic> item) async {
     final appState = ref.read(appStateProvider);
-    final workerName = await _workerNameForItem(item);
-    if (!mounted) return;
-
-    final password = await showWorkerVerificationDialog(
-      context,
-      workerName: workerName,
-      actionLabel: 'gửi các giao dịch đang chờ lên SAP',
-    );
-    if (!mounted || password == null) return;
-
     final id = item['id'] as String;
+    if (_syncingIds.contains(id)) return;
     setState(() => _syncingIds.add(id));
-    VerifiedSyncReport report;
     try {
-      report = await appState.verifiedSync.syncVerifiedWorkerChain(
+      final workerName = await _workerNameForItem(item);
+      if (!mounted) return;
+
+      final password = await showWorkerVerificationDialog(
+        context,
+        workerName: workerName,
+        actionLabel: 'xác minh và gửi các giao dịch đang chờ lên SAP',
+      );
+      if (!mounted || password == null) return;
+
+      final report = await appState.verifiedSync.syncVerifiedWorkerChain(
         anchorQueueItemId: id,
         workerPassword: password,
       );
+      if (!mounted) return;
+
+      final color = switch (report.outcome) {
+        VerifiedSyncOutcome.synced => CaslaColors.success,
+        VerifiedSyncOutcome.queued => CaslaColors.pending,
+        VerifiedSyncOutcome.rejected => CaslaColors.danger,
+        VerifiedSyncOutcome.blocked ||
+        VerifiedSyncOutcome.notFound => CaslaColors.gold700,
+      };
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(report.message), backgroundColor: color),
+      );
     } catch (_) {
-      report = const VerifiedSyncReport(
-        outcome: VerifiedSyncOutcome.blocked,
-        syncedCount: 0,
-        totalCount: 0,
-        message: 'Không thể xử lý lúc này. Giao dịch vẫn được lưu an toàn.',
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Không thể xử lý lúc này. Giao dịch vẫn được lưu an toàn.'),
+          backgroundColor: CaslaColors.gold700,
+        ),
       );
     } finally {
       if (mounted) setState(() => _syncingIds.remove(id));
     }
-    if (!mounted) return;
-
-    final color = switch (report.outcome) {
-      VerifiedSyncOutcome.synced => CaslaColors.success,
-      VerifiedSyncOutcome.queued => CaslaColors.pending,
-      VerifiedSyncOutcome.rejected => CaslaColors.danger,
-      VerifiedSyncOutcome.blocked ||
-      VerifiedSyncOutcome.notFound => CaslaColors.gold700,
-    };
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(report.message), backgroundColor: color),
-    );
   }
 
   Future<String> _workerNameForItem(Map<String, dynamic> item) async {
@@ -214,6 +230,9 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
   @override
   Widget build(BuildContext context) {
     final appState = ref.watch(appStateProvider);
+    final session = appState.currentSession;
+    if (session == null) return const SizedBox.shrink();
+    _ensureScopedFeed(session.maNv, session.toIds);
 
     return Scaffold(
       backgroundColor: CaslaColors.background,
@@ -245,7 +264,7 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
         ),
       ),
       body: StreamBuilder<List<Map<String, dynamic>>>(
-        stream: appState.db.watchSyncFeed(),
+        stream: _feedStream,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting &&
               !snapshot.hasData) {
@@ -277,6 +296,12 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
             }
             return true;
           }).toList();
+          final visibleCount = _visibleItemCount < filteredItems.length
+              ? _visibleItemCount
+              : filteredItems.length;
+          final visibleItems = filteredItems
+              .take(visibleCount)
+              .toList(growable: false);
 
           return SingleChildScrollView(
             padding: const EdgeInsets.all(18),
@@ -346,10 +371,10 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
                   ListView.separated(
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
-                    itemCount: filteredItems.length,
+                    itemCount: visibleItems.length,
                     separatorBuilder: (_, _) => const Divider(height: 1),
                     itemBuilder: (context, index) {
-                      final item = filteredItems[index];
+                      final item = visibleItems[index];
                       final isFailed = item['status'] == 'FAILED';
                       final isPending = item['status'] == 'PENDING';
                       final isVerifiable = _isVerifiable(item);
@@ -436,7 +461,7 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
                                         ),
                                       )
                                     : const Text(
-                                        'Xác minh',
+                                        'Xác minh & gửi',
                                         style: TextStyle(fontSize: 11),
                                       ),
                               )
@@ -465,6 +490,25 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
                       );
                     },
                   ),
+                if (visibleItems.length < filteredItems.length) ...[
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: OutlinedButton.icon(
+                      onPressed: () => setState(() {
+                        final next = _visibleItemCount + _syncPageSize;
+                        _visibleItemCount = next < filteredItems.length
+                            ? next
+                            : filteredItems.length;
+                      }),
+                      icon: const Icon(Icons.expand_more_rounded),
+                      label: Text(
+                        'Xem thêm • ${visibleItems.length}/${filteredItems.length} giao dịch',
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           );
@@ -512,29 +556,42 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
   Widget _buildTab(String label, int index) {
     final isSelected = _selectedTabIndex == index;
     return Expanded(
-      child: InkWell(
-        onTap: () => setState(() => _selectedTabIndex = index),
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: isSelected ? CaslaColors.surface : Colors.transparent,
+      child: Semantics(
+        button: true,
+        selected: isSelected,
+        label: label,
+        child: SizedBox(
+          height: 48,
+          child: InkWell(
+        onTap: () => setState(() {
+          _selectedTabIndex = index;
+          _visibleItemCount = _syncPageSize;
+        }),
             borderRadius: BorderRadius.circular(7),
-            boxShadow: isSelected
-                ? [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.06),
-                      blurRadius: 3,
-                    ),
-                  ]
-                : null,
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 11.5,
-              fontWeight: FontWeight.w700,
-              color: isSelected ? CaslaColors.primaryNavy : CaslaColors.muted,
+            child: Container(
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: isSelected ? CaslaColors.surface : Colors.transparent,
+                borderRadius: BorderRadius.circular(7),
+                boxShadow: isSelected
+                    ? [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.06),
+                          blurRadius: 3,
+                        ),
+                      ]
+                    : null,
+              ),
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w700,
+                  color: isSelected
+                      ? CaslaColors.primaryNavy
+                      : CaslaColors.muted,
+                ),
+              ),
             ),
           ),
         ),

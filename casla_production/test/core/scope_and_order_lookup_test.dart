@@ -56,6 +56,23 @@ void main() {
     });
   });
 
+  group('watchAssignmentsByTeams', () {
+    test('returns only assignments inside the requested teams', () async {
+      final all = await db.watchAllAssignments().first;
+      final team1 = await db.watchAssignmentsByTeams(['team-1']).first;
+
+      expect(team1, isNotEmpty);
+      expect(team1.length, lessThan(all.length));
+      for (final assignment in team1) {
+        expect(assignment['to_id'], 'team-1');
+      }
+    });
+
+    test('an empty team scope returns nothing', () async {
+      expect(await db.watchAssignmentsByTeams([]).first, isEmpty);
+    });
+  });
+
   group('isEmployeeInScope', () {
     test('accepts a worker inside the supervisor scope', () async {
       expect(await db.isEmployeeInScope('emp-2', ['team-1']), isTrue);

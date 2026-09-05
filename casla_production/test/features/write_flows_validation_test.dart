@@ -176,6 +176,32 @@ void main() {
         throwsA(isA<Exception>()),
       );
     });
+
+    test('serializes concurrent records so the ceiling cannot be exceeded',
+        () async {
+      Future<bool> attempt() async {
+        try {
+          await productionRepo.recordProduction(
+            assignmentId: seededAssignmentId,
+            quantity: 200.0,
+            businessDate: '2026-08-14',
+            shiftId: 'SHIFT_1',
+            createdBy: 'MNV00100',
+          );
+          return true;
+        } catch (_) {
+          return false;
+        }
+      }
+
+      final outcomes = await Future.wait([attempt(), attempt()]);
+
+      expect(outcomes.where((outcome) => outcome), hasLength(1));
+      expect(
+        await db.getCompletedQuantity(seededAssignmentId),
+        lessThanOrEqualTo(650.0),
+      );
+    });
   });
 
   group('Recall assignment', () {
@@ -256,6 +282,33 @@ void main() {
       expect(
         await db.getRecalledQuantity(seededAssignmentId),
         closeTo(10.0, 0.001),
+      );
+    });
+
+    test('serializes concurrent recalls so the ceiling cannot be exceeded',
+        () async {
+      Future<bool> attempt() async {
+        try {
+          await recallRepo.recallAssignment(
+            assignmentId: seededAssignmentId,
+            quantity: 150.0,
+            reasonCode: RecallReason.planChange.code,
+            businessDate: '2026-08-14',
+            shiftId: 'SHIFT_1',
+            createdBy: 'MNV00100',
+          );
+          return true;
+        } catch (_) {
+          return false;
+        }
+      }
+
+      final outcomes = await Future.wait([attempt(), attempt()]);
+
+      expect(outcomes.where((outcome) => outcome), hasLength(1));
+      expect(
+        await db.getRecalledQuantity(seededAssignmentId),
+        lessThanOrEqualTo(seededRemaining),
       );
     });
   });

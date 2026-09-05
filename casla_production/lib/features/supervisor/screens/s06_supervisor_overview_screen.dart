@@ -12,7 +12,6 @@ import '../../../presentation/widgets/kpi_card.dart';
 import '../../../presentation/widgets/status_chip.dart';
 import '../../../presentation/widgets/casla_empty_state.dart';
 import '../../../presentation/widgets/casla_skeleton.dart';
-import '../../account/widgets/change_password_dialog.dart';
 
 class _WorkerOverviewData {
   final String id;
@@ -56,67 +55,67 @@ class _S06SupervisorOverviewScreenState
   bool _isSearching = false;
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
-  bool _hasCheckedMandatoryPassword = false;
   String _employeeScopeKey = '';
   Future<List<Map<String, dynamic>>>? _employeesFuture;
-  Future<WorkHistoryResult>? _historyFuture;
+  late Stream<WorkHistoryResult> _historyStream;
+  late Stream<List<Assignment>> _assignmentStream;
 
   @override
   void initState() {
     super.initState();
-    _historyFuture = _fetchHistory();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_hasCheckedMandatoryPassword && mounted) {
-        _hasCheckedMandatoryPassword = true;
-        final session = ref.read(appStateProvider).currentSession;
-        if (session?.passwordChangeRequired == true) {
-          showChangePasswordDialog(context, isMandatory: true, ref: ref);
-        }
-      }
-    });
+    final appState = ref.read(appStateProvider);
+    _historyStream = _watchHistory();
+    _assignmentStream = appState.assignmentRepo.watchAssignmentsByTeams(
+      appState.currentSession?.toIds ?? const <String>[],
+    );
   }
 
-  Future<WorkHistoryResult> _fetchHistory() async {
-    try {
-      final res = await ref
+  Stream<WorkHistoryResult> _watchHistory() {
+    return ref
+        .read(appStateProvider)
+        .workHistoryRepo
+        .watchWorkHistory(
+          range: HistoryRange.custom,
+          dateFrom: _selectedDate,
+          dateTo: _selectedDate,
+        )
+        .asyncMap(_ensureHistoryEmployees);
+  }
+
+  Future<WorkHistoryResult> _fetchHistory({bool forceRefresh = false}) async {
+    final result = await ref
+        .read(appStateProvider)
+        .workHistoryRepo
+        .getWorkHistory(
+          range: HistoryRange.custom,
+          dateFrom: _selectedDate,
+          dateTo: _selectedDate,
+          forceRefresh: forceRefresh,
+        );
+    return _ensureHistoryEmployees(result);
+  }
+
+  Future<WorkHistoryResult> _ensureHistoryEmployees(
+    WorkHistoryResult result,
+  ) async {
+    for (final worker in result.workers) {
+      await ref
           .read(appStateProvider)
-          .workHistoryRepo
-          .getWorkHistory(
-            range: HistoryRange.custom,
-            dateFrom: _selectedDate,
-            dateTo: _selectedDate,
+          .db
+          .ensureEmployeeExists(
+            id: worker.workerId,
+            maNv: worker.workerId,
+            name: worker.workerName.isNotEmpty
+                ? worker.workerName
+                : worker.workerId,
           );
-      for (final w in res.workers) {
-        await ref
-            .read(appStateProvider)
-            .db
-            .ensureEmployeeExists(
-              id: w.workerId,
-              maNv: w.workerId,
-              name: w.workerName.isNotEmpty ? w.workerName : w.workerId,
-            );
-      }
-      return res;
-    } catch (e) {
-      debugPrint('[Overview] Error fetching SAP work history: $e');
-      return WorkHistoryResult(
-        scopeCode: 'T',
-        dateFrom: _selectedDate,
-        dateTo: _selectedDate,
-        isTruncated: false,
-        entries: const [],
-        workers: const [],
-      );
     }
+    return result;
   }
 
   Future<void> _refresh() async {
-    final next = _fetchHistory();
-    setState(() {
-      _historyFuture = next;
-    });
     try {
-      await next;
+      await _fetchHistory(forceRefresh: true);
     } catch (_) {}
   }
 
@@ -264,7 +263,7 @@ class _S06SupervisorOverviewScreenState
     if (picked != null) {
       setState(() {
         _selectedDate = picked;
-        _historyFuture = _fetchHistory();
+        _historyStream = _watchHistory();
       });
     }
   }
@@ -413,11 +412,11 @@ class _S06SupervisorOverviewScreenState
       ),
       body: RefreshIndicator(
         onRefresh: _refresh,
-        child: FutureBuilder<WorkHistoryResult>(
-          future: _historyFuture,
+        child: StreamBuilder<WorkHistoryResult>(
+          stream: _historyStream,
           builder: (context, historySnapshot) {
             return StreamBuilder<List<Assignment>>(
-              stream: appState.assignmentRepo.watchAllAssignments(),
+              stream: _assignmentStream,
               builder: (context, assignmentSnapshot) {
                 return FutureBuilder<List<Map<String, dynamic>>>(
                   future: _employeesFor(effectiveTeamIds),
