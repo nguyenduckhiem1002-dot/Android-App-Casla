@@ -71,17 +71,30 @@ jobs:
         working-directory: casla_production
         run: flutter pub get
 
+      - name: Prepare iOS workspace and pods before tracing
+        working-directory: casla_production/ios
+        run: pod install
+
       - name: Initialize CodeQL for Swift
         uses: github/codeql-action/init@v4
         with:
           languages: swift
           build-mode: manual
 
-      - name: Build iOS release for CodeQL extraction
-        working-directory: casla_production
+      # Run xcodebuild directly after CodeQL init. A successful `flutter build ios`
+      # did not expose Swift compiler invocations to the CodeQL tracer, leaving
+      # AppDelegate.swift unextracted even though Runner.app was produced.
+      - name: Build iOS release directly for CodeQL extraction
+        working-directory: casla_production/ios
         run: >-
-          flutter build ios --release --no-codesign --no-pub
-          --dart-define=SAP_TRANSPORT_AUTH_MODE=gateway
+          xcodebuild -workspace Runner.xcworkspace
+          -scheme Runner
+          -configuration Release
+          -sdk iphoneos
+          -destination 'generic/platform=iOS'
+          CODE_SIGNING_ALLOWED=NO
+          CODE_SIGNING_REQUIRED=NO
+          build
 
       - name: Analyze Swift
         uses: github/codeql-action/analyze@v4
