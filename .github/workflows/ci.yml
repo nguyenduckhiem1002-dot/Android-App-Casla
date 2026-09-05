@@ -68,6 +68,10 @@ jobs:
           flutter build apk --debug --flavor production --no-pub
           --dart-define=SAP_TRANSPORT_AUTH_MODE=gateway
 
+      - name: Run native scanner trust policy tests
+        working-directory: casla_production/android
+        run: ./gradlew :app:testProductionDebugUnitTest
+
       - name: Verify production release fails closed without secrets
         working-directory: casla_production/android
         run: |

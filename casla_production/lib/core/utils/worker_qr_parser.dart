@@ -24,7 +24,15 @@ class WorkerQrResult {
 class WorkerQrParser {
   WorkerQrParser._();
 
+  /// Above the practical payload size used by worker QR codes, while bounding
+  /// JSON/regex work for untrusted camera, manual and hardware input.
+  static const int maxInputCharacters = 4096;
+
   static WorkerQrResult parse(String rawCode) {
+    if (rawCode.length > maxInputCharacters || rawCode.contains('\u0000')) {
+      return WorkerQrResult.invalid();
+    }
+
     final input = rawCode.trim();
     if (input.isEmpty) return WorkerQrResult.invalid();
 

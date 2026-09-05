@@ -15,6 +15,12 @@ import io.flutter.plugin.common.MethodChannel
  * Bridges CipherLab ReaderConfig broadcast output into Flutter without linking
  * the proprietary Reader SDK. ReaderConfig must be configured to broadcast
  * decoded data using PASS_DATA_2_APP (its documented app-output action).
+ *
+ * This receiver must remain exported because the Reader Service runs in a
+ * separate CipherLab application. The exported broadcast is therefore treated
+ * as untrusted input: Android 14+ verifies the originating package, only
+ * ReaderConfig-processed Decoder_Data is accepted, and payload shape/size are
+ * bounded before anything crosses into Dart.
  */
 class CipherLabScannerBridge(
     private val activity: Activity,
@@ -23,7 +29,6 @@ class CipherLabScannerBridge(
     companion object {
         private const val ACTION_PASS_DATA = "com.cipherlab.barcodebaseapi.PASS_DATA_2_APP"
         private const val EXTRA_DATA = "Decoder_Data"
-        private const val EXTRA_ORIGINAL_DATA = "Original_Decoder_Data"
         private const val EXTRA_CODE_TYPE = "Decoder_CodeType_String"
         private const val EVENT_CHANNEL = "casla/scanner/events"
         private const val CONTROL_CHANNEL = "casla/scanner/control"
@@ -39,16 +44,28 @@ class CipherLabScannerBridge(
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != ACTION_PASS_DATA) return
 
-            val rawValue = valueAsString(intent.extras?.get(EXTRA_DATA))
-                ?: valueAsString(intent.extras?.get(EXTRA_ORIGINAL_DATA))
-                ?: return
-            val sanitized = rawValue.trim().trimEnd('\u0000')
-            if (sanitized.isEmpty()) return
+            val senderPackage = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                sentFromPackage
+            } else {
+                null
+            }
+            if (!CipherLabBroadcastPolicy.acceptsSender(Build.VERSION.SDK_INT, senderPackage)) {
+                return
+            }
+
+            // Deliberately do not fall back to Original_Decoder_Data. CipherLab
+            // documents Decoder_Data as the value after ReaderConfig processing;
+            // accepting the original value would bypass those device-side rules.
+            val sanitized = CipherLabBroadcastPolicy.sanitizeDecodedData(
+                intent.extras?.get(EXTRA_DATA),
+            ) ?: return
 
             eventSink?.success(
                 mapOf(
                     "rawValue" to sanitized,
-                    "symbology" to valueAsString(intent.extras?.get(EXTRA_CODE_TYPE)),
+                    "symbology" to CipherLabBroadcastPolicy.sanitizeSymbology(
+                        intent.extras?.get(EXTRA_CODE_TYPE),
+                    ),
                     "source" to "hardware",
                     "timestampMs" to System.currentTimeMillis(),
                 ),
@@ -104,6 +121,9 @@ class CipherLabScannerBridge(
         if (receiverRegistered) return
         val filter = IntentFilter(ACTION_PASS_DATA)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // Reader Service is external to this APK, so NOT_EXPORTED would stop
+            // real hardware scans. Sender verification is applied in onReceive
+            // where Android exposes the initial sender identity (API 34+).
             activity.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
         } else {
             @Suppress("DEPRECATION")
@@ -122,14 +142,5 @@ class CipherLabScannerBridge(
         return Build.MANUFACTURER.contains("cipherlab", ignoreCase = true) ||
             Build.BRAND.contains("cipherlab", ignoreCase = true) ||
             Build.MODEL.contains("RS38", ignoreCase = true)
-    }
-
-    private fun valueAsString(value: Any?): String? {
-        return when (value) {
-            null -> null
-            is String -> value
-            is ByteArray -> value.toString(Charsets.UTF_8)
-            else -> value.toString()
-        }?.takeIf { it.isNotBlank() }
     }
 }

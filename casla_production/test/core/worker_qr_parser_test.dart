@@ -20,5 +20,15 @@ void main() {
       expect(WorkerQrParser.parse('NV-FAKE').isValid, isFalse);
       expect(WorkerQrParser.parse('').isValid, isFalse);
     });
+
+    test('rejects oversized and NUL-containing untrusted payloads', () {
+      final oversized = List.filled(
+        WorkerQrParser.maxInputCharacters + 1,
+        '1',
+      ).join();
+
+      expect(WorkerQrParser.parse(oversized).isValid, isFalse);
+      expect(WorkerQrParser.parse('NV12\u00003').isValid, isFalse);
+    });
   });
 }

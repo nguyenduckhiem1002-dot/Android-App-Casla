@@ -149,6 +149,10 @@ android {
     }
 }
 
+dependencies {
+    testImplementation("junit:junit:4.13.2")
+}
+
 val verifyCaslaSigning by tasks.registering {
     group = "verification"
     description = "Fail closed unless production identity, signing, data and transport security are configured."
