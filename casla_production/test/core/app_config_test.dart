@@ -1,13 +1,41 @@
-import 'package:flutter_test/flutter_test.dart';
 import 'package:casla_production/core/config/app_config.dart';
+import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('normalizes quoted and JSON-escaped environment values', () {
+  test('normalizes compile-time environment values', () {
     // The actual compile-time values are covered by integration startup;
     // this guards that accessing normalized configuration never fails.
     expect(AppConfig.sapBaseUrl, isA<String>());
     expect(AppConfig.sapBasicAuthUser, isA<String>());
     expect(AppConfig.sapBasicAuthPassword, isA<String>());
+    expect(AppConfig.sapTransportAuthMode, isA<SapTransportAuthMode>());
+  });
+
+  group('SAP transport auth mode', () {
+    test('defaults blank/legacy configuration to direct Basic mode', () {
+      expect(
+        AppConfig.parseSapTransportAuthMode(''),
+        SapTransportAuthMode.basic,
+      );
+      expect(
+        AppConfig.parseSapTransportAuthMode(' basic '),
+        SapTransportAuthMode.basic,
+      );
+    });
+
+    test('parses gateway mode case-insensitively', () {
+      expect(
+        AppConfig.parseSapTransportAuthMode('GATEWAY'),
+        SapTransportAuthMode.gateway,
+      );
+    });
+
+    test('rejects unknown modes instead of silently weakening transport', () {
+      expect(
+        () => AppConfig.parseSapTransportAuthMode('bearer-ish'),
+        throwsFormatException,
+      );
+    });
   });
 
   group('joinServiceUrl', () {
