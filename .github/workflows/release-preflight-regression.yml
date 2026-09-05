@@ -1,0 +1,27 @@
+name: Release Preflight Regression
+
+on:
+  push:
+    branches: [main, master, develop, 'chatgpt/**']
+  pull_request:
+    branches: [main, master, develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-preflight-regression-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Fail-closed release preflight contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Run release preflight regression tests
+        working-directory: casla_production
+        shell: bash
+        run: bash tool/test_release_preflight.sh
