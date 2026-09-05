@@ -14,14 +14,14 @@ class CipherLabBroadcastPolicyTest {
     }
 
     @Test
-    fun `Android 14 and newer accepts only known CipherLab sender packages`() {
+    fun `Android 14 and newer accepts only CipherLab Reader Service`() {
         assertTrue(
             CipherLabBroadcastPolicy.acceptsSender(
                 34,
                 "com.cipherlab.clbarcodeservice",
             ),
         )
-        assertTrue(
+        assertFalse(
             CipherLabBroadcastPolicy.acceptsSender(
                 35,
                 "sw.programme.readerconfig",
