@@ -21,4 +21,7 @@ if (( ${#problems[@]} > 0 )); then
   exit 1
 fi
 
-echo "iOS production identity inputs are configured."
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+bash "$script_dir/../tool/verify_transport_security.sh"
+
+echo "iOS production identity and transport security inputs are configured."
