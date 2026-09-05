@@ -23,42 +23,42 @@ class BarcodeScanEvent {
 
     final rawPayload = payload['rawValue'];
     if (rawPayload is! String) {
-      throw const FormatException('Scanner event is missing barcode data.');
+      throw const FormatException('Missing scanner barcode data.');
     }
     final rawValue = rawPayload.trim();
     if (rawValue.isEmpty ||
         rawValue.length > maxRawValueCharacters ||
         rawValue.contains('\u0000')) {
-      throw const FormatException('Scanner event contains invalid barcode data.');
+      throw const FormatException('Invalid scanner barcode data.');
     }
 
     final sourcePayload = payload['source'];
     if (sourcePayload is! String) {
-      throw const FormatException('Scanner event is missing source metadata.');
+      throw const FormatException('Missing scanner source metadata.');
     }
     final source = switch (sourcePayload.trim().toLowerCase()) {
       'hardware' => BarcodeScanSource.hardware,
       'camera' => BarcodeScanSource.camera,
       'manual' => BarcodeScanSource.manual,
-      _ => throw const FormatException('Scanner event contains an unknown source.'),
+      _ => throw const FormatException('Unknown scanner source.'),
     };
 
     final symbologyPayload = payload['symbology'];
     String? symbology;
     if (symbologyPayload != null) {
       if (symbologyPayload is! String) {
-        throw const FormatException('Scanner event contains invalid symbology.');
+        throw const FormatException('Invalid scanner symbology.');
       }
       final normalized = symbologyPayload.trim();
       if (normalized.length > maxSymbologyCharacters) {
-        throw const FormatException('Scanner event symbology is too long.');
+        throw const FormatException('Scanner symbology is too long.');
       }
       symbology = normalized.isEmpty ? null : normalized;
     }
 
     final timestampPayload = payload['timestampMs'];
     if (timestampPayload != null && timestampPayload is! int) {
-      throw const FormatException('Scanner event contains an invalid timestamp.');
+      throw const FormatException('Invalid scanner timestamp.');
     }
 
     return BarcodeScanEvent(
