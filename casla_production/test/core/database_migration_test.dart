@@ -112,39 +112,167 @@ void main() {
     await db.close();
   });
 
-  test('a fresh install has QR validity and operation payload columns', () async {
+  test(
+    'a fresh install has QR validity and operation payload columns',
+    () async {
+      final db = await openDatabase(
+        inMemoryDatabasePath,
+        version: schemaVersion,
+        onCreate: (db, _) => createSchema(db),
+      );
+
+      await db.insert('orders', {
+        'id': 'ord-1',
+        'ma_don_hang': 'DH-2026-00417',
+        'ten_sp': 'Áo khoác gió',
+        'so_luong_don': 1000.0,
+        'trang_thai': 'OPEN',
+        'production_order': '000010001234',
+        'operation': '0010',
+      });
+
+      final row = (await db.query('orders')).single;
+      expect(row['production_order'], '000010001234');
+      expect(row['operation'], '0010');
+      expect(row.containsKey('operation_qr_payload'), isTrue);
+
+      // The fresh-install schema is checked through an explicit table-info query
+      // because this test database does not seed employees by default.
+      final employeeColumns = await db.rawQuery('PRAGMA table_info(employees)');
+      expect(
+        employeeColumns.map((column) => column['name']),
+        containsAll(<String>['valid_from', 'valid_to']),
+      );
+
+      await db.close();
+    },
+  );
+
+  test('v4 -> v5 freezes the unit onto existing transactions', () async {
+    // A v4 device mid-shift: an assignment already queued under KG, and the
+    // order row it points at. The migration has to answer "what unit was this
+    // entered in" for rows that never recorded one.
     final db = await openDatabase(
       inMemoryDatabasePath,
-      version: schemaVersion,
+      version: 4,
       onCreate: (db, _) => createSchema(db),
     );
-
+    for (final statement in _transactionTablesV4) {
+      await db.execute(statement);
+    }
     await db.insert('orders', {
       'id': 'ord-1',
       'ma_don_hang': 'DH-2026-00417',
-      'ten_sp': 'Áo khoác gió',
+      'ten_sp': 'Sợi polyester',
       'so_luong_don': 1000.0,
       'trang_thai': 'OPEN',
-      'production_order': '000010001234',
-      'operation': '0010',
+      'uom': 'KG',
+    });
+    await db.insert('assignments', {
+      'id': 'asg-1',
+      'nhan_vien_id': 'emp-1',
+      'don_hang_id': 'ord-1',
+      'to_id': 'team-1',
+      'assigned_quantity': 12.5,
+      'business_date': '2026-09-07',
+      'shift_id': 'SHIFT_1',
+      'status': 'OPEN',
+      'created_by': 'MNV00100',
+      'occurred_at_utc': 1,
+      'device_id': 'PDA-1',
+      'sync_status': 'PENDING',
+      'idempotency_key': 'idem-1',
+      'created_at_utc': 1,
     });
 
-    final row = (await db.query('orders')).single;
-    expect(row['production_order'], '000010001234');
-    expect(row['operation'], '0010');
-    expect(row.containsKey('operation_qr_payload'), isTrue);
+    await migrate(db, 4, 5);
 
-    // The fresh-install schema is checked through an explicit table-info query
-    // because this test database does not seed employees by default.
-    final employeeColumns = await db.rawQuery('PRAGMA table_info(employees)');
-    expect(
-      employeeColumns.map((column) => column['name']),
-      containsAll(<String>['valid_from', 'valid_to']),
+    final assignment = (await db.query('assignments')).single;
+    expect(assignment['assigned_quantity'], 12.5);
+    // Backfilled from the order it belongs to — exactly what the old code
+    // would have sent for this row.
+    expect(assignment['unit_of_measure'], 'KG');
+
+    // And the freeze holds: rewriting the order no longer moves it.
+    await db.update(
+      'orders',
+      {'uom': 'ST'},
+      where: 'id = ?',
+      whereArgs: ['ord-1'],
     );
+    expect((await db.query('assignments')).single['unit_of_measure'], 'KG');
 
     await db.close();
   });
 }
+
+/// The three transaction tables exactly as `createSchema` shipped them at v4,
+/// before the v5 migration added `unit_of_measure`. Frozen copies on purpose —
+/// see [_ordersV1]. The test opens at the *current* schema (so the rest of the
+/// database is real) and then rolls just these three back to their v4 shape.
+const _transactionTablesV4 = [
+  'DROP TABLE production_records',
+  'DROP TABLE recall_records',
+  'DROP TABLE assignments',
+  '''
+  CREATE TABLE assignments (
+    id TEXT PRIMARY KEY,
+    nhan_vien_id TEXT NOT NULL,
+    don_hang_id TEXT NOT NULL,
+    to_id TEXT NOT NULL,
+    assigned_quantity REAL NOT NULL CHECK(assigned_quantity > 0),
+    business_date TEXT NOT NULL,
+    shift_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    note TEXT,
+    created_by TEXT NOT NULL,
+    occurred_at_utc INTEGER NOT NULL,
+    device_id TEXT NOT NULL,
+    sync_status TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    sap_id TEXT,
+    created_at_utc INTEGER NOT NULL,
+    synced_at_utc INTEGER
+  )
+  ''',
+  '''
+  CREATE TABLE production_records (
+    id TEXT PRIMARY KEY,
+    phan_cong_id TEXT NOT NULL REFERENCES assignments(id),
+    quantity REAL NOT NULL CHECK(quantity > 0),
+    note TEXT,
+    business_date TEXT NOT NULL,
+    shift_id TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    occurred_at_utc INTEGER NOT NULL,
+    device_id TEXT NOT NULL,
+    sync_status TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    sap_id TEXT,
+    created_at_utc INTEGER NOT NULL,
+    synced_at_utc INTEGER
+  )
+  ''',
+  '''
+  CREATE TABLE recall_records (
+    id TEXT PRIMARY KEY,
+    phan_cong_id TEXT NOT NULL REFERENCES assignments(id),
+    quantity REAL NOT NULL CHECK(quantity > 0),
+    reason_code TEXT NOT NULL,
+    note TEXT,
+    business_date TEXT NOT NULL,
+    shift_id TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    occurred_at_utc INTEGER NOT NULL,
+    device_id TEXT NOT NULL,
+    sync_status TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    sap_id TEXT,
+    created_at_utc INTEGER NOT NULL,
+    synced_at_utc INTEGER
+  )
+  ''',
+];
 
 /// A [Database] stand-in that throws the moment anything calls it.
 ///

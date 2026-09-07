@@ -15,6 +15,7 @@ import 'package:dio/dio.dart';
 import '../../core/database/casla_database.dart';
 import '../../core/sync/sap_write_gateway.dart';
 import '../../core/sync/sync_failure.dart';
+import '../../domain/policies/production_math.dart';
 import '../../core/utils/device_info.dart';
 import '../../domain/entities/work_history.dart';
 import 'odata_error.dart';
@@ -99,12 +100,7 @@ class SapPpOpAllocGateway implements SapWriteGateway {
         );
       case 'RECALL':
       case 'RECALL_RECORD':
-        return _submitRecall(
-          request,
-          accessToken,
-          deviceId,
-          sessionGeneration,
-        );
+        return _submitRecall(request, accessToken, deviceId, sessionGeneration);
       default:
         throw StateError(
           'ZUI_PP_OPALLOC không hỗ trợ entity_type "${request.entityType}".',
@@ -143,7 +139,7 @@ class SapPpOpAllocGateway implements SapWriteGateway {
         'Operation': keys.operation,
         'ToWorkerID': workerCode,
         'Quantity': _quantity(assignment['assigned_quantity']),
-        'UnitOfMeasure': order?['uom'] ?? '',
+        'UnitOfMeasure': _unitOfMeasure(assignment, order),
         'ExecutionDate': assignment['business_date'],
         'AccessToken': accessToken,
         'DeviceID': deviceId,
@@ -189,7 +185,7 @@ class SapPpOpAllocGateway implements SapWriteGateway {
         'Operation': keys.operation,
         'WorkerID': workerCode,
         'Quantity': _quantity(record['quantity']),
-        'UnitOfMeasure': order?['uom'] ?? '',
+        'UnitOfMeasure': _unitOfMeasure(record, order),
         'ExecutionDate': record['business_date'],
         // The assignment's own SAP lineage, if `submitInitialAssign` already
         // synced it — optional per the EDMX, so a not-yet-synced assignment
@@ -239,7 +235,7 @@ class SapPpOpAllocGateway implements SapWriteGateway {
         'Operation': keys.operation,
         'WorkerID': workerCode,
         'Quantity': _quantity(record['quantity']),
-        'UnitOfMeasure': order?['uom'] ?? '',
+        'UnitOfMeasure': _unitOfMeasure(record, order),
         'ExecutionDate': record['business_date'],
         'OriginalTransactionUUID': _nullIfEmpty(assignment['sap_id']),
         'AccessToken': accessToken,
@@ -487,6 +483,23 @@ class SapPpOpAllocGateway implements SapWriteGateway {
     return double.tryParse(value.toString()) ?? 0.0;
   }
 
+  /// The unit this transaction was entered in, not the one the order carries
+  /// today.
+  ///
+  /// `orders.uom` is rewritten in place by every operation QR scan, so reading
+  /// it here would push a queued transaction under a unit nobody entered.
+  /// `zbp_r_pp_opalloc` compares the unit when it matches an idempotency key,
+  /// so that re-send comes back rejected rather than de-duplicated. Rows
+  /// created before schema v5 have no frozen unit and fall back to the order.
+  static String _unitOfMeasure(
+    Map<String, dynamic> source,
+    Map<String, dynamic>? order,
+  ) {
+    final frozen = source['unit_of_measure']?.toString();
+    if (frozen != null && frozen.isNotEmpty) return frozen;
+    return order?['uom']?.toString() ?? '';
+  }
+
   static String? _requireWorkerPassword(SyncPushRequest request) {
     final password = request.workerPassword;
     if (password == null || password.isEmpty) {
@@ -501,7 +514,11 @@ class SapPpOpAllocGateway implements SapWriteGateway {
   /// and risk precision loss on the 3-decimal scale SAP expects.
   static String _quantity(Object? value) {
     final quantity = value is num ? value.toDouble() : 0.0;
-    return quantity.toStringAsFixed(3);
+    // Repositories already store at this scale, so this only formats — it is
+    // no longer the place where a 4th decimal quietly disappears.
+    return ProductionMath.toSapScale(
+      quantity,
+    ).toStringAsFixed(ProductionMath.sapQuantityScale);
   }
 
   static String? _nullIfEmpty(Object? value) {

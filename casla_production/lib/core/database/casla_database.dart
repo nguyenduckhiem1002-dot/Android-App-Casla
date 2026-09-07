@@ -591,12 +591,7 @@ class CaslaDatabase {
     };
     if (values.isEmpty) return;
     final db = await _database;
-    await db.update(
-      'employees',
-      values,
-      where: 'ma_nv = ?',
-      whereArgs: [maNv],
-    );
+    await db.update('employees', values, where: 'ma_nv = ?', whereArgs: [maNv]);
   }
 
   Future<Map<String, dynamic>?> getEmployeeById(String id) async {
@@ -1200,7 +1195,12 @@ class CaslaDatabase {
         final rows = await txn.rawQuery('''
           SELECT a.*, e.ma_nv AS worker_code, e.ten AS worker_name,
                  o.ma_don_hang AS order_code, o.ma_sp AS product_code,
-                 o.ten_sp AS product_name, o.uom AS unit_of_measure,
+                 o.ten_sp AS product_name,
+                 -- The unit frozen onto the assignment wins; `o.uom` is
+                 -- only the fallback for rows created before v5. Aliased
+                 -- away from `unit_of_measure` so it cannot collide with
+                 -- the column `a.*` already supplies.
+                 COALESCE(NULLIF(a.unit_of_measure, ''), o.uom) AS display_uom,
                  (SELECT COALESCE(SUM(p.quantity), 0)
                   FROM production_records p WHERE p.phan_cong_id = a.id)
                     AS completed_quantity,

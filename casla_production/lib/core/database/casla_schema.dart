@@ -9,7 +9,7 @@
 import 'package:sqflite/sqflite.dart';
 
 /// Bump on every schema change and add the matching step to [migrate].
-const int schemaVersion = 4;
+const int schemaVersion = 5;
 
 /// Tables holding transactions that must survive a restart until SAP confirms
 /// them. The retention policy in Spec 4.7 forbids clearing these.
@@ -136,6 +136,12 @@ const List<String> _createStatements = [
     don_hang_id TEXT NOT NULL,
     to_id TEXT NOT NULL,
     assigned_quantity REAL NOT NULL CHECK(assigned_quantity > 0),
+    -- Unit of measure frozen at the moment the transaction was created (v5).
+    -- `orders.uom` is refreshed by every operation QR scan, so reading it at
+    -- push time would send a queued transaction under a unit it was never
+    -- entered in — and SAP compares the unit when it matches an idempotency
+    -- key, so the re-send is rejected rather than de-duplicated.
+    unit_of_measure TEXT,
     business_date TEXT NOT NULL,
     shift_id TEXT NOT NULL,
     status TEXT NOT NULL,
@@ -160,6 +166,8 @@ const List<String> _createStatements = [
     id TEXT PRIMARY KEY,
     phan_cong_id TEXT NOT NULL REFERENCES assignments(id),
     quantity REAL NOT NULL CHECK(quantity > 0),
+    -- Frozen per transaction — see `assignments.unit_of_measure`.
+    unit_of_measure TEXT,
     note TEXT,
     business_date TEXT NOT NULL,
     shift_id TEXT NOT NULL,
@@ -180,6 +188,8 @@ const List<String> _createStatements = [
     id TEXT PRIMARY KEY,
     phan_cong_id TEXT NOT NULL REFERENCES assignments(id),
     quantity REAL NOT NULL CHECK(quantity > 0),
+    -- Frozen per transaction — see `assignments.unit_of_measure`.
+    unit_of_measure TEXT,
     reason_code TEXT NOT NULL,
     note TEXT,
     business_date TEXT NOT NULL,
@@ -263,6 +273,7 @@ const Map<int, Future<void> Function(Database)> _migrations = {
   1: _upgradeV1ToV2,
   2: _upgradeV2ToV3,
   3: _upgradeV3ToV4,
+  4: _upgradeV4ToV5,
 };
 
 /// v2 — SAP live keys on `orders`.
@@ -293,6 +304,42 @@ Future<void> _upgradeV3ToV4(Database db) async {
   await db.execute('ALTER TABLE employees ADD COLUMN valid_from TEXT');
   await db.execute('ALTER TABLE employees ADD COLUMN valid_to TEXT');
   await db.execute('ALTER TABLE orders ADD COLUMN operation_qr_payload TEXT');
+}
+
+/// v5 — freeze the unit of measure onto each transaction.
+///
+/// Until now the gateway read `orders.uom` when it built the payload. Scanning
+/// the same production order + operation again with a different unit rewrites
+/// that row in place, so a transaction sitting in the queue would be pushed
+/// under a unit the supervisor never entered. `zbp_r_pp_opalloc` compares the
+/// unit as part of matching an idempotency key, so such a re-send comes back
+/// rejected instead of de-duplicated.
+///
+/// Existing rows are backfilled from the order they belong to. That is the
+/// best available answer for history — it is exactly what the old code would
+/// have sent — and it is applied once, now, rather than re-read on every push.
+Future<void> _upgradeV4ToV5(Database db) async {
+  await db.execute('ALTER TABLE assignments ADD COLUMN unit_of_measure TEXT');
+  await db.execute(
+    'ALTER TABLE production_records ADD COLUMN unit_of_measure TEXT',
+  );
+  await db.execute(
+    'ALTER TABLE recall_records ADD COLUMN unit_of_measure TEXT',
+  );
+
+  await db.execute(
+    'UPDATE assignments SET unit_of_measure = '
+    '(SELECT o.uom FROM orders o WHERE o.id = assignments.don_hang_id)',
+  );
+  for (final table in ['production_records', 'recall_records']) {
+    await db.execute(
+      'UPDATE $table SET unit_of_measure = ('
+      '  SELECT o.uom FROM assignments a'
+      '  JOIN orders o ON o.id = a.don_hang_id'
+      '  WHERE a.id = $table.phan_cong_id'
+      ')',
+    );
+  }
 }
 
 /// Walks a database from [from] up to [to], one version at a time.

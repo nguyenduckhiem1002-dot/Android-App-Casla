@@ -321,7 +321,11 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
     required String createdBy,
     String? workerPassword,
   }) async {
-    if (!assignedQuantity.isFinite || assignedQuantity <= 0) {
+    // Round to SAP's scale once, here, so the row we store locally and the
+    // payload the gateway formats can never disagree. `quan(15,3)` is what
+    // ztb_pp_alloc_txn holds; a 4th decimal is silently lost in transit.
+    final scaledQuantity = ProductionMath.toSapScale(assignedQuantity);
+    if (!assignedQuantity.isFinite || scaledQuantity <= 0) {
       throw Exception('Số lượng giao phải là một số dương hợp lệ');
     }
 
@@ -329,13 +333,19 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
     final idempotencyKey = IdGenerator.newIdempotencyKey();
     final now = DateTime.now().millisecondsSinceEpoch;
 
+    // Freeze the unit now. `orders.uom` is rewritten by the next operation QR
+    // scan, and this transaction may not reach SAP until long after that.
+    final order = await db.getOrderById(orderId);
+    final unitOfMeasure = (order?['uom'] ?? '').toString();
+
     // Atomic: Assignment + SyncQueue + AuditLog
     final assignmentRow = {
       'id': id,
       'nhan_vien_id': workerId,
       'don_hang_id': orderId,
       'to_id': teamId,
-      'assigned_quantity': assignedQuantity,
+      'assigned_quantity': scaledQuantity,
+      'unit_of_measure': unitOfMeasure,
       'business_date': businessDate,
       'shift_id': shiftId,
       'status': 'OPEN',
@@ -352,7 +362,8 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
       'entity_type': 'ASSIGNMENT',
       'entity_id': id,
       'action': 'CREATE',
-      'payload_summary': 'Phân công · +${assignedQuantity.toStringAsFixed(0)}',
+      'payload_summary':
+          'Phân công · +${ProductionMath.formatQuantity(scaledQuantity)}',
       'idempotency_key': idempotencyKey,
       'device_id': DeviceInfoHelper.deviceId,
       'priority': 1,
@@ -470,7 +481,7 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
           orderCode: entity['order_code'] as String? ?? orderId,
           productCode: entity['product_code'] as String? ?? 'SP',
           productName: entity['product_name'] as String? ?? 'Sản phẩm',
-          uom: entity['unit_of_measure'] as String? ?? 'cái',
+          uom: entity['display_uom'] as String? ?? 'cái',
           assignedQuantity: entity['assigned_quantity'] as double,
           completedQuantity: completed,
           recalledQuantity: recalled,
@@ -532,8 +543,11 @@ class ProductionRepositoryImpl implements ProductionRepository {
     );
     final remaining = ProductionMath.calculateRemaining(effective, completed);
 
+    // Same single rounding point as createAssignment: validate, store and send
+    // the one value SAP can actually hold.
+    final scaledQuantity = ProductionMath.toSapScale(quantity);
     final validationErr = ProductionMath.validateProductionEntry(
-      quantity,
+      scaledQuantity,
       remaining,
     );
     if (validationErr != null) throw Exception(validationErr);
@@ -546,7 +560,8 @@ class ProductionRepositoryImpl implements ProductionRepository {
     final recordRow = {
       'id': id,
       'phan_cong_id': assignmentId,
-      'quantity': quantity,
+      'quantity': scaledQuantity,
+      'unit_of_measure': assignment['unit_of_measure'],
       'business_date': businessDate,
       'shift_id': shiftId,
       'note': note,
@@ -563,7 +578,7 @@ class ProductionRepositoryImpl implements ProductionRepository {
       'entity_id': id,
       'action': 'CREATE',
       'payload_summary':
-          'Xác nhận hoàn thành · +${quantity.toStringAsFixed(0)}',
+          'Xác nhận hoàn thành · +${ProductionMath.formatQuantity(scaledQuantity)}',
       'idempotency_key': idempotencyKey,
       'device_id': DeviceInfoHelper.deviceId,
       'priority': 1,
@@ -681,8 +696,9 @@ class RecallRepositoryImpl implements RecallRepository {
       recalled,
     );
 
+    final scaledQuantity = ProductionMath.toSapScale(quantity);
     final validationErr = ProductionMath.validateRecallEntry(
-      quantity,
+      scaledQuantity,
       maxRecall,
       reasonCode,
       note,
@@ -696,7 +712,8 @@ class RecallRepositoryImpl implements RecallRepository {
     final recallRow = {
       'id': id,
       'phan_cong_id': assignmentId,
-      'quantity': quantity,
+      'quantity': scaledQuantity,
+      'unit_of_measure': assignment['unit_of_measure'],
       'reason_code': reasonCode,
       'note': note,
       'business_date': businessDate,
@@ -713,7 +730,8 @@ class RecallRepositoryImpl implements RecallRepository {
       'entity_type': 'RECALL',
       'entity_id': id,
       'action': 'CREATE',
-      'payload_summary': 'Thu hồi phân công · -${quantity.toStringAsFixed(0)}',
+      'payload_summary':
+          'Thu hồi phân công · -${ProductionMath.formatQuantity(scaledQuantity)}',
       'idempotency_key': idempotencyKey,
       'device_id': DeviceInfoHelper.deviceId,
       'priority': 1,
