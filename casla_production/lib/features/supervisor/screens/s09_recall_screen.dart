@@ -11,6 +11,7 @@ import '../../../presentation/widgets/casla_empty_state.dart';
 import '../../../presentation/widgets/casla_skeleton.dart';
 import '../../../presentation/widgets/mutation_feedback.dart';
 import '../../../presentation/widgets/worker_verification_dialog.dart';
+import '../../../domain/policies/production_math.dart';
 
 class S09RecallScreen extends ConsumerStatefulWidget {
   final Assignment assignment;
@@ -57,10 +58,15 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
   Future<void> _submitRecall(double maxRecall) async {
     if (_isSubmitting) return;
     final qty = double.tryParse(_qtyController.text) ?? 0.0;
-    if (!qty.isFinite || qty <= 0 || qty > maxRecall) {
+    // Same scale-aware comparison the repository validates with, so the screen
+    // cannot refuse a quantity the domain would have accepted.
+    if (!qty.isFinite ||
+        qty <= 0 ||
+        ProductionMath.exceedsAtSapScale(qty, maxRecall)) {
       setState(() {
         _quantityError =
-            'Nhập số lượng lớn hơn 0 và không quá ${maxRecall.toStringAsFixed(0)}.';
+            'Nhập số lượng lớn hơn 0 và không quá '
+            '${ProductionMath.formatQuantity(maxRecall)}.';
       });
       return;
     }

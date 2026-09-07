@@ -15,6 +15,7 @@ import '../../../presentation/widgets/kpi_card.dart';
 import '../../../presentation/widgets/num_pad.dart';
 import '../../../presentation/widgets/ring_progress_card.dart';
 import '../../../presentation/widgets/status_chip.dart';
+import '../../../domain/policies/production_math.dart';
 
 class S08AssignmentDetailScreen extends ConsumerStatefulWidget {
   final Assignment assignment;
@@ -58,7 +59,12 @@ class _S08AssignmentDetailScreenState
           return StatefulBuilder(
             builder: (context, setSheetState) {
               final qtyNum = double.tryParse(qtyInput) ?? 0.0;
-              final isOverflow = !qtyNum.isFinite || qtyNum > remainingMax;
+              // Compare at SAP's 3-decimal scale, not in raw double space:
+              // 0.3 assigned minus 0.1 completed leaves 0.19999999999999998,
+              // which would reject a perfectly valid 0.2.
+              final isOverflow =
+                  !qtyNum.isFinite ||
+                  ProductionMath.exceedsAtSapScale(qtyNum, remainingMax);
 
               return SafeArea(
                 child: SingleChildScrollView(
