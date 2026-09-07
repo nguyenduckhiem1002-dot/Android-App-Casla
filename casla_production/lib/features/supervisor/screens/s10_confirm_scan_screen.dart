@@ -8,7 +8,6 @@ import 'package:go_router/go_router.dart';
 
 import '../../../app/theme/casla_colors.dart';
 import '../../../core/utils/worker_qr_parser.dart';
-import '../../../domain/policies/worker_scope_policy.dart';
 import '../../../main.dart';
 import '../../../presentation/widgets/adaptive_barcode_scanner_view.dart';
 
@@ -50,32 +49,9 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
       }
 
       final db = ref.read(appStateProvider).db;
-      final worker = await db.getEmployeeByCode(parsed.maNv);
-      if (worker == null) {
-        _showError('Không tìm thấy công nhân có mã ${parsed.maNv}.');
-        return;
-      }
-
-      final session = ref.read(appStateProvider).currentSession;
-      final workerTeamIds =
-          (worker['to_ids'] as List<dynamic>? ?? const <dynamic>[])
-              .map((value) => value.toString())
-              .toList();
-      final scopeMatch = WorkerScopePolicy.evaluate(
-        workerTeamIds: workerTeamIds,
-        supervisorTeamIds: session?.toIds ?? const <String>[],
-      );
-
-      // SAP-derived history cache can know the worker before it knows the
-      // worker-to-team mapping. Treat that as unknown instead of rejecting a
-      // valid scan. SAP still validates work scope on every write operation.
-      if (scopeMatch == WorkerScopeMatch.outOfScope) {
-        _showError('Công nhân không thuộc phạm vi tổ bạn được phân quyền.');
-        return;
-      }
-
-      await db.rememberEmployeeQrValidity(
-        maNv: parsed.maNv,
+      final worker = await db.acceptWorkerQr(
+        code: parsed.maNv,
+        name: parsed.name,
         validFrom: parsed.validFrom,
         validTo: parsed.validTo,
       );

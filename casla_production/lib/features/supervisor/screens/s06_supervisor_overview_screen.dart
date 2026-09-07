@@ -212,23 +212,47 @@ class _S06SupervisorOverviewScreenState
   }
 
   String get _rangeLabel {
+    final format = DateFormat('dd/MM/yyyy');
+    final shortFormat = DateFormat('dd/MM');
     switch (_historyRange) {
       case HistoryRange.day:
-        return _formatDisplayDate(_selectedDate);
+        final formatted = format.format(_selectedDate);
+        final display = _formatDisplayDate(_selectedDate);
+        return display == formatted ? formatted : '$display ($formatted)';
       case HistoryRange.week:
-        return 'Tuần này';
+        return 'Tuần này (${shortFormat.format(_rangeFrom)} - ${shortFormat.format(_rangeTo)})';
       case HistoryRange.month:
-        return 'Tháng này';
+        return 'Tháng này (${shortFormat.format(_rangeFrom)} - ${shortFormat.format(_rangeTo)})';
       case HistoryRange.custom:
         final from = _customDateFrom ?? _selectedDate;
         final to = _customDateTo ?? from;
-        final format = DateFormat('dd/MM/yyyy');
         return from.year == to.year &&
                 from.month == to.month &&
                 from.day == to.day
             ? format.format(from)
             : '${format.format(from)} - ${format.format(to)}';
     }
+  }
+
+  String get _dayChipLabel {
+    if (_historyRange == HistoryRange.day) {
+      final display = _formatDisplayDate(_selectedDate);
+      return display == 'Hôm nay' ? 'Hôm nay ▾' : '$display ▾';
+    }
+    return 'Hôm nay ▾';
+  }
+
+  String get _customRangeChipLabel {
+    if (_historyRange == HistoryRange.custom &&
+        _customDateFrom != null &&
+        _customDateTo != null) {
+      final format = DateFormat('dd/MM');
+      if (_customDateFrom!.isAtSameMomentAs(_customDateTo!)) {
+        return '${format.format(_customDateFrom!)} ▾';
+      }
+      return '${format.format(_customDateFrom!)} - ${format.format(_customDateTo!)} ▾';
+    }
+    return 'Khoảng ngày ▾';
   }
 
   bool _isInSelectedRange(String businessDate) {
@@ -458,38 +482,236 @@ class _S06SupervisorOverviewScreenState
     );
   }
 
-  void _selectHistoryRange(HistoryRange range) {
-    if (range == HistoryRange.custom) {
-      _showCustomDatePicker();
-      return;
-    }
+  Future<void> _pickSingleDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(now.year - 2, 1, 1),
+      lastDate: DateTime(now.year + 2, 12, 31),
+      helpText: 'CHỌN NGÀY',
+      cancelText: 'HỦY',
+      confirmText: 'CHỌN',
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: CaslaColors.primaryNavy,
+              onPrimary: Colors.white,
+              surface: CaslaColors.surface,
+              onSurface: CaslaColors.navy900,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (picked == null || !mounted) return;
+
     setState(() {
-      _historyRange = range;
+      _historyRange = HistoryRange.day;
+      _selectedDate = _dateOnly(picked);
       _historyStream = _watchHistory();
     });
   }
 
-  Future<void> _showCustomDatePicker() async {
+  Future<void> _showDaySelectionSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 38,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: CaslaColors.line,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              const Text(
+                'Chọn ngày xem dữ liệu',
+                style: TextStyle(
+                  fontFamily: 'Manrope',
+                  fontSize: 17,
+                  fontWeight: FontWeight.w800,
+                  color: CaslaColors.primaryNavy,
+                ),
+              ),
+              const SizedBox(height: 12),
+              ListTile(
+                leading: Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: CaslaColors.primaryNavy.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(
+                    Icons.today,
+                    color: CaslaColors.primaryNavy,
+                    size: 20,
+                  ),
+                ),
+                title: const Text(
+                  'Hôm nay',
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+                ),
+                subtitle: Text(
+                  DateFormat('dd/MM/yyyy').format(DateTime.now()),
+                  style: const TextStyle(fontSize: 12),
+                ),
+                trailing:
+                    _historyRange == HistoryRange.day &&
+                        _formatDisplayDate(_selectedDate) == 'Hôm nay'
+                    ? const Icon(Icons.check, color: CaslaColors.primaryNavy)
+                    : null,
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  setState(() {
+                    _historyRange = HistoryRange.day;
+                    _selectedDate = _dateOnly(DateTime.now());
+                    _historyStream = _watchHistory();
+                  });
+                },
+              ),
+              ListTile(
+                leading: Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: CaslaColors.primaryNavy.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(
+                    Icons.history,
+                    color: CaslaColors.primaryNavy,
+                    size: 20,
+                  ),
+                ),
+                title: const Text(
+                  'Hôm qua',
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+                ),
+                subtitle: Text(
+                  DateFormat(
+                    'dd/MM/yyyy',
+                  ).format(DateTime.now().subtract(const Duration(days: 1))),
+                  style: const TextStyle(fontSize: 12),
+                ),
+                trailing:
+                    _historyRange == HistoryRange.day &&
+                        _formatDisplayDate(_selectedDate) == 'Hôm qua'
+                    ? const Icon(Icons.check, color: CaslaColors.primaryNavy)
+                    : null,
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  setState(() {
+                    _historyRange = HistoryRange.day;
+                    _selectedDate = _dateOnly(
+                      DateTime.now().subtract(const Duration(days: 1)),
+                    );
+                    _historyStream = _watchHistory();
+                  });
+                },
+              ),
+              ListTile(
+                leading: Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: CaslaColors.accentGold.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(
+                    Icons.calendar_month,
+                    color: CaslaColors.navy900,
+                    size: 20,
+                  ),
+                ),
+                title: const Text(
+                  'Chọn ngày khác trên lịch...',
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+                ),
+                subtitle: const Text(
+                  'Mở lịch để chọn 1 ngày bất kỳ',
+                  style: TextStyle(fontSize: 12),
+                ),
+                trailing: const Icon(
+                  Icons.chevron_right,
+                  color: CaslaColors.muted,
+                ),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _pickSingleDate();
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickDateRange() async {
     final now = DateTime.now();
+    final today = _dateOnly(now);
+    DateTime start = today.subtract(const Duration(days: 6));
+    DateTime end = today;
+
+    if (_customDateFrom != null && _customDateTo != null) {
+      if (!_customDateFrom!.isAfter(_customDateTo!)) {
+        start = _dateOnly(_customDateFrom!);
+        end = _dateOnly(_customDateTo!);
+      }
+    }
+
     final picked = await showDateRangePicker(
       context: context,
-      initialDateRange: DateTimeRange(
-        start: _customDateFrom ?? _selectedDate,
-        end: _customDateTo ?? _selectedDate,
-      ),
+      initialDateRange: DateTimeRange(start: start, end: end),
       firstDate: DateTime(now.year - 2, 1, 1),
       lastDate: DateTime(now.year + 2, 12, 31),
-      helpText: 'CHỌN KHOẢNG THỜI GIAN',
+      helpText: 'CHỌN KHOẢNG NGÀY (NHIỀU NGÀY)',
+      fieldStartLabelText: 'Từ ngày',
+      fieldEndLabelText: 'Đến ngày',
       cancelText: 'HỦY',
-      confirmText: 'CHỌN',
-      saveText: 'CHỌN',
+      confirmText: 'ÁP DỤNG',
+      saveText: 'ÁP DỤNG',
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: CaslaColors.primaryNavy,
+              onPrimary: Colors.white,
+              surface: CaslaColors.surface,
+              onSurface: CaslaColors.navy900,
+            ),
+          ),
+          child: child!,
+        );
+      },
     );
     if (picked == null || !mounted) return;
     final from = _dateOnly(picked.start);
     final to = _dateOnly(picked.end);
     if (to.difference(from).inDays > 31) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Khoảng thời gian tối đa là 31 ngày')),
+        const SnackBar(
+          content: Text('Khoảng thời gian tối đa là 31 ngày'),
+          backgroundColor: CaslaColors.danger,
+          behavior: SnackBarBehavior.floating,
+        ),
       );
       return;
     }
@@ -500,98 +722,6 @@ class _S06SupervisorOverviewScreenState
       _selectedDate = from;
       _historyStream = _watchHistory();
     });
-  }
-
-  Widget _buildVisibleRangeSelector() {
-    return Semantics(
-      container: true,
-      label: 'Khoảng thời gian tổng quan. Đang xem $_rangeLabel',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Text(
-                'Khoảng thời gian',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
-                  color: CaslaColors.primaryNavy,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Đang xem: $_rangeLabel',
-                  textAlign: TextAlign.right,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: CaslaColors.muted,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _buildRangeChip('Ngày', HistoryRange.day),
-              _buildRangeChip('Tuần', HistoryRange.week),
-              _buildRangeChip('Tháng', HistoryRange.month),
-              _buildRangeChip('Tùy chọn', HistoryRange.custom),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildRangeChip(String label, HistoryRange range) {
-    final isSelected = _historyRange == range;
-    return Semantics(
-      button: true,
-      selected: isSelected,
-      label: '$label${isSelected ? ', đang chọn' : ''}',
-      child: Material(
-        color: Colors.transparent,
-        borderRadius: BorderRadius.circular(12),
-        child: InkWell(
-          onTap: () => _selectHistoryRange(range),
-          borderRadius: BorderRadius.circular(12),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 48),
-            child: Container(
-              alignment: Alignment.center,
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              decoration: BoxDecoration(
-                color: isSelected
-                    ? CaslaColors.primaryNavy
-                    : CaslaColors.surface,
-                border: Border.all(
-                  color: isSelected
-                      ? CaslaColors.primaryNavy
-                      : CaslaColors.line,
-                ),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Text(
-                label,
-                style: TextStyle(
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w800,
-                  color: isSelected ? Colors.white : CaslaColors.primaryNavy,
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
   }
 
   @override
@@ -610,10 +740,17 @@ class _S06SupervisorOverviewScreenState
     return Scaffold(
       backgroundColor: CaslaColors.background,
       appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(70),
+        preferredSize: Size.fromHeight(
+          26 + MediaQuery.textScalerOf(context).scale(44),
+        ),
         child: Container(
           color: CaslaColors.primaryNavy,
-          padding: const EdgeInsets.fromLTRB(18, 36, 18, 12),
+          padding: EdgeInsets.fromLTRB(
+            18,
+            MediaQuery.paddingOf(context).top + 12,
+            18,
+            12,
+          ),
           child: _isSearching
               ? Row(
                   children: [
@@ -739,453 +876,560 @@ class _S06SupervisorOverviewScreenState
                 ),
         ),
       ),
-      body: RefreshIndicator(
-        onRefresh: _refresh,
-        child: StreamBuilder<WorkHistoryResult>(
-          stream: _historyStream,
-          builder: (context, historySnapshot) {
-            return StreamBuilder<List<Assignment>>(
-              stream: _assignmentStream,
-              builder: (context, assignmentSnapshot) {
-                return FutureBuilder<List<Map<String, dynamic>>>(
-                  future: _employeesFor(effectiveTeamIds),
-                  builder: (context, empSnapshot) {
-                    final isHistoryLoading =
-                        historySnapshot.connectionState ==
-                            ConnectionState.waiting &&
-                        !historySnapshot.hasData;
-                    final isEmpLoading =
-                        empSnapshot.connectionState ==
-                            ConnectionState.waiting &&
-                        !empSnapshot.hasData;
-
-                    if (isHistoryLoading || isEmpLoading) {
-                      return const _OverviewSkeleton();
-                    }
-
-                    // Process SAP data
-                    final sapResult = historySnapshot.data;
-                    final sapWorkers =
-                        sapResult?.workers ?? const <WorkHistorySummary>[];
-                    final sapEntries =
-                        sapResult?.entries ?? const <WorkHistoryEntry>[];
-
-                    // Process Local data
-                    final rawAssignments =
-                        assignmentSnapshot.data ?? const <Assignment>[];
-                    final localAssignments = rawAssignments.where((a) {
-                      if (_selectedTeamScopeIds != null &&
-                          !_selectedTeamScopeIds!.contains(a.teamId)) {
-                        return false;
-                      }
-                      if (!_isInSelectedRange(a.businessDate)) return false;
-                      return true;
-                    }).toList();
-
-                    final byWorkerLocal = <String, List<Assignment>>{};
-                    for (final a in localAssignments) {
-                      (byWorkerLocal[a.workerId] ??= []).add(a);
-                    }
-
-                    final rawEmployees = empSnapshot.data ?? [];
-
-                    // BUILD UNIFIED WORKER MAP
-                    final workerMap = <String, _WorkerOverviewData>{};
-
-                    // 1. Add from SAP workers
-                    for (final sw in sapWorkers) {
-                      final localEmp = rawEmployees
-                          .cast<Map<String, dynamic>?>()
-                          .firstWhere(
-                            (e) =>
-                                e != null &&
-                                (e['ma_nv'] == sw.workerId ||
-                                    e['id'] == sw.workerId),
-                            orElse: () => null,
-                          );
-
-                      final matchingLocal =
-                          byWorkerLocal[sw.workerId] ??
-                          (localEmp != null
-                              ? byWorkerLocal[localEmp['id']]
-                              : null) ??
-                          const <Assignment>[];
-
-                      final matchingSapEntries = sapEntries
-                          .where((e) => e.workerId == sw.workerId)
-                          .toList();
-
-                      workerMap[sw.workerId] = _WorkerOverviewData(
-                        id: localEmp?['id'] as String? ?? sw.workerId,
-                        code: sw.workerId,
-                        name: sw.workerName.isNotEmpty
-                            ? sw.workerName
-                            : (localEmp?['ten'] ?? sw.workerId),
-                        department:
-                            localEmp?['bo_phan'] ?? 'Công nhân sản xuất',
-                        assignedQty: sw.assignedQuantity,
-                        completedQty: sw.completedQuantity,
-                        remainingQty: sw.remainingQuantity,
-                        uom: sw.unitOfMeasure.isNotEmpty
-                            ? sw.unitOfMeasure
-                            : 'ST',
-                        sapEntries: matchingSapEntries,
-                        localAssignments: matchingLocal,
-                      );
-                    }
-
-                    // 2. Add local employees who may not be in SAP workers
-                    for (final emp in rawEmployees) {
-                      final empId = emp['id'] as String? ?? '';
-                      final empCode = emp['ma_nv'] as String? ?? '';
-
-                      if (workerMap.containsKey(empCode) ||
-                          workerMap.containsKey(empId)) {
-                        continue;
-                      }
-
-                      final matchingLocal =
-                          byWorkerLocal[empId] ??
-                          byWorkerLocal[empCode] ??
-                          const <Assignment>[];
-
-                      double workerAssigned = 0.0;
-                      double completedQty = 0.0;
-                      double recalledQty = 0.0;
-                      for (final a in matchingLocal) {
-                        workerAssigned += a.assignedQuantity;
-                        completedQty += a.completedQuantity;
-                        recalledQty += a.recalledQuantity;
-                      }
-
-                      final effectiveQty =
-                          ProductionMath.calculateEffectiveAssigned(
-                            workerAssigned,
-                            recalledQty,
-                          );
-                      final remainingQty = ProductionMath.calculateRemaining(
-                        effectiveQty,
-                        completedQty,
-                      );
-
-                      workerMap[empCode.isNotEmpty
-                          ? empCode
-                          : empId] = _WorkerOverviewData(
-                        id: empId,
-                        code: empCode,
-                        name: emp['ten'] ?? 'Nhân viên',
-                        department: emp['bo_phan'] ?? 'Công nhân sản xuất',
-                        assignedQty: effectiveQty,
-                        completedQty: completedQty,
-                        remainingQty: remainingQty,
-                        uom: matchingLocal.isNotEmpty
-                            ? matchingLocal.first.uom
-                            : 'cái',
-                        sapEntries: const [],
-                        localAssignments: matchingLocal,
-                      );
-                    }
-
-                    // Calculate KPIs
-                    double totalEffective = 0.0;
-                    double totalCompleted = 0.0;
-                    int assignedWorkerCount = 0;
-                    int openCount = 0;
-
-                    for (final w in workerMap.values) {
-                      totalEffective += w.assignedQty;
-                      totalCompleted += w.completedQty;
-                      if (w.assignedQty > 0) assignedWorkerCount++;
-                      if (w.remainingQty > 0) openCount++;
-                    }
-
-                    // Filter workers by search query
-                    final allWorkers = workerMap.values.toList();
-                    final filteredWorkers = allWorkers.where((w) {
-                      if (_searchQuery.isEmpty) return true;
-                      return w.name.toLowerCase().contains(_searchQuery) ||
-                          w.code.toLowerCase().contains(_searchQuery);
-                    }).toList();
-
-                    // Sort: workers with assignments first, then by name
-                    filteredWorkers.sort((a, b) {
-                      if (a.assignedQty > 0 && b.assignedQty == 0) return -1;
-                      if (a.assignedQty == 0 && b.assignedQty > 0) return 1;
-                      return a.name.compareTo(b.name);
-                    });
-
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // FIXED TOP SECTION: Filter Row + KPI Grid + Section Title
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(18, 16, 18, 0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              _buildFilterChip(
-                                '$teamFilterLabel ▾',
-                                isSelected: true,
-                                onTap: _showTeamFilterSheet,
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                'Phạm vi SAP: ${_scopeSummary(emp)}',
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  height: 1.35,
-                                  color: CaslaColors.muted,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              const SizedBox(height: 14),
-
-                              _buildVisibleRangeSelector(),
-
-                              const SizedBox(height: 16),
-
-                              // KPI Grid Cards (FIXED)
-                              GridView.count(
-                                crossAxisCount: 2,
-                                shrinkWrap: true,
-                                physics: const NeverScrollableScrollPhysics(),
-                                crossAxisSpacing: 10,
-                                mainAxisSpacing: 10,
-                                childAspectRatio: 1.6,
-                                children: [
-                                  KpiCard(
-                                    label: 'Tổng giao hiệu lực',
-                                    value: formatQuantity(totalEffective),
-                                    isAccent: true,
-                                  ),
-                                  KpiCard(
-                                    label: 'Tổng hoàn thành',
-                                    value: formatQuantity(totalCompleted),
-                                  ),
-                                  KpiCard(
-                                    label: 'Đã được giao',
-                                    value: '$assignedWorkerCount',
-                                    uom: 'NV',
-                                  ),
-                                  KpiCard(
-                                    label: 'Phân công OPEN',
-                                    value: '$openCount',
-                                  ),
-                                ],
-                              ),
-
-                              const SizedBox(height: 16),
-
-                              // Section Title Row (FIXED)
-                              Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Text(
-                                    'Công nhân trong phạm vi · $_rangeLabel',
-                                    style: const TextStyle(
-                                      fontFamily: 'Manrope',
-                                      fontWeight: FontWeight.w800,
-                                      fontSize: 14,
-                                      color: CaslaColors.primaryNavy,
-                                    ),
-                                  ),
-                                  Text(
-                                    '(${filteredWorkers.length} NV)',
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      color: CaslaColors.muted,
-                                      fontFamily: 'monospace',
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 10),
-                            ],
+      body: NestedScrollView(
+        headerSliverBuilder: (context, innerBoxIsScrolled) => [
+          SliverToBoxAdapter(
+            child:
+                // FIXED TOP FILTER SECTION (always visible, never replaced by skeleton)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 16, 18, 0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          // 1. Lọc theo tổ sản xuất
+                          _buildFilterChip(
+                            '$teamFilterLabel ▾',
+                            icon: Icons.groups_outlined,
+                            isSelected: true,
+                            onTap: _showTeamFilterSheet,
                           ),
-                        ),
 
-                        // INDEPENDENTLY SCROLLABLE SECTION: Worker Cards List
-                        Expanded(
-                          child: filteredWorkers.isEmpty
-                              ? const CaslaEmptyState(
-                                  icon: Icons.people_outline_rounded,
-                                  title: 'Không có nhân viên phù hợp',
-                                  message:
-                                      'Không tìm thấy nhân viên nào phù hợp. Thử đổi ngày, tổ sản xuất hoặc từ khóa tìm kiếm.',
+                          // 2. Chip Hôm nay (hoặc 1 ngày cụ thể)
+                          _buildFilterChip(
+                            _dayChipLabel,
+                            icon: Icons.calendar_today_outlined,
+                            isSelected: _historyRange == HistoryRange.day,
+                            onTap: _showDaySelectionSheet,
+                          ),
+
+                          // 3. Chip Tuần này
+                          _buildFilterChip(
+                            'Tuần này',
+                            isSelected: _historyRange == HistoryRange.week,
+                            onTap: () {
+                              setState(() {
+                                _historyRange = HistoryRange.week;
+                                _historyStream = _watchHistory();
+                              });
+                            },
+                          ),
+
+                          // 4. Chip Tháng này
+                          _buildFilterChip(
+                            'Tháng này',
+                            isSelected: _historyRange == HistoryRange.month,
+                            onTap: () {
+                              setState(() {
+                                _historyRange = HistoryRange.month;
+                                _historyStream = _watchHistory();
+                              });
+                            },
+                          ),
+
+                          // 5. Chip Khoảng ngày (Custom Date Range)
+                          _buildFilterChip(
+                            _customRangeChipLabel,
+                            icon: Icons.date_range_outlined,
+                            isSelected: _historyRange == HistoryRange.custom,
+                            onTap: _pickDateRange,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Phạm vi SAP: ${_scopeSummary(emp)}',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          height: 1.35,
+                          color: CaslaColors.muted,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                  ),
+                ),
+          ),
+        ],
+        body: RefreshIndicator(
+          onRefresh: _refresh,
+          child: StreamBuilder<WorkHistoryResult>(
+            stream: _historyStream,
+            builder: (context, historySnapshot) {
+              return StreamBuilder<List<Assignment>>(
+                stream: _assignmentStream,
+                builder: (context, assignmentSnapshot) {
+                  return FutureBuilder<List<Map<String, dynamic>>>(
+                    future: _employeesFor(effectiveTeamIds),
+                    builder: (context, empSnapshot) {
+                      final isHistoryLoading =
+                          historySnapshot.connectionState ==
+                              ConnectionState.waiting &&
+                          !historySnapshot.hasData;
+                      final isEmpLoading =
+                          empSnapshot.connectionState ==
+                              ConnectionState.waiting &&
+                          !empSnapshot.hasData;
+
+                      if (isHistoryLoading || isEmpLoading) {
+                        return const _OverviewSkeleton();
+                      }
+
+                      // Process SAP data
+                      final sapResult = historySnapshot.data;
+                      final sapWorkers =
+                          sapResult?.workers ?? const <WorkHistorySummary>[];
+                      final sapEntries =
+                          sapResult?.entries ?? const <WorkHistoryEntry>[];
+
+                      // Process Local data
+                      final rawAssignments =
+                          assignmentSnapshot.data ?? const <Assignment>[];
+                      final localAssignments = rawAssignments.where((a) {
+                        if (_selectedTeamScopeIds != null &&
+                            !_selectedTeamScopeIds!.contains(a.teamId)) {
+                          return false;
+                        }
+                        if (!_isInSelectedRange(a.businessDate)) {
+                          return false;
+                        }
+                        return true;
+                      }).toList();
+
+                      final byWorkerLocal = <String, List<Assignment>>{};
+                      for (final a in localAssignments) {
+                        (byWorkerLocal[a.workerId] ??= []).add(a);
+                      }
+
+                      final rawEmployees = empSnapshot.data ?? [];
+
+                      // BUILD UNIFIED WORKER MAP
+                      final workerMap = <String, _WorkerOverviewData>{};
+
+                      // 1. Add from SAP workers
+                      for (final sw in sapWorkers) {
+                        final localEmp = rawEmployees
+                            .cast<Map<String, dynamic>?>()
+                            .firstWhere(
+                              (e) =>
+                                  e != null &&
+                                  (e['ma_nv'] == sw.workerId ||
+                                      e['id'] == sw.workerId),
+                              orElse: () => null,
+                            );
+
+                        final matchingLocal =
+                            byWorkerLocal[sw.workerId] ??
+                            (localEmp != null
+                                ? byWorkerLocal[localEmp['id']]
+                                : null) ??
+                            const <Assignment>[];
+
+                        final matchingSapEntries = sapEntries
+                            .where((e) => e.workerId == sw.workerId)
+                            .toList();
+
+                        workerMap[sw.workerId] = _WorkerOverviewData(
+                          id: localEmp?['id'] as String? ?? sw.workerId,
+                          code: sw.workerId,
+                          name: sw.workerName.isNotEmpty
+                              ? sw.workerName
+                              : (localEmp?['ten'] ?? sw.workerId),
+                          department:
+                              localEmp?['bo_phan'] ?? 'Công nhân sản xuất',
+                          assignedQty: sw.assignedQuantity,
+                          completedQty: sw.completedQuantity,
+                          remainingQty: sw.remainingQuantity,
+                          uom: sw.unitOfMeasure.isNotEmpty
+                              ? sw.unitOfMeasure
+                              : 'ST',
+                          sapEntries: matchingSapEntries,
+                          localAssignments: matchingLocal,
+                        );
+                      }
+
+                      // 2. Add local employees who may not be in SAP workers
+                      for (final emp in rawEmployees) {
+                        final empId = emp['id'] as String? ?? '';
+                        final empCode = emp['ma_nv'] as String? ?? '';
+
+                        if (workerMap.containsKey(empCode) ||
+                            workerMap.containsKey(empId)) {
+                          continue;
+                        }
+
+                        final matchingLocal =
+                            byWorkerLocal[empId] ??
+                            byWorkerLocal[empCode] ??
+                            const <Assignment>[];
+
+                        double workerAssigned = 0.0;
+                        double completedQty = 0.0;
+                        double recalledQty = 0.0;
+                        for (final a in matchingLocal) {
+                          workerAssigned += a.assignedQuantity;
+                          completedQty += a.completedQuantity;
+                          recalledQty += a.recalledQuantity;
+                        }
+
+                        final effectiveQty =
+                            ProductionMath.calculateEffectiveAssigned(
+                              workerAssigned,
+                              recalledQty,
+                            );
+                        final remainingQty = ProductionMath.calculateRemaining(
+                          effectiveQty,
+                          completedQty,
+                        );
+
+                        workerMap[empCode.isNotEmpty
+                            ? empCode
+                            : empId] = _WorkerOverviewData(
+                          id: empId,
+                          code: empCode,
+                          name: emp['ten'] ?? 'Nhân viên',
+                          department: emp['bo_phan'] ?? 'Công nhân sản xuất',
+                          assignedQty: effectiveQty,
+                          completedQty: completedQty,
+                          remainingQty: remainingQty,
+                          uom: matchingLocal.isNotEmpty
+                              ? matchingLocal.first.uom
+                              : 'cái',
+                          sapEntries: const [],
+                          localAssignments: matchingLocal,
+                        );
+                      }
+
+                      // Calculate KPIs
+                      double totalEffective = 0.0;
+                      double totalCompleted = 0.0;
+                      int assignedWorkerCount = 0;
+                      int openCount = 0;
+
+                      for (final w in workerMap.values) {
+                        totalEffective += w.assignedQty;
+                        totalCompleted += w.completedQty;
+                        if (w.assignedQty > 0) assignedWorkerCount++;
+                        if (w.remainingQty > 0) openCount++;
+                      }
+
+                      // Filter workers by search query
+                      final allWorkers = workerMap.values.toList();
+                      final filteredWorkers = allWorkers.where((w) {
+                        if (_searchQuery.isEmpty) return true;
+                        return w.name.toLowerCase().contains(_searchQuery) ||
+                            w.code.toLowerCase().contains(_searchQuery);
+                      }).toList();
+
+                      // Sort: workers with assignments first, then by name
+                      filteredWorkers.sort((a, b) {
+                        if (a.assignedQty > 0 && b.assignedQty == 0) {
+                          return -1;
+                        }
+                        if (a.assignedQty == 0 && b.assignedQty > 0) {
+                          return 1;
+                        }
+                        return a.name.compareTo(b.name);
+                      });
+
+                      return CustomScrollView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        slivers: [
+                          SliverToBoxAdapter(
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(18, 4, 18, 0),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  // KPI Grid Cards
+                                  LayoutBuilder(
+                                    builder: (context, constraints) => Wrap(
+                                      spacing: 10,
+                                      runSpacing: 10,
+                                      children:
+                                          <Widget>[
+                                                KpiCard(
+                                                  label: 'Tổng giao hiệu lực',
+                                                  value: formatQuantity(
+                                                    totalEffective,
+                                                  ),
+                                                  isAccent: true,
+                                                ),
+                                                KpiCard(
+                                                  label: 'Tổng hoàn thành',
+                                                  value: formatQuantity(
+                                                    totalCompleted,
+                                                  ),
+                                                ),
+                                                KpiCard(
+                                                  label: 'Đã được giao',
+                                                  value: '$assignedWorkerCount',
+                                                  uom: 'NV',
+                                                ),
+                                                KpiCard(
+                                                  label: 'Phân công OPEN',
+                                                  value: '$openCount',
+                                                ),
+                                              ]
+                                              .map(
+                                                (card) => SizedBox(
+                                                  width:
+                                                      constraints.maxWidth <
+                                                              320 ||
+                                                          MediaQuery.textScalerOf(
+                                                                context,
+                                                              ).scale(14) >
+                                                              21
+                                                      ? constraints.maxWidth
+                                                      : (constraints.maxWidth -
+                                                                10) /
+                                                            2,
+                                                  child: ConstrainedBox(
+                                                    constraints:
+                                                        const BoxConstraints(
+                                                          minHeight: 110,
+                                                        ),
+                                                    child: card,
+                                                  ),
+                                                ),
+                                              )
+                                              .toList(),
+                                    ),
+                                  ),
+
+                                  const SizedBox(height: 16),
+
+                                  // Section Title Row (FIXED)
+                                  Row(
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          'Công nhân trong phạm vi · $_rangeLabel',
+                                          style: const TextStyle(
+                                            fontFamily: 'Manrope',
+                                            fontWeight: FontWeight.w800,
+                                            fontSize: 14,
+                                            color: CaslaColors.primaryNavy,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        '(${filteredWorkers.length} NV)',
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          color: CaslaColors.muted,
+                                          fontFamily: 'monospace',
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 10),
+                                ],
+                              ),
+                            ),
+                          ),
+
+                          // INDEPENDENTLY SCROLLABLE SECTION: Worker Cards List
+                          filteredWorkers.isEmpty
+                              ? const SliverToBoxAdapter(
+                                  child: CaslaEmptyState(
+                                    icon: Icons.people_outline_rounded,
+                                    title: 'Không có nhân viên phù hợp',
+                                    message:
+                                        'Không tìm thấy nhân viên nào phù hợp. Thử đổi ngày, tổ sản xuất hoặc từ khóa tìm kiếm.',
+                                  ),
                                 )
-                              : ListView.builder(
+                              : SliverPadding(
                                   padding: const EdgeInsets.fromLTRB(
                                     18,
                                     0,
                                     18,
                                     80,
                                   ),
-                                  itemCount: filteredWorkers.length,
-                                  itemBuilder: (context, index) {
-                                    final worker = filteredWorkers[index];
-                                    final (status, statusLabel) =
-                                        _workerStatusBadge(worker);
+                                  sliver: SliverList.builder(
+                                    itemCount: filteredWorkers.length,
+                                    itemBuilder: (context, index) {
+                                      final worker = filteredWorkers[index];
+                                      final (status, statusLabel) =
+                                          _workerStatusBadge(worker);
 
-                                    return Container(
-                                      margin: const EdgeInsets.only(bottom: 10),
-                                      child: Material(
-                                        color: CaslaColors.surface,
-                                        borderRadius: BorderRadius.circular(12),
-                                        child: InkWell(
-                                          onTap: () {
-                                            context.push(
-                                              '/supervisor/employee_detail',
-                                              extra: {
-                                                'id': worker.id,
-                                                'ma_nv': worker.code,
-                                                'ten': worker.name,
-                                                'bo_phan': worker.department,
-                                                'sap_entries':
-                                                    worker.sapEntries,
-                                                'assigned_qty':
-                                                    worker.assignedQty,
-                                                'completed_qty':
-                                                    worker.completedQty,
-                                                'remaining_qty':
-                                                    worker.remainingQty,
-                                                'uom': worker.uom,
-                                                'date': _rangeFrom,
-                                              },
-                                            );
-                                          },
+                                      return Container(
+                                        margin: const EdgeInsets.only(
+                                          bottom: 10,
+                                        ),
+                                        child: Material(
+                                          color: CaslaColors.surface,
                                           borderRadius: BorderRadius.circular(
                                             12,
                                           ),
-                                          child: Container(
-                                            padding: const EdgeInsets.all(14),
-                                            decoration: BoxDecoration(
-                                              border: Border.all(
-                                                color: CaslaColors.line,
-                                              ),
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
+                                          child: InkWell(
+                                            onTap: () {
+                                              context.push(
+                                                '/supervisor/employee_detail',
+                                                extra: {
+                                                  'id': worker.id,
+                                                  'ma_nv': worker.code,
+                                                  'ten': worker.name,
+                                                  'bo_phan': worker.department,
+                                                  'sap_entries':
+                                                      worker.sapEntries,
+                                                  'assigned_qty':
+                                                      worker.assignedQty,
+                                                  'completed_qty':
+                                                      worker.completedQty,
+                                                  'remaining_qty':
+                                                      worker.remainingQty,
+                                                  'uom': worker.uom,
+                                                  'date': _rangeFrom,
+                                                  'date_from': _rangeFrom,
+                                                  'date_to': _rangeTo,
+                                                },
+                                              );
+                                            },
+                                            borderRadius: BorderRadius.circular(
+                                              12,
                                             ),
-                                            child: Column(
-                                              children: [
-                                                Row(
-                                                  mainAxisAlignment:
-                                                      MainAxisAlignment
-                                                          .spaceBetween,
-                                                  crossAxisAlignment:
-                                                      CrossAxisAlignment.start,
-                                                  children: [
-                                                    Expanded(
-                                                      child: Column(
-                                                        crossAxisAlignment:
-                                                            CrossAxisAlignment
-                                                                .start,
-                                                        children: [
-                                                          Text(
-                                                            worker.name,
-                                                            maxLines: 1,
-                                                            overflow:
-                                                                TextOverflow
-                                                                    .ellipsis,
-                                                            style: const TextStyle(
-                                                              fontFamily:
-                                                                  'Manrope',
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .w700,
-                                                              fontSize: 14.5,
-                                                              color: CaslaColors
-                                                                  .primaryNavy,
-                                                            ),
-                                                          ),
-                                                          const SizedBox(
-                                                            height: 2,
-                                                          ),
-                                                          Text(
-                                                            '${worker.code} · ${worker.department}',
-                                                            maxLines: 1,
-                                                            overflow:
-                                                                TextOverflow
-                                                                    .ellipsis,
-                                                            style: const TextStyle(
-                                                              fontFamily:
-                                                                  'monospace',
-                                                              fontSize: 11.5,
-                                                              color: CaslaColors
-                                                                  .muted,
-                                                            ),
-                                                          ),
-                                                        ],
-                                                      ),
-                                                    ),
-                                                    const SizedBox(width: 8),
-                                                    StatusChip(
-                                                      status: status,
-                                                      label: statusLabel,
-                                                    ),
-                                                  ],
+                                            child: Container(
+                                              padding: const EdgeInsets.all(14),
+                                              decoration: BoxDecoration(
+                                                border: Border.all(
+                                                  color: CaslaColors.line,
                                                 ),
-                                                const SizedBox(height: 12),
-
-                                                // Progress bar
-                                                ClipRRect(
-                                                  borderRadius:
-                                                      BorderRadius.circular(8),
-                                                  child: LinearProgressIndicator(
-                                                    value:
-                                                        worker.completionRate,
-                                                    minHeight: 7,
-                                                    backgroundColor:
-                                                        CaslaColors.muted100,
-                                                    valueColor:
-                                                        const AlwaysStoppedAnimation<
-                                                          Color
-                                                        >(
-                                                          CaslaColors
-                                                              .accentGold,
+                                                borderRadius:
+                                                    BorderRadius.circular(12),
+                                              ),
+                                              child: Column(
+                                                children: [
+                                                  Row(
+                                                    mainAxisAlignment:
+                                                        MainAxisAlignment
+                                                            .spaceBetween,
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .start,
+                                                    children: [
+                                                      Expanded(
+                                                        child: Column(
+                                                          crossAxisAlignment:
+                                                              CrossAxisAlignment
+                                                                  .start,
+                                                          children: [
+                                                            Text(
+                                                              worker.name,
+                                                              maxLines: 1,
+                                                              overflow:
+                                                                  TextOverflow
+                                                                      .ellipsis,
+                                                              style: const TextStyle(
+                                                                fontFamily:
+                                                                    'Manrope',
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w700,
+                                                                fontSize: 14.5,
+                                                                color: CaslaColors
+                                                                    .primaryNavy,
+                                                              ),
+                                                            ),
+                                                            const SizedBox(
+                                                              height: 2,
+                                                            ),
+                                                            Text(
+                                                              '${worker.code} · ${worker.department}',
+                                                              maxLines: 1,
+                                                              overflow:
+                                                                  TextOverflow
+                                                                      .ellipsis,
+                                                              style: const TextStyle(
+                                                                fontFamily:
+                                                                    'monospace',
+                                                                fontSize: 11.5,
+                                                                color:
+                                                                    CaslaColors
+                                                                        .muted,
+                                                              ),
+                                                            ),
+                                                          ],
                                                         ),
+                                                      ),
+                                                      const SizedBox(width: 8),
+                                                      StatusChip(
+                                                        status: status,
+                                                        label: statusLabel,
+                                                      ),
+                                                    ],
                                                   ),
-                                                ),
-                                                const SizedBox(height: 10),
+                                                  const SizedBox(height: 12),
 
-                                                // Stats row
-                                                Row(
-                                                  mainAxisAlignment:
-                                                      MainAxisAlignment
-                                                          .spaceBetween,
-                                                  children: [
-                                                    _buildStatItem(
-                                                      'Giao',
-                                                      '${formatQuantity(worker.assignedQty)} ${worker.uom}',
+                                                  // Progress bar
+                                                  ClipRRect(
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          8,
+                                                        ),
+                                                    child: LinearProgressIndicator(
+                                                      value:
+                                                          worker.completionRate,
+                                                      minHeight: 7,
+                                                      backgroundColor:
+                                                          CaslaColors.muted100,
+                                                      valueColor:
+                                                          const AlwaysStoppedAnimation<
+                                                            Color
+                                                          >(
+                                                            CaslaColors
+                                                                .accentGold,
+                                                          ),
                                                     ),
-                                                    _buildStatItem(
-                                                      'H.thành',
-                                                      '${formatQuantity(worker.completedQty)} ${worker.uom}',
-                                                    ),
-                                                    _buildStatItem(
-                                                      'Còn lại',
-                                                      '${formatQuantity(worker.remainingQty)} ${worker.uom}',
-                                                    ),
-                                                  ],
-                                                ),
-                                              ],
+                                                  ),
+                                                  const SizedBox(height: 10),
+
+                                                  // Stats row
+                                                  Row(
+                                                    mainAxisAlignment:
+                                                        MainAxisAlignment
+                                                            .spaceBetween,
+                                                    children: [
+                                                      _buildStatItem(
+                                                        'Giao',
+                                                        '${formatQuantity(worker.assignedQty)} ${worker.uom}',
+                                                      ),
+                                                      _buildStatItem(
+                                                        'H.thành',
+                                                        '${formatQuantity(worker.completedQty)} ${worker.uom}',
+                                                      ),
+                                                      _buildStatItem(
+                                                        'Còn lại',
+                                                        '${formatQuantity(worker.remainingQty)} ${worker.uom}',
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ],
+                                              ),
                                             ),
                                           ),
                                         ),
-                                      ),
-                                    );
-                                  },
+                                      );
+                                    },
+                                  ),
                                 ),
-                        ),
-                      ],
-                    );
-                  },
-                );
-              },
-            );
-          },
+                        ],
+                      );
+                    },
+                  );
+                },
+              );
+            },
+          ),
         ),
       ),
       floatingActionButton:
@@ -1211,6 +1455,7 @@ class _S06SupervisorOverviewScreenState
     String label, {
     bool isSelected = false,
     VoidCallback? onTap,
+    IconData? icon,
   }) {
     return Semantics(
       button: true,
@@ -1227,25 +1472,47 @@ class _S06SupervisorOverviewScreenState
               maxWidth: MediaQuery.sizeOf(context).width - 36,
             ),
             child: Container(
-              alignment: Alignment.center,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 6),
               decoration: BoxDecoration(
-                color: CaslaColors.surface,
+                color: isSelected
+                    ? CaslaColors.primaryNavy.withValues(alpha: 0.08)
+                    : CaslaColors.surface,
                 border: Border.all(
                   color: isSelected ? CaslaColors.accentGold : CaslaColors.line,
-                  width: 1.5,
+                  width: isSelected ? 1.8 : 1.2,
                 ),
                 borderRadius: BorderRadius.circular(20),
               ),
-              child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: CaslaColors.primaryNavy,
-                ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (icon != null) ...[
+                    Icon(
+                      icon,
+                      size: 15,
+                      color: isSelected
+                          ? CaslaColors.navy900
+                          : CaslaColors.muted,
+                    ),
+                    const SizedBox(width: 6),
+                  ],
+                  Flexible(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: isSelected
+                            ? FontWeight.w800
+                            : FontWeight.w600,
+                        color: isSelected
+                            ? CaslaColors.primaryNavy
+                            : CaslaColors.navy900,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -1316,16 +1583,8 @@ class _OverviewSkeleton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListView(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.fromLTRB(18, 4, 18, 18),
       children: [
-        const Row(
-          children: [
-            CaslaSkeleton(width: 132, height: 34, radius: 18),
-            SizedBox(width: 8),
-            CaslaSkeleton(width: 104, height: 34, radius: 18),
-          ],
-        ),
-        const SizedBox(height: 14),
         GridView.count(
           crossAxisCount: 2,
           shrinkWrap: true,

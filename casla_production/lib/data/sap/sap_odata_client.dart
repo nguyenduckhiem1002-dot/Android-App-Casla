@@ -198,7 +198,8 @@ class SapODataClient {
       );
     }
 
-    if (kReleaseMode && transportAuthMode != SapTransportAuthMode.gateway) {
+    if (AppConfig.requiresGateway &&
+        transportAuthMode != SapTransportAuthMode.gateway) {
       throw const SapConfigurationException(
         'Bản phát hành phải dùng SAP_TRANSPORT_AUTH_MODE=gateway để không '
         'đóng gói shared SAP Basic credential.',

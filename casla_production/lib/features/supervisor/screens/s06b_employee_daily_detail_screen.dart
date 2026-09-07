@@ -45,17 +45,39 @@ class _EmployeeDetailSkeleton extends StatelessWidget {
 
 class _S06bEmployeeDailyDetailScreenState
     extends ConsumerState<S06bEmployeeDailyDetailScreen> {
-  late DateTime _selectedDate;
+  late DateTime _dateFrom;
+  late DateTime _dateTo;
   late Stream<WorkHistoryResult> _historyStream;
   late Stream<List<Assignment>> _assignmentStream;
   late Stream<List<Map<String, dynamic>>> _productionStream;
 
   String _dateStr(DateTime d) => DateFormat('yyyy-MM-dd').format(d);
+  DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  bool get _isSameDay =>
+      _dateOnly(_dateFrom).isAtSameMomentAs(_dateOnly(_dateTo));
+
+  bool _isInRange(String businessDate) {
+    final parsed = DateTime.tryParse(businessDate);
+    if (parsed == null) return false;
+    final d = _dateOnly(parsed);
+    return !d.isBefore(_dateOnly(_dateFrom)) && !d.isAfter(_dateOnly(_dateTo));
+  }
+
+  String get _dateHeaderLabel {
+    final df = DateFormat('dd/MM/yyyy');
+    if (_isSameDay) {
+      return 'Ngày: ${df.format(_dateFrom)}';
+    }
+    return 'Kỳ: ${DateFormat('dd/MM').format(_dateFrom)} - ${df.format(_dateTo)}';
+  }
 
   @override
   void initState() {
     super.initState();
-    _selectedDate = (widget.worker['date'] as DateTime?) ?? DateTime.now();
+    final initialDate = (widget.worker['date'] as DateTime?) ?? DateTime.now();
+    _dateFrom = (widget.worker['date_from'] as DateTime?) ?? initialDate;
+    _dateTo = (widget.worker['date_to'] as DateTime?) ?? initialDate;
     _resetDataStreams();
   }
 
@@ -63,19 +85,20 @@ class _S06bEmployeeDailyDetailScreenState
 
   void _resetDataStreams() {
     final appState = ref.read(appStateProvider);
-    final date = _dateStr(_selectedDate);
+    final fromStr = _dateStr(_dateFrom);
+    final toStr = _dateStr(_dateTo);
     _historyStream = appState.workHistoryRepo.watchWorkHistory(
       range: HistoryRange.custom,
-      dateFrom: _selectedDate,
-      dateTo: _selectedDate,
+      dateFrom: _dateFrom,
+      dateTo: _dateTo,
     );
     _assignmentStream = appState.assignmentRepo.watchWorkerAssignments(
       _workerId,
     );
     _productionStream = appState.db.watchProductionHistory(
       _workerId,
-      fromBusinessDate: date,
-      toBusinessDate: date,
+      fromBusinessDate: fromStr,
+      toBusinessDate: toStr,
     );
   }
 
@@ -85,8 +108,8 @@ class _S06bEmployeeDailyDetailScreenState
         .workHistoryRepo
         .getWorkHistory(
           range: HistoryRange.custom,
-          dateFrom: _selectedDate,
-          dateTo: _selectedDate,
+          dateFrom: _dateFrom,
+          dateTo: _dateTo,
           forceRefresh: forceRefresh,
         );
   }
@@ -95,6 +118,440 @@ class _S06bEmployeeDailyDetailScreenState
     try {
       await _fetchHistory(forceRefresh: true);
     } catch (_) {}
+  }
+
+  Future<void> _pickDateRange() async {
+    final now = DateTime.now();
+    final today = _dateOnly(now);
+    DateTime start = today.subtract(const Duration(days: 6));
+    DateTime end = today;
+    if (!_dateFrom.isAfter(_dateTo)) {
+      start = _dateOnly(_dateFrom);
+      end = _dateOnly(_dateTo);
+    }
+
+    final picked = await showDateRangePicker(
+      context: context,
+      initialDateRange: DateTimeRange(start: start, end: end),
+      firstDate: DateTime(now.year - 2, 1, 1),
+      lastDate: DateTime(now.year + 2, 12, 31),
+      helpText: 'CHỌN KHOẢNG NGÀY (NHIỀU NGÀY)',
+      cancelText: 'HỦY',
+      confirmText: 'ÁP DỤNG',
+      saveText: 'ÁP DỤNG',
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: CaslaColors.primaryNavy,
+              onPrimary: Colors.white,
+              surface: CaslaColors.surface,
+              onSurface: CaslaColors.navy900,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (picked == null || !mounted) return;
+    final from = _dateOnly(picked.start);
+    final to = _dateOnly(picked.end);
+    if (to.difference(from).inDays > 31) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Khoảng thời gian tối đa là 31 ngày'),
+          backgroundColor: CaslaColors.danger,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    setState(() {
+      _dateFrom = from;
+      _dateTo = to;
+      _resetDataStreams();
+    });
+  }
+
+  Future<void> _pickSingleDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _dateFrom,
+      firstDate: DateTime(now.year - 2, 1, 1),
+      lastDate: DateTime(now.year + 2, 12, 31),
+      helpText: 'CHỌN NGÀY',
+      cancelText: 'HỦY',
+      confirmText: 'CHỌN',
+    );
+    if (picked != null && mounted) {
+      setState(() {
+        _dateFrom = _dateOnly(picked);
+        _dateTo = _dateOnly(picked);
+        _resetDataStreams();
+      });
+    }
+  }
+
+  Future<void> _showDateRangeSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 38,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: CaslaColors.line,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Thời gian xem dữ liệu',
+                style: TextStyle(
+                  fontFamily: 'Manrope',
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                  color: CaslaColors.primaryNavy,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Đang xem: $_dateHeaderLabel',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: CaslaColors.muted,
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // CARD 1: CHỌN KHOẢNG NGÀY (NHIỀU NGÀY)
+              Material(
+                color: CaslaColors.accentGold.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(14),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(14),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _pickDateRange();
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: CaslaColors.accentGold.withValues(alpha: 0.6),
+                        width: 1.5,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 44,
+                          height: 44,
+                          decoration: BoxDecoration(
+                            color: CaslaColors.accentGold,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Icon(
+                            Icons.date_range_rounded,
+                            color: CaslaColors.navy900,
+                            size: 24,
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  const Text(
+                                    'Chọn khoảng ngày',
+                                    style: TextStyle(
+                                      fontFamily: 'Manrope',
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 15,
+                                      color: CaslaColors.navy900,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 6,
+                                      vertical: 2,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: CaslaColors.primaryNavy,
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: const Text(
+                                      'Nhiều ngày',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 3),
+                              const Text(
+                                'Chọn từ ngày đến ngày (tối đa 31 ngày)',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: CaslaColors.muted,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Icon(
+                          Icons.chevron_right,
+                          color: CaslaColors.primaryNavy,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 10),
+
+              // CARD 2: CHỌN 1 NGÀY CỤ THỂ
+              Material(
+                color: CaslaColors.surface,
+                borderRadius: BorderRadius.circular(14),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(14),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _pickSingleDate();
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: CaslaColors.line, width: 1.2),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 44,
+                          height: 44,
+                          decoration: BoxDecoration(
+                            color: CaslaColors.primaryNavy.withValues(
+                              alpha: 0.08,
+                            ),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Icon(
+                            Icons.calendar_today_rounded,
+                            color: CaslaColors.primaryNavy,
+                            size: 22,
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Chọn 1 ngày cụ thể',
+                                style: TextStyle(
+                                  fontFamily: 'Manrope',
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 15,
+                                  color: CaslaColors.primaryNavy,
+                                ),
+                              ),
+                              SizedBox(height: 3),
+                              Text(
+                                'Xem dữ liệu chi tiết của 1 ngày bất kỳ',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: CaslaColors.muted,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Icon(
+                          Icons.chevron_right,
+                          color: CaslaColors.muted,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 20),
+
+              const Text(
+                'MỐC CHỌN NHANH',
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.5,
+                  color: CaslaColors.muted,
+                ),
+              ),
+              const SizedBox(height: 10),
+
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _buildQuickPresetChip(
+                    sheetContext,
+                    label: 'Hôm nay',
+                    sublabel: DateFormat('dd/MM').format(DateTime.now()),
+                    isSelected:
+                        _isSameDay &&
+                        _dateOnly(
+                          _dateFrom,
+                        ).isAtSameMomentAs(_dateOnly(DateTime.now())),
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      final today = _dateOnly(DateTime.now());
+                      setState(() {
+                        _dateFrom = today;
+                        _dateTo = today;
+                        _resetDataStreams();
+                      });
+                    },
+                  ),
+                  _buildQuickPresetChip(
+                    sheetContext,
+                    label: 'Hôm qua',
+                    sublabel: DateFormat(
+                      'dd/MM',
+                    ).format(DateTime.now().subtract(const Duration(days: 1))),
+                    isSelected:
+                        _isSameDay &&
+                        _dateOnly(_dateFrom).isAtSameMomentAs(
+                          _dateOnly(
+                            DateTime.now().subtract(const Duration(days: 1)),
+                          ),
+                        ),
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      final yest = _dateOnly(
+                        DateTime.now().subtract(const Duration(days: 1)),
+                      );
+                      setState(() {
+                        _dateFrom = yest;
+                        _dateTo = yest;
+                        _resetDataStreams();
+                      });
+                    },
+                  ),
+                  _buildQuickPresetChip(
+                    sheetContext,
+                    label: 'Tuần này',
+                    sublabel: 'T2 - CN',
+                    isSelected: !_isSameDay,
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      final now = DateTime.now();
+                      final start = _dateOnly(
+                        now.subtract(Duration(days: now.weekday - 1)),
+                      );
+                      final end = _dateOnly(start.add(const Duration(days: 6)));
+                      setState(() {
+                        _dateFrom = start;
+                        _dateTo = end;
+                        _resetDataStreams();
+                      });
+                    },
+                  ),
+                  _buildQuickPresetChip(
+                    sheetContext,
+                    label: 'Tháng này',
+                    sublabel: 'Tháng ${DateTime.now().month}',
+                    isSelected: false,
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      final now = DateTime.now();
+                      final start = DateTime(now.year, now.month, 1);
+                      final end = DateTime(now.year, now.month + 1, 0);
+                      setState(() {
+                        _dateFrom = start;
+                        _dateTo = end;
+                        _resetDataStreams();
+                      });
+                    },
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildQuickPresetChip(
+    BuildContext sheetContext, {
+    required String label,
+    required String sublabel,
+    required bool isSelected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? CaslaColors.primaryNavy : CaslaColors.surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSelected ? CaslaColors.primaryNavy : CaslaColors.line,
+            width: 1.2,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: isSelected ? Colors.white : CaslaColors.primaryNavy,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              sublabel,
+              style: TextStyle(
+                fontSize: 11,
+                color: isSelected
+                    ? Colors.white.withValues(alpha: 0.75)
+                    : CaslaColors.muted,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -151,35 +608,39 @@ class _S06bEmployeeDailyDetailScreenState
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  'Ngày: ${DateFormat('dd/MM/yyyy').format(_selectedDate)}',
-                  style: const TextStyle(
-                    fontFamily: 'Manrope',
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                    color: CaslaColors.primaryNavy,
-                  ),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.calendar_month_outlined,
+                      size: 18,
+                      color: CaslaColors.primaryNavy,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      _dateHeaderLabel,
+                      style: const TextStyle(
+                        fontFamily: 'Manrope',
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                        color: CaslaColors.primaryNavy,
+                      ),
+                    ),
+                  ],
                 ),
                 OutlinedButton.icon(
-                  onPressed: () async {
-                    final now = DateTime.now();
-                    final picked = await showDatePicker(
-                      context: context,
-                      initialDate: _selectedDate,
-                      firstDate: DateTime(now.year - 2, 1, 1),
-                      lastDate: DateTime(now.year + 2, 12, 31),
-                    );
-                    if (picked != null) {
-                      setState(() {
-                        _selectedDate = picked;
-                        _resetDataStreams();
-                      });
-                    }
-                  },
-                  icon: const Icon(Icons.calendar_today, size: 16),
-                  label: const Text('Chọn ngày'),
+                  onPressed: _showDateRangeSheet,
+                  icon: const Icon(Icons.tune_rounded, size: 16),
+                  label: const Text('Đổi ngày ▾'),
                   style: OutlinedButton.styleFrom(
-                    minimumSize: const Size(110, 36),
+                    foregroundColor: CaslaColors.primaryNavy,
+                    side: const BorderSide(
+                      color: CaslaColors.accentGold,
+                      width: 1.3,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(18),
+                    ),
                     padding: const EdgeInsets.symmetric(horizontal: 12),
                   ),
                 ),
@@ -197,8 +658,6 @@ class _S06bEmployeeDailyDetailScreenState
                   return StreamBuilder<List<Assignment>>(
                     stream: _assignmentStream,
                     builder: (context, assignmentSnapshot) {
-                      final dateFormatted = _dateStr(_selectedDate);
-
                       return StreamBuilder<List<Map<String, dynamic>>>(
                         stream: _productionStream,
                         builder: (context, prodSnapshot) {
@@ -267,7 +726,7 @@ class _S06bEmployeeDailyDetailScreenState
                           final allAssignments =
                               assignmentSnapshot.data ?? const <Assignment>[];
                           final filteredAssignments = allAssignments
-                              .where((a) => a.businessDate == dateFormatted)
+                              .where((a) => _isInRange(a.businessDate))
                               .toList();
                           final productionRecords = prodSnapshot.data ?? [];
 
@@ -426,14 +885,16 @@ class _S06bEmployeeDailyDetailScreenState
                                 ),
                               ),
 
-                              // Section: Phân công trong ngày
+                              // Section: Phân công
                               Row(
                                 mainAxisAlignment:
                                     MainAxisAlignment.spaceBetween,
                                 children: [
-                                  const Text(
-                                    'Phân công trong ngày',
-                                    style: TextStyle(
+                                  Text(
+                                    _isSameDay
+                                        ? 'Phân công trong ngày'
+                                        : 'Phân công theo kỳ',
+                                    style: const TextStyle(
                                       fontFamily: 'Manrope',
                                       fontWeight: FontWeight.w800,
                                       fontSize: 14,
@@ -460,10 +921,12 @@ class _S06bEmployeeDailyDetailScreenState
                                     border: Border.all(color: CaslaColors.line),
                                     borderRadius: BorderRadius.circular(14),
                                   ),
-                                  child: const Center(
+                                  child: Center(
                                     child: Text(
-                                      'Không có phân công nào trong ngày này.',
-                                      style: TextStyle(
+                                      _isSameDay
+                                          ? 'Không có phân công nào trong ngày này.'
+                                          : 'Không có phân công nào trong khoảng thời gian này.',
+                                      style: const TextStyle(
                                         color: CaslaColors.muted,
                                         fontSize: 13,
                                       ),
@@ -807,7 +1270,7 @@ class _S06bEmployeeDailyDetailScreenState
                                         ),
                                         const SizedBox(width: 12),
                                         Text(
-                                          '+${formatQuantity((r['quantity'] as num).toDouble())} cái',
+                                          '+${formatQuantity((r['quantity'] as num).toDouble())} $uom',
                                           style: const TextStyle(
                                             fontFamily: 'monospace',
                                             fontWeight: FontWeight.w700,

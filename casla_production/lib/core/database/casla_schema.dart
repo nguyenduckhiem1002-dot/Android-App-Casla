@@ -23,7 +23,7 @@ const Set<String> durableTransactionTables = {
 
 const List<String> _workHistoryCacheStatements = [
   '''
-  CREATE TABLE work_history_cache_meta (
+  CREATE TABLE IF NOT EXISTS work_history_cache_meta (
     cache_key TEXT PRIMARY KEY,
     subject_id TEXT NOT NULL,
     range_code TEXT NOT NULL,
@@ -36,9 +36,9 @@ const List<String> _workHistoryCacheStatements = [
     fetched_at_utc INTEGER NOT NULL
   )
   ''',
-  'CREATE INDEX idx_work_history_meta_subject ON work_history_cache_meta(subject_id, fetched_at_utc)',
+  'CREATE INDEX IF NOT EXISTS idx_work_history_meta_subject ON work_history_cache_meta(subject_id, fetched_at_utc)',
   '''
-  CREATE TABLE work_history_cache_entries (
+  CREATE TABLE IF NOT EXISTS work_history_cache_entries (
     cache_key TEXT NOT NULL REFERENCES work_history_cache_meta(cache_key) ON DELETE CASCADE,
     sequence_no INTEGER NOT NULL,
     transaction_uuid TEXT NOT NULL,
@@ -56,9 +56,9 @@ const List<String> _workHistoryCacheStatements = [
     PRIMARY KEY(cache_key, sequence_no)
   )
   ''',
-  'CREATE INDEX idx_work_history_entries_lookup ON work_history_cache_entries(cache_key, execution_date)',
+  'CREATE INDEX IF NOT EXISTS idx_work_history_entries_lookup ON work_history_cache_entries(cache_key, execution_date)',
   '''
-  CREATE TABLE work_history_cache_workers (
+  CREATE TABLE IF NOT EXISTS work_history_cache_workers (
     cache_key TEXT NOT NULL REFERENCES work_history_cache_meta(cache_key) ON DELETE CASCADE,
     sequence_no INTEGER NOT NULL,
     worker_id TEXT NOT NULL,
@@ -71,7 +71,7 @@ const List<String> _workHistoryCacheStatements = [
     PRIMARY KEY(cache_key, sequence_no)
   )
   ''',
-  'CREATE INDEX idx_work_history_workers_lookup ON work_history_cache_workers(cache_key, worker_id)',
+  'CREATE INDEX IF NOT EXISTS idx_work_history_workers_lookup ON work_history_cache_workers(cache_key, worker_id)',
 ];
 
 const List<String> _createStatements = [
@@ -120,6 +120,8 @@ const List<String> _createStatements = [
     -- is never guaranteed to match SAP's real order number format.
     production_order TEXT,
     operation TEXT,
+    plant TEXT,
+    work_center TEXT,
     operation_qr_payload TEXT
   )
   ''',
@@ -263,6 +265,9 @@ Future<void> createSchema(Database db) async {
   for (final statement in _createStatements) {
     batch.execute(statement);
   }
+  for (final statement in _workHistoryCacheStatements) {
+    batch.execute(statement);
+  }
   await batch.commit(noResult: true);
 }
 
@@ -288,6 +293,20 @@ Future<void> _upgradeV1ToV2(Database db) async {
   await db.execute('ALTER TABLE orders ADD COLUMN operation TEXT');
 }
 
+/// v5 — retain the Plant/Work Center carried by an operation QR when present.
+/// These are hints for selecting the manager's existing Work Context; SAP
+/// remains authoritative when the mutation is submitted.
+Future<void> _upgradeV4ToV5(Database db) async {
+  final columns = (await db.rawQuery(
+    'PRAGMA table_info(orders)',
+  )).map((column) => column['name']).toSet();
+  for (final column in ['plant', 'work_center']) {
+    if (!columns.contains(column)) {
+      await db.execute('ALTER TABLE orders ADD COLUMN $column TEXT');
+    }
+  }
+}
+
 /// v3 — account-isolated WorkHistory cache.
 ///
 /// The cache is additive only. No durable transaction table is rebuilt or
@@ -301,9 +320,20 @@ Future<void> _upgradeV2ToV3(Database db) async {
 /// v4 — preserve the validity window from worker QR cards and the original
 /// operation QR payload used to resolve SAP's production order/operation.
 Future<void> _upgradeV3ToV4(Database db) async {
-  await db.execute('ALTER TABLE employees ADD COLUMN valid_from TEXT');
-  await db.execute('ALTER TABLE employees ADD COLUMN valid_to TEXT');
-  await db.execute('ALTER TABLE orders ADD COLUMN operation_qr_payload TEXT');
+  // Some earlier debug installs added QR columns without advancing user_version.
+  // Inspect the actual schema so upgrading those devices preserves their data.
+  final employeeColumns = (await db.rawQuery(
+    'PRAGMA table_info(employees)',
+  )).map((column) => column['name']).toSet();
+  for (final column in ['valid_from', 'valid_to']) {
+    if (!employeeColumns.contains(column)) {
+      await db.execute('ALTER TABLE employees ADD COLUMN $column TEXT');
+    }
+  }
+  final orderColumns = await db.rawQuery('PRAGMA table_info(orders)');
+  if (!orderColumns.any((column) => column['name'] == 'operation_qr_payload')) {
+    await db.execute('ALTER TABLE orders ADD COLUMN operation_qr_payload TEXT');
+  }
 }
 
 /// v5 — freeze the unit of measure onto each transaction.

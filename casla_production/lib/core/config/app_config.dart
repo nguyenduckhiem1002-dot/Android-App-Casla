@@ -2,10 +2,14 @@
 // Spec: SAP OData / RAP Integration Setup
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show appFlavor;
 
 enum SapTransportAuthMode { basic, gateway }
 
 class AppConfig {
+  /// Only the explicitly selected dev flavor may embed test transport secrets.
+  /// Unknown, staging and production release builds remain gateway-only.
+  static const bool requiresGateway = kReleaseMode && appFlavor != 'dev';
   static const String appVersion = String.fromEnvironment(
     'APP_VERSION',
     defaultValue: '1.0.0',
@@ -88,17 +92,17 @@ class AppConfig {
 
   /// Development/staging direct-SAP Basic Authentication User.
   ///
-  /// The release branch of this const expression is always the empty string.
+  /// The non-dev release branch of this const expression is always empty.
   /// That means even a mistakenly supplied `--dart-define=SAP_BASIC_AUTH_USER`
   /// is not selected into the release program constant.
-  static const String _sapBasicAuthUser = kReleaseMode
+  static const String _sapBasicAuthUser = requiresGateway
       ? ''
       : String.fromEnvironment('SAP_BASIC_AUTH_USER');
   static String get sapBasicAuthUser => _normalizeEnvValue(_sapBasicAuthUser);
 
   /// Development/staging direct-SAP Basic Authentication Password.
   /// See [_sapBasicAuthUser] for why the release program selects `''` here.
-  static const String _sapBasicAuthPassword = kReleaseMode
+  static const String _sapBasicAuthPassword = requiresGateway
       ? ''
       : String.fromEnvironment('SAP_BASIC_AUTH_PASSWORD');
   static String get sapBasicAuthPassword =>

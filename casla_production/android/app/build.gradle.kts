@@ -104,7 +104,8 @@ android {
             dimension = "environment"
             applicationIdSuffix = ".dev"
             versionNameSuffix = "-dev"
-            resValue("string", "app_name", dartDefines["APP_NAME"] ?: "Casla Dev")
+            resValue("string", "app_name", "Casla Dev TEST")
+            signingConfig = signingConfigs.getByName("debug")
         }
         create("staging") {
             dimension = "environment"
@@ -142,11 +143,11 @@ android {
             // Never fall back to debug signing. The verification task below
             // blocks productionRelease unless the real identity and all signing
             // inputs are explicitly supplied.
-            if (productionSigningReady) {
-                signingConfig = signingConfigs.getByName("production")
-            }
+            // Signing belongs to the flavor, never to all release variants.
         }
     }
+    productFlavors.getByName("production").signingConfig = signingConfigs.getByName("production")
+    productFlavors.getByName("staging").signingConfig = signingConfigs.getByName("production")
 }
 
 dependencies {
@@ -199,7 +200,10 @@ val verifyCaslaSigning by tasks.registering {
 // Debug production builds stay available to CI so the flavor can be compiled
 // without exposing release credentials.
 tasks.configureEach {
-    if (name.contains("ProductionRelease", ignoreCase = true)) {
+    // AGP shares preProductionReleaseBuild with other release task graphs.
+    // Do not attach production-only policy to that shared lifecycle task.
+    if (name.contains("ProductionRelease", ignoreCase = true) &&
+        !name.equals("preProductionReleaseBuild", ignoreCase = true)) {
         dependsOn(verifyCaslaSigning)
     }
 }

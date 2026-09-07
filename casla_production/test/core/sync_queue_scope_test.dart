@@ -50,40 +50,60 @@ void main() {
     );
   }
 
-  test('a scoped supervisor cannot view or drain another account queue',
-      () async {
-    await addAssignment(
-      assignmentId: 'assignment-owned',
-      queueId: 'queue-owned',
-      actor: 'SUPERVISOR-A',
-      teamId: 'team-a',
-    );
-    await addAssignment(
-      assignmentId: 'assignment-other',
-      queueId: 'queue-other',
-      actor: 'SUPERVISOR-B',
-      teamId: 'team-b',
-    );
+  test(
+    'a scoped supervisor cannot view or drain another account queue',
+    () async {
+      await addAssignment(
+        assignmentId: 'assignment-owned',
+        queueId: 'queue-owned',
+        actor: 'SUPERVISOR-A',
+        teamId: 'team-a',
+      );
+      await addAssignment(
+        assignmentId: 'assignment-other',
+        queueId: 'queue-other',
+        actor: 'SUPERVISOR-B',
+        teamId: 'team-b',
+      );
 
-    final visible = await db
-        .watchSyncFeed(actorId: 'SUPERVISOR-A', teamIds: ['team-a'])
-        .first;
-    final due = await db.getDueSyncItems(
-      actorId: 'SUPERVISOR-A',
-      teamIds: ['team-a'],
-    );
-
-    expect(visible.map((item) => item['id']), contains('queue-owned'));
-    expect(visible.map((item) => item['id']), isNot(contains('queue-other')));
-    expect(due.map((item) => item['id']), contains('queue-owned'));
-    expect(due.map((item) => item['id']), isNot(contains('queue-other')));
-    expect(
-      await db.isSyncQueueItemInScope(
-        'queue-other',
+      final visible = await db
+          .watchSyncFeed(actorId: 'SUPERVISOR-A', teamIds: ['team-a'])
+          .first;
+      final due = await db.getDueSyncItems(
         actorId: 'SUPERVISOR-A',
         teamIds: ['team-a'],
-      ),
-      isFalse,
-    );
-  });
+      );
+
+      expect(visible.map((item) => item['id']), contains('queue-owned'));
+      expect(visible.map((item) => item['id']), isNot(contains('queue-other')));
+      expect(due.map((item) => item['id']), contains('queue-owned'));
+      expect(due.map((item) => item['id']), isNot(contains('queue-other')));
+      expect(
+        await db.isSyncQueueItemInScope(
+          'queue-other',
+          actorId: 'SUPERVISOR-A',
+          teamIds: ['team-a'],
+        ),
+        isFalse,
+      );
+    },
+  );
+
+  test(
+    'creator can see an unresolved assignment without QR work context',
+    () async {
+      await addAssignment(
+        assignmentId: 'assignment-no-context',
+        queueId: 'queue-no-context',
+        actor: 'SUPERVISOR-A',
+        teamId: '',
+      );
+
+      final visible = await db
+          .watchSyncFeed(actorId: 'SUPERVISOR-A', teamIds: ['team-a'])
+          .first;
+
+      expect(visible.map((item) => item['id']), contains('queue-no-context'));
+    },
+  );
 }

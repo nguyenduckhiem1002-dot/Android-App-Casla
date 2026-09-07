@@ -135,6 +135,11 @@ void main() {
       expect(row['production_order'], '000010001234');
       expect(row['operation'], '0010');
       expect(row.containsKey('operation_qr_payload'), isTrue);
+<<<<<<< HEAD
+=======
+      expect(row.containsKey('plant'), isTrue);
+      expect(row.containsKey('work_center'), isTrue);
+>>>>>>> 5bd6656 (Refactor app architecture and update UI flows)
 
       // The fresh-install schema is checked through an explicit table-info query
       // because this test database does not seed employees by default.
@@ -148,6 +153,7 @@ void main() {
     },
   );
 
+<<<<<<< HEAD
   test('v4 -> v5 freezes the unit onto existing transactions', () async {
     // A v4 device mid-shift: an assignment already queued under KG, and the
     // order row it points at. The migration has to answer "what unit was this
@@ -204,6 +210,70 @@ void main() {
 
     await db.close();
   });
+=======
+  for (final preexisting in [false, true]) {
+    test(
+      'v3 -> v4 preserves QR data with preexisting columns: $preexisting',
+      () async {
+        final db = await openDatabase(inMemoryDatabasePath, version: 3);
+        addTearDown(db.close);
+        await db.execute(
+          'CREATE TABLE employees (id TEXT PRIMARY KEY'
+          '${preexisting ? ', valid_from TEXT' : ''})',
+        );
+        await db.execute(
+          'CREATE TABLE orders (id TEXT PRIMARY KEY'
+          '${preexisting ? ', operation_qr_payload TEXT' : ''})',
+        );
+        await db.insert('employees', {
+          'id': 'worker-1',
+          if (preexisting) 'valid_from': '2026-09-01',
+        });
+        await db.insert('orders', {
+          'id': 'order-1',
+          if (preexisting) 'operation_qr_payload': 'original-qr',
+        });
+
+        await migrate(db, 3, 4);
+        // A device may already have every new column while user_version is 3.
+        await migrate(db, 3, 4);
+
+        final employee = (await db.query('employees')).single;
+        expect(employee['id'], 'worker-1');
+        expect(employee['valid_from'], preexisting ? '2026-09-01' : null);
+        expect(employee.containsKey('valid_to'), isTrue);
+        final order = (await db.query('orders')).single;
+        expect(order['id'], 'order-1');
+        expect(
+          order['operation_qr_payload'],
+          preexisting ? 'original-qr' : null,
+        );
+      },
+    );
+  }
+
+  test(
+    'v4 -> v5 adds operation context without losing the QR payload',
+    () async {
+      final db = await openDatabase(inMemoryDatabasePath, version: 4);
+      await db.execute(
+        'CREATE TABLE orders (id TEXT PRIMARY KEY, operation_qr_payload TEXT)',
+      );
+      await db.insert('orders', {
+        'id': 'order-1',
+        'operation_qr_payload': 'original-qr',
+      });
+
+      await migrate(db, 4, 5);
+
+      final row = (await db.query('orders')).single;
+      expect(row['operation_qr_payload'], 'original-qr');
+      expect(row.containsKey('plant'), isTrue);
+      expect(row.containsKey('work_center'), isTrue);
+      await db.close();
+    },
+  );
+>>>>>>> 5bd6656 (Refactor app architecture and update UI flows)
 }
 
 /// The three transaction tables exactly as `createSchema` shipped them at v4,

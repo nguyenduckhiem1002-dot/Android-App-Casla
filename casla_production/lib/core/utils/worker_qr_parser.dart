@@ -4,6 +4,7 @@ import 'dart:convert';
 class WorkerQrResult {
   final bool isValid;
   final String maNv;
+  final String name;
   final DateTime? validFrom;
   final DateTime? validTo;
   final String? error;
@@ -11,6 +12,7 @@ class WorkerQrResult {
   const WorkerQrResult({
     required this.isValid,
     required this.maNv,
+    this.name = '',
     this.validFrom,
     this.validTo,
     this.error,
@@ -22,12 +24,14 @@ class WorkerQrResult {
 
   factory WorkerQrResult.success(
     String maNv, {
+    String name = '',
     DateTime? validFrom,
     DateTime? validTo,
   }) {
     return WorkerQrResult(
       isValid: true,
       maNv: maNv.trim(),
+      name: name,
       validFrom: validFrom,
       validTo: validTo,
     );
@@ -41,10 +45,7 @@ class WorkerQrResult {
   }
 }
 
-/// Extracts only an employee code from a QR payload.
-///
-/// Names, roles and team scope are never trusted from QR input; callers must
-/// resolve the code against authorized master data before using it.
+/// Reads identity/display data and validity locally; QR never grants permissions.
 class WorkerQrParser {
   WorkerQrParser._();
 
@@ -120,36 +121,42 @@ class WorkerQrParser {
     ]);
     if (!_isEmployeeCode(maNv)) return WorkerQrResult.invalid();
 
-    final from = _readDate(
-      normalized,
-      const [
-        'validfrom',
-        'fromdate',
-        'ngayhieuluc',
-        'tungay',
-        'ngaybatdau',
-      ],
-    );
-    final to = _readDate(
-      normalized,
-      const [
-        'validto',
-        'todate',
-        'enddate',
-        'ngayhethieuluc',
-        'denngay',
-        'ngayketthuc',
-      ],
-    );
+    final from = _readDate(normalized, const [
+      'validfrom',
+      'fromdate',
+      'ngayhieuluc',
+      'tungay',
+      'ngaybatdau',
+    ]);
+    final to = _readDate(normalized, const [
+      'validto',
+      'todate',
+      'enddate',
+      'ngayhethieuluc',
+      'denngay',
+      'ngayketthuc',
+    ]);
     if (from.invalid || to.invalid) {
       return WorkerQrResult.invalid('Ngày hiệu lực trên mã QR không hợp lệ');
     }
-    if (from.value != null && to.value != null && from.value!.isAfter(to.value!)) {
-      return WorkerQrResult.invalid('Khoảng ngày hiệu lực trên mã QR không hợp lệ');
+    if (from.value != null &&
+        to.value != null &&
+        from.value!.isAfter(to.value!)) {
+      return WorkerQrResult.invalid(
+        'Khoảng ngày hiệu lực trên mã QR không hợp lệ',
+      );
     }
 
     return WorkerQrResult.success(
       maNv,
+      name: _firstValue(normalized, const [
+        'workername',
+        'fullname',
+        'name',
+        'ten',
+        'hoten',
+        'tennhanvien',
+      ]),
       validFrom: from.value,
       validTo: to.value,
     );
@@ -158,17 +165,72 @@ class WorkerQrParser {
   static String _normalizeKey(String key) {
     var value = key.toLowerCase();
     const accents = {
-      'á': 'a', 'à': 'a', 'ả': 'a', 'ã': 'a', 'ạ': 'a', 'ă': 'a',
-      'ắ': 'a', 'ằ': 'a', 'ẳ': 'a', 'ẵ': 'a', 'ặ': 'a', 'â': 'a',
-      'ấ': 'a', 'ầ': 'a', 'ẩ': 'a', 'ẫ': 'a', 'ậ': 'a', 'đ': 'd',
-      'é': 'e', 'è': 'e', 'ẻ': 'e', 'ẽ': 'e', 'ẹ': 'e', 'ê': 'e',
-      'ế': 'e', 'ề': 'e', 'ể': 'e', 'ễ': 'e', 'ệ': 'e', 'í': 'i',
-      'ì': 'i', 'ỉ': 'i', 'ĩ': 'i', 'ị': 'i', 'ó': 'o', 'ò': 'o',
-      'ỏ': 'o', 'õ': 'o', 'ọ': 'o', 'ô': 'o', 'ố': 'o', 'ồ': 'o',
-      'ổ': 'o', 'ỗ': 'o', 'ộ': 'o', 'ơ': 'o', 'ớ': 'o', 'ờ': 'o',
-      'ở': 'o', 'ỡ': 'o', 'ợ': 'o', 'ú': 'u', 'ù': 'u', 'ủ': 'u',
-      'ũ': 'u', 'ụ': 'u', 'ư': 'u', 'ứ': 'u', 'ừ': 'u', 'ử': 'u',
-      'ữ': 'u', 'ự': 'u', 'ý': 'y', 'ỳ': 'y', 'ỷ': 'y', 'ỹ': 'y',
+      'á': 'a',
+      'à': 'a',
+      'ả': 'a',
+      'ã': 'a',
+      'ạ': 'a',
+      'ă': 'a',
+      'ắ': 'a',
+      'ằ': 'a',
+      'ẳ': 'a',
+      'ẵ': 'a',
+      'ặ': 'a',
+      'â': 'a',
+      'ấ': 'a',
+      'ầ': 'a',
+      'ẩ': 'a',
+      'ẫ': 'a',
+      'ậ': 'a',
+      'đ': 'd',
+      'é': 'e',
+      'è': 'e',
+      'ẻ': 'e',
+      'ẽ': 'e',
+      'ẹ': 'e',
+      'ê': 'e',
+      'ế': 'e',
+      'ề': 'e',
+      'ể': 'e',
+      'ễ': 'e',
+      'ệ': 'e',
+      'í': 'i',
+      'ì': 'i',
+      'ỉ': 'i',
+      'ĩ': 'i',
+      'ị': 'i',
+      'ó': 'o',
+      'ò': 'o',
+      'ỏ': 'o',
+      'õ': 'o',
+      'ọ': 'o',
+      'ô': 'o',
+      'ố': 'o',
+      'ồ': 'o',
+      'ổ': 'o',
+      'ỗ': 'o',
+      'ộ': 'o',
+      'ơ': 'o',
+      'ớ': 'o',
+      'ờ': 'o',
+      'ở': 'o',
+      'ỡ': 'o',
+      'ợ': 'o',
+      'ú': 'u',
+      'ù': 'u',
+      'ủ': 'u',
+      'ũ': 'u',
+      'ụ': 'u',
+      'ư': 'u',
+      'ứ': 'u',
+      'ừ': 'u',
+      'ử': 'u',
+      'ữ': 'u',
+      'ự': 'u',
+      'ý': 'y',
+      'ỳ': 'y',
+      'ỷ': 'y',
+      'ỹ': 'y',
       'ỵ': 'y',
     };
     for (final entry in accents.entries) {

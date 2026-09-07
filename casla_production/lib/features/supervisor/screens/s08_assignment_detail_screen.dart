@@ -15,7 +15,11 @@ import '../../../presentation/widgets/kpi_card.dart';
 import '../../../presentation/widgets/num_pad.dart';
 import '../../../presentation/widgets/ring_progress_card.dart';
 import '../../../presentation/widgets/status_chip.dart';
+<<<<<<< HEAD
 import '../../../domain/policies/production_math.dart';
+=======
+import '../../../core/sync/sync_failure.dart';
+>>>>>>> 5bd6656 (Refactor app architecture and update UI flows)
 
 class S08AssignmentDetailScreen extends ConsumerStatefulWidget {
   final Assignment assignment;
@@ -96,7 +100,7 @@ class _S08AssignmentDetailScreenState
                         ),
                       ),
                       Text(
-                        'Nhập số lượng công nhân vừa hoàn thành (Tối đa: ${remainingMax.toStringAsFixed(0)} cái)',
+                        'Nhập số lượng công nhân vừa hoàn thành (Tối đa: ${remainingMax.toStringAsFixed(2)} ${widget.assignment.uom})',
                         textAlign: TextAlign.center,
                         style: const TextStyle(
                           fontSize: 12,
@@ -123,8 +127,8 @@ class _S08AssignmentDetailScreenState
                             ),
                           ),
                           const SizedBox(width: 4),
-                          const Text(
-                            'cái',
+                          Text(
+                            widget.assignment.uom,
                             style: TextStyle(
                               fontSize: 14,
                               color: CaslaColors.muted,
@@ -203,11 +207,9 @@ class _S08AssignmentDetailScreenState
         actionLabel: 'xác nhận sản lượng lên SAP',
       );
       if (!mounted || workerPassword == null) return;
-      if (!appState.isSessionGenerationCurrent(generation) ||
-          appState.currentSession?.toIds.contains(widget.assignment.teamId) !=
-              true) {
+      if (!appState.isSessionGenerationCurrent(generation)) {
         throw Exception(
-          'Phiên hoặc quyền đã thay đổi. Vui lòng mở lại thao tác.',
+          'Phiên đăng nhập đã thay đổi. Vui lòng mở lại thao tác.',
         );
       }
       final receipt = await appState.productionRepo.recordProduction(
@@ -222,13 +224,14 @@ class _S08AssignmentDetailScreenState
       showMutationFeedback(
         context,
         receipt: receipt,
-        successMessage: 'Đã ghi nhận +${qty.toStringAsFixed(0)} cái.',
+        successMessage:
+            'Đã ghi nhận +${qty.toStringAsFixed(2)} ${widget.assignment.uom}.',
       );
     } on Exception catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(_errorText(e)),
+          content: Text(friendlySapErrorMessage(e)),
           backgroundColor: CaslaColors.danger,
         ),
       );
@@ -236,11 +239,6 @@ class _S08AssignmentDetailScreenState
       if (mounted) setState(() => _isSubmitting = false);
     }
   }
-
-  /// Strips Dart's "Exception: " prefix so the supervisor reads the business
-  /// message, not the wrapper.
-  String _errorText(Exception e) =>
-      e.toString().replaceFirst(RegExp(r'^Exception:\s*'), '');
 
   @override
   Widget build(BuildContext context) {

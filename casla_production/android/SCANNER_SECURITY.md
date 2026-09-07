@@ -20,7 +20,7 @@ The app applies the following controls before a hardware scan reaches Flutter:
 4. Barcode values must be `String`/`ByteArray`, are bounded to 4096 characters / 8192 bytes, and embedded NUL is rejected.
 5. Symbology metadata is type-checked and bounded.
 6. Flutter validates the platform event envelope again and rejects unknown sources instead of defaulting them to `hardware`.
-7. Worker QR parsing has an independent 4096-character/NUL bound and extracts only an employee code. Master data and permissions are resolved separately.
+7. Worker QR parsing has an independent 4096-character/NUL bound. Scanning accepts the QR identity/display name locally and checks its validity dates without requiring master-data membership or local team scope. A missing worker is cached with empty permissions and team IDs. This trusts the QR for selection, not authentication; SAP still verifies passwords and authorization on writes.
 
 The pure native policy is covered by JVM unit tests in `CipherLabBroadcastPolicyTest`; CI runs `:app:testProductionDebugUnitTest` after generating the Android wrapper through the production-flavor build.
 

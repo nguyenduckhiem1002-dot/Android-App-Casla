@@ -578,6 +578,46 @@ class CaslaDatabase {
     return rows.isEmpty ? null : _employeeRow(rows.first);
   }
 
+  /// Accepts a QR identity locally without a master-data/scope prerequisite.
+  /// Existing authorization metadata is never overwritten by QR input.
+  Future<Map<String, dynamic>> acceptWorkerQr({
+    required String code,
+    String name = '',
+    DateTime? validFrom,
+    DateTime? validTo,
+  }) async {
+    final db = await _database;
+    return db.transaction((txn) async {
+      await txn.insert('employees', {
+        'id': 'qr-worker:$code',
+        'ma_nv': code,
+        'ten': name.isEmpty ? code : name,
+        'trang_thai': 'ACTIVE',
+        'vai_tro': 'CONG_NHAN',
+        'quyen_han': '[]',
+        'to_ids': '[]',
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+      await txn.update(
+        'employees',
+        {
+          if (name.isNotEmpty) 'ten': name,
+          'valid_from': validFrom == null ? null : _dateOnly(validFrom),
+          'valid_to': validTo == null ? null : _dateOnly(validTo),
+        },
+        where: 'ma_nv = ?',
+        whereArgs: [code],
+      );
+      return _employeeRow(
+        (await txn.query(
+          'employees',
+          where: 'ma_nv = ?',
+          whereArgs: [code],
+          limit: 1,
+        )).single,
+      );
+    });
+  }
+
   /// Stores the validity window carried by a scanned worker card without
   /// changing the authoritative role, team or active status from SAP.
   Future<void> rememberEmployeeQrValidity({
@@ -1005,29 +1045,18 @@ class CaslaDatabase {
 
     final db = await _database;
     final result = await db.transaction((txn) async {
-      List<Map<String, Object?>> matches = await txn.query(
+      final List<Map<String, Object?>> matches = await txn.query(
         'orders',
         where: 'production_order = ? AND operation = ?',
         whereArgs: [qr.productionOrder, qr.operation],
         limit: 1,
       );
 
-      if (matches.isEmpty && qr.orderCode.isNotEmpty) {
-        matches = await txn.query(
-          'orders',
-          where: 'LOWER(ma_don_hang) = ?',
-          whereArgs: [qr.orderCode.toLowerCase()],
-          limit: 1,
-        );
-      }
-      if (matches.isEmpty && qr.productCode.isNotEmpty) {
-        matches = await txn.query(
-          'orders',
-          where: 'LOWER(ma_sp) = ?',
-          whereArgs: [qr.productCode.toLowerCase()],
-          limit: 1,
-        );
-      }
+      // A product code and an order label are display attributes, not an
+      // operation identity. Reusing a row through either field would rewrite
+      // the live SAP keys of every existing assignment that references it when
+      // the same product is scanned at a later operation. Only this exact
+      // Production Order + Operation pair may update an existing row.
 
       final displayName = qr.displayProductName.isNotEmpty
           ? qr.displayProductName
@@ -1038,6 +1067,8 @@ class CaslaDatabase {
         'production_order': qr.productionOrder,
         'operation': qr.operation,
         'operation_qr_payload': qr.rawPayload,
+        if (qr.plant.isNotEmpty) 'plant': qr.plant,
+        if (qr.workCenter.isNotEmpty) 'work_center': qr.workCenter,
         if (qr.productCode.isNotEmpty) 'ma_sp': qr.productCode,
         if (qr.productName.isNotEmpty) 'ten_sp': qr.productName,
         if (qr.workCenterDescription.isNotEmpty)
@@ -2102,8 +2133,18 @@ class CaslaDatabase {
           production.created_by,
           recall.created_by
         ) = ?
-        AND COALESCE(direct_assignment.to_id, parent_assignment.to_id)
-            IN ($teamPlaceholders)
+        AND (
+          COALESCE(direct_assignment.to_id, parent_assignment.to_id)
+              IN ($teamPlaceholders)
+          -- An operation QR can legitimately omit Plant/Work Center. Until
+          -- SAP resolves that write, retain visibility for the same creator
+          -- so a verification/rejection is never stranded outside S12.
+          OR TRIM(COALESCE(
+            direct_assignment.to_id,
+            parent_assignment.to_id,
+            ''
+          )) = ''
+        )
       $orderClause
       $limitClause
       ''',

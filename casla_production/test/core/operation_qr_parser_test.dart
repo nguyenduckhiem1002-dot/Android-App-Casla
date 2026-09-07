@@ -3,9 +3,10 @@ import 'package:casla_production/core/utils/operation_qr_parser.dart';
 
 void main() {
   test('parses the operation QR fields and keeps the original payload', () {
-    const raw = '{"ProductionOrder":"000001000020",'
+    const raw =
+        '{"ProductionOrder":"000001000020",'
         '"Operation":"0010","ProductCode":"200009017",'
-        '"ProductName":"XE-EU24122750-G-V1-2cm",'
+        '"ProductName":"XE-EU24122750-G-V1-2cm","Plant":"6711",'
         '"WorkCenter":"67110016","OperationQuantity":"4.000,000 KG",'
         '"UnitOfMeasure":"KG"}';
 
@@ -16,6 +17,7 @@ void main() {
     expect(result.operation, '0010');
     expect(result.productName, 'XE-EU24122750-G-V1-2cm');
     expect(result.operationQuantity, 4000);
+    expect(result.plant, '6711');
     expect(result.rawPayload, raw);
   });
 

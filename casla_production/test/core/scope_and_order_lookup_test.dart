@@ -60,8 +60,10 @@ void main() {
       final workers = await db.getEmployeesByTeamIds(['TC01']);
 
       expect(workers, isNotEmpty);
-      expect(workers.every((e) => (e['to_ids'] as List).contains('team-1')),
-          isTrue);
+      expect(
+        workers.every((e) => (e['to_ids'] as List).contains('team-1')),
+        isTrue,
+      );
     });
   });
 
@@ -85,8 +87,10 @@ void main() {
       final team1 = await db.watchAssignmentsByTeams(['TC01']).first;
 
       expect(team1, isNotEmpty);
-      expect(team1.every((assignment) => assignment['to_id'] == 'team-1'),
-          isTrue);
+      expect(
+        team1.every((assignment) => assignment['to_id'] == 'team-1'),
+        isTrue,
+      );
     });
   });
 
@@ -94,9 +98,14 @@ void main() {
     test('returns team master rows for SAP business codes', () async {
       final teams = await db.getTeamsForScope(['TC01', 'TC03']);
 
-      expect(teams.map((team) => team['id']), containsAll(['team-1', 'team-3']));
-      expect(teams.map((team) => team['ten_to']),
-          containsAll(['Tổ Cắt 1', 'Tổ Cắt 3']));
+      expect(
+        teams.map((team) => team['id']),
+        containsAll(['team-1', 'team-3']),
+      );
+      expect(
+        teams.map((team) => team['ten_to']),
+        containsAll(['Tổ Cắt 1', 'Tổ Cắt 3']),
+      );
     });
   });
 
@@ -249,7 +258,8 @@ void main() {
 
   group('upsertOrderFromOperationQr', () {
     test('keeps SAP keys, product name and raw QR payload', () async {
-      const raw = '{"ProductionOrder":"000001000020",'
+      const raw =
+          '{"ProductionOrder":"000001000020",'
           '"Operation":"0010","ProductCode":"200009017",'
           '"ProductName":"XE-EU24122750-G-V1-2cm",'
           '"UnitOfMeasure":"KG"}';
@@ -262,10 +272,59 @@ void main() {
       expect(order?['operation'], '0010');
       expect(order?['ten_sp'], 'XE-EU24122750-G-V1-2cm');
       expect(order?['operation_qr_payload'], raw);
-      expect(
-        await db.getOrderByCode('000001000020-0010'),
-        isNotNull,
-      );
+      expect(await db.getOrderByCode('000001000020-0010'), isNotNull);
     });
+
+    test(
+      'keeps each operation separate when the product code is the same',
+      () async {
+        final first = await db.upsertOrderFromOperationQr(
+          OperationQrParser.parse(
+            '{"ProductionOrder":"000001000020","Operation":"0010",'
+            '"ProductCode":"SAME-PRODUCT","UnitOfMeasure":"KG"}',
+          ),
+        );
+        await db.createAssignmentAtomically(
+          assignment: {
+            'id': 'operation-0010-assignment',
+            'nhan_vien_id': 'emp-1',
+            'don_hang_id': first!['id'],
+            'to_id': 'team-1',
+            'assigned_quantity': 1.0,
+            'business_date': '2026-09-07',
+            'shift_id': 'SHIFT_1',
+            'status': 'OPEN',
+            'created_by': 'MNV00100',
+            'occurred_at_utc': 1,
+            'device_id': 'TEST',
+            'sync_status': 'PENDING',
+            'idempotency_key': 'operation-0010-idempotency',
+            'created_at_utc': 1,
+          },
+          queueItem: {
+            'id': 'operation-0010-queue',
+            'entity_type': 'ASSIGNMENT',
+            'entity_id': 'operation-0010-assignment',
+            'action': 'CREATE',
+            'idempotency_key': 'operation-0010-idempotency',
+            'priority': 1,
+            'retry_count': 0,
+            'created_at_utc': 1,
+          },
+          auditLog: {'id': 'operation-0010-audit', 'occurred_at_utc': 1},
+        );
+
+        final second = await db.upsertOrderFromOperationQr(
+          OperationQrParser.parse(
+            '{"ProductionOrder":"000001000020","Operation":"0020",'
+            '"ProductCode":"SAME-PRODUCT","UnitOfMeasure":"ST"}',
+          ),
+        );
+
+        expect(second!['id'], isNot(first['id']));
+        final keys = await db.getSapOperationKeys('operation-0010-assignment');
+        expect(keys?.operation, '0010');
+      },
+    );
   });
 }

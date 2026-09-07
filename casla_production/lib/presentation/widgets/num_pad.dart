@@ -5,12 +5,14 @@ class NumPad extends StatelessWidget {
   final String value;
   final ValueChanged<String> onChanged;
   final List<int>? quickAdds;
+  final int decimalPlaces;
 
   const NumPad({
     super.key,
     required this.value,
     required this.onChanged,
     this.quickAdds = const [10, 50, 100],
+    this.decimalPlaces = 3,
   });
 
   void _onKeyPress(String key) {
@@ -20,9 +22,16 @@ class NumPad extends StatelessWidget {
       if (value.isNotEmpty) {
         onChanged(value.substring(0, value.length - 1));
       }
+    } else if (key == '.') {
+      if (decimalPlaces > 0 && !value.contains('.')) {
+        onChanged(value.isEmpty ? '0.' : '$value.');
+      }
     } else {
-      // Limit to 6 digits max
-      if (value.length < 6) {
+      // Keep manual entry bounded while still allowing fractional quantities
+      // such as 1.250 KG. The limit applies to digits, not the decimal point.
+      final digits = value.replaceAll('.', '');
+      final decimals = value.contains('.') ? value.split('.').last.length : 0;
+      if (digits.length < 6 && decimals < decimalPlaces) {
         if (value == '0') {
           onChanged(key);
         } else {
@@ -33,8 +42,12 @@ class NumPad extends StatelessWidget {
   }
 
   void _onQuickAdd(int add) {
-    final current = int.tryParse(value) ?? 0;
-    onChanged((current + add).toString());
+    final current = double.tryParse(value) ?? 0;
+    final sum = current + add;
+    final formatted = sum
+        .toStringAsFixed(decimalPlaces)
+        .replaceFirst(RegExp(r'\.?0+$'), '');
+    onChanged(formatted);
   }
 
   @override
@@ -43,7 +56,7 @@ class NumPad extends StatelessWidget {
       ['1', '2', '3'],
       ['4', '5', '6'],
       ['7', '8', '9'],
-      ['Xoá', '0', '⌫'],
+      ['.', '0', '⌫'],
     ];
 
     return Column(
@@ -98,12 +111,13 @@ class NumPad extends StatelessWidget {
             final row = index ~/ 3;
             final col = index % 3;
             final keyStr = keys[row][col];
-            final isOp = keyStr == 'Xoá' || keyStr == '⌫';
+            final isOp = keyStr == '.' || keyStr == '⌫';
 
             return Material(
               color: CaslaColors.surface,
               borderRadius: BorderRadius.circular(8),
               child: InkWell(
+                key: ValueKey('num-pad-key-$keyStr'),
                 onTap: () => _onKeyPress(keyStr),
                 borderRadius: BorderRadius.circular(8),
                 child: Container(

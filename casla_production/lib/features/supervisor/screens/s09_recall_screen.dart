@@ -11,7 +11,11 @@ import '../../../presentation/widgets/casla_empty_state.dart';
 import '../../../presentation/widgets/casla_skeleton.dart';
 import '../../../presentation/widgets/mutation_feedback.dart';
 import '../../../presentation/widgets/worker_verification_dialog.dart';
+<<<<<<< HEAD
 import '../../../domain/policies/production_math.dart';
+=======
+import '../../../core/sync/sync_failure.dart';
+>>>>>>> 5bd6656 (Refactor app architecture and update UI flows)
 
 class S09RecallScreen extends ConsumerStatefulWidget {
   final Assignment assignment;
@@ -97,11 +101,9 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
         actionLabel: 'gửi thu hồi lên SAP',
       );
       if (!mounted || workerPassword == null) return;
-      if (!appState.isSessionGenerationCurrent(generation) ||
-          appState.currentSession?.toIds.contains(widget.assignment.teamId) !=
-              true) {
+      if (!appState.isSessionGenerationCurrent(generation)) {
         throw Exception(
-          'Phiên hoặc quyền đã thay đổi. Vui lòng mở lại thao tác.',
+          'Phiên đăng nhập đã thay đổi. Vui lòng mở lại thao tác.',
         );
       }
       final receipt = await appState.recallRepo.recallAssignment(
@@ -120,15 +122,14 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
       showMutationFeedback(
         context,
         receipt: receipt,
-        successMessage: 'Đã thu hồi ${qty.toStringAsFixed(0)} cái.',
+        successMessage:
+            'Đã thu hồi ${qty.toStringAsFixed(2)} ${widget.assignment.uom}.',
       );
     } on Exception catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            e.toString().replaceFirst(RegExp(r'^Exception:\s*'), ''),
-          ),
+          content: Text(friendlySapErrorMessage(e)),
           backgroundColor: CaslaColors.danger,
         ),
       );
@@ -269,7 +270,8 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
                         }),
                         decoration: InputDecoration(
                           errorText: _quantityError,
-                          suffixText: '/ ${maxRecall.toStringAsFixed(0)} cái',
+                          suffixText:
+                              '/ ${maxRecall.toStringAsFixed(2)} ${widget.assignment.uom}',
                           suffixStyle: const TextStyle(
                             color: CaslaColors.muted,
                           ),

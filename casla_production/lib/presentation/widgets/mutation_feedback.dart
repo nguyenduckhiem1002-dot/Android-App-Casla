@@ -24,7 +24,7 @@ void showMutationFeedback(
     MutationDeliveryState.rejected => (
       receipt.code == 'WORKER_AUTH_FAILED'
           ? 'Mật khẩu công nhân chưa đúng. Giao dịch đã được giữ lại; mở Đồng bộ để xác minh lại.'
-          : 'Đã lưu trên thiết bị nhưng SAP từ chối: ${receipt.message ?? 'Cần kiểm tra lại dữ liệu.'}',
+          : 'SAP chưa chấp nhận giao dịch. Bản ghi cục bộ vẫn được giữ lại để kiểm tra: ${receipt.message ?? 'Cần kiểm tra lại dữ liệu.'}',
       CaslaColors.danger,
     ),
   };

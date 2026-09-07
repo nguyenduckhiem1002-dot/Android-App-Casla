@@ -279,6 +279,12 @@ const Map<String, String> _sapBusinessMessages = {
   'PASSWORD_CHANGE_REQUIRED': 'Tài khoản cần đổi mật khẩu trước khi tiếp tục.',
   'MISSING_PERMISSION': 'Tài khoản không có quyền thực hiện thao tác này.',
   'WORKER_AUTH_FAILED': 'Mật khẩu xác nhận của công nhân không đúng.',
+  'WORK_CONTEXT_NOT_ALLOWED':
+      'Tài khoản quản lý chưa được cấp quyền tại Plant/Work Center của công đoạn.',
+  'WORKER_NOT_ALLOWED':
+      'Công nhân không có hiệu lực tại Plant/Work Center hoặc ngày giao việc này trên SAP.',
+  'UNIT_OF_MEASURE_MISMATCH':
+      'Đơn vị số lượng không khớp với đơn vị của công đoạn trên SAP.',
   'SYNC_ITEM_REQUIRED': 'Thiếu mã đồng bộ trong yêu cầu (lỗi ứng dụng).',
   'BUSINESS_VALIDATION_FAILED':
       'SAP từ chối bản ghi do vi phạm quy tắc nghiệp vụ (số lượng, trạng thái...).',
@@ -306,6 +312,16 @@ const Map<String, String> _sapBusinessMessages = {
   'OPERATION_SNAPSHOT_UPDATE_FAILED':
       'Không cập nhật được snapshot công đoạn trên SAP.',
 };
+
+/// Converts known SAP business codes and local exceptions into safe UI text.
+/// Raw OData payloads, tokens and password values are never shown to users.
+String friendlySapErrorMessage(Object error) {
+  if (error is SapBusinessError) {
+    return _sapBusinessMessages[error.code] ??
+        'SAP từ chối yêu cầu (mã ${error.code}).';
+  }
+  return error.toString().replaceFirst(RegExp(r'^Exception:\s*'), '');
+}
 
 SyncFailure _classifySapBusinessError(SapBusinessError error) {
   if (_sapRefreshableAuthCodes.contains(error.code)) {

@@ -5,11 +5,13 @@ import 'package:intl/intl.dart';
 import '../../../app/theme/casla_colors.dart';
 import '../../../main.dart';
 import '../../../presentation/widgets/mutation_feedback.dart';
-import '../../../presentation/widgets/qr_scanner_view.dart';
+import '../../../presentation/widgets/adaptive_barcode_scanner_view.dart';
 import '../../../presentation/widgets/worker_verification_dialog.dart';
 
 import '../../../core/utils/worker_qr_parser.dart';
 import '../../../core/utils/operation_qr_parser.dart';
+import '../../../core/sync/sync_failure.dart';
+import '../../../domain/policies/work_context_resolver.dart';
 
 class S07CreateAssignmentWizardScreen extends ConsumerStatefulWidget {
   const S07CreateAssignmentWizardScreen({super.key});
@@ -28,6 +30,7 @@ class _S07CreateAssignmentWizardScreenState
   DateTime _startDate = DateTime.now();
   bool _isSubmitting = false;
   String? _quantityError;
+  String get _selectedUom => _selectedOrder?['uom']?.toString().trim() ?? '';
   bool _keepProductAfterSubmit = true;
 
   @override
@@ -46,7 +49,7 @@ class _S07CreateAssignmentWizardScreenState
       context,
       MaterialPageRoute(
         builder: (context) => Scaffold(
-          body: QrScannerView(
+          body: AdaptiveBarcodeScannerView(
             title: 'Quét mã QR công nhân',
             subtitle: 'Đưa thẻ nhân viên vào khung hình.',
             onManualInput: () => _showManualWorkerSelection(isFromCamera: true),
@@ -75,42 +78,9 @@ class _S07CreateAssignmentWizardScreenState
               final worker = await ref
                   .read(appStateProvider)
                   .db
-                  .getEmployeeByCode(res.maNv);
-              if (!mounted || !context.mounted) return;
-              if (worker == null) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text(
-                      'Nhân viên chưa tồn tại trong dữ liệu được phân quyền.',
-                    ),
-                    backgroundColor: CaslaColors.danger,
-                  ),
-                );
-                return;
-              }
-              final session = ref.read(appStateProvider).currentSession;
-              final isInScope = await ref
-                  .read(appStateProvider)
-                  .db
-                  .isEmployeeInScope(
-                    worker['id'] as String,
-                    session?.toIds ?? const [],
-                  );
-              if (!mounted || !context.mounted) return;
-              if (!isInScope) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text(
-                      'Nhân viên không thuộc phạm vi tổ được phân quyền.',
-                    ),
-                    backgroundColor: CaslaColors.danger,
-                  ),
-                );
-                return;
-              }
-              if (!mounted || !context.mounted) return;
-              await ref.read(appStateProvider).db.rememberEmployeeQrValidity(
-                    maNv: res.maNv,
+                  .acceptWorkerQr(
+                    code: res.maNv,
+                    name: res.name,
                     validFrom: res.validFrom,
                     validTo: res.validTo,
                   );
@@ -174,7 +144,7 @@ class _S07CreateAssignmentWizardScreenState
       context,
       MaterialPageRoute(
         builder: (context) => Scaffold(
-          body: QrScannerView(
+          body: AdaptiveBarcodeScannerView(
             title: 'Quét mã sản phẩm / NVL',
             subtitle:
                 'Đưa mã QR trên lô sản phẩm hoặc thẻ đơn hàng vào khung hình.',
@@ -182,25 +152,19 @@ class _S07CreateAssignmentWizardScreenState
             onScan: (code) async {
               final db = ref.read(appStateProvider).db;
               final operationQr = OperationQrParser.parse(code);
-              final order = operationQr.isValid
-                  ? await db.upsertOrderFromOperationQr(operationQr)
-                  : await db.getOrderByCode(code);
-              if (!context.mounted || !mounted) return;
-              if (order == null) {
-                // Check if it's a worker QR by mistake
-                final possibleWorker = await db.getEmployeeByCode(code);
-                if (!context.mounted || !mounted) return;
-                final msg = possibleWorker != null
-                    ? 'Mã QR này là của Nhân viên (${possibleWorker['ten']}), không phải mã Sản phẩm.'
-                    : 'Không tìm thấy sản phẩm có mã QR: $code';
+              if (!operationQr.isValid) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    content: Text(msg),
+                    content: Text(
+                      operationQr.error ?? 'Mã QR công đoạn không hợp lệ',
+                    ),
                     backgroundColor: CaslaColors.danger,
                   ),
                 );
                 return;
               }
+              final order = await db.upsertOrderFromOperationQr(operationQr);
+              if (!context.mounted || !mounted || order == null) return;
               Navigator.pop(context); // Pop camera page on success
               setState(() {
                 _selectedOrder = order;
@@ -288,24 +252,18 @@ class _S07CreateAssignmentWizardScreenState
 
     final workerId = _selectedWorker!['id'] as String;
     final orderId = _selectedOrder!['id'] as String;
-    final teamIds = (_selectedWorker!['to_ids'] as List?)?.cast<String>() ?? [];
-    final allowedTeams = emp?.toIds.toSet() ?? const <String>{};
-    String? toId;
-    for (final teamId in teamIds) {
-      if (allowedTeams.contains(teamId)) {
-        toId = teamId;
-        break;
-      }
-    }
-    if (toId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Công nhân không thuộc phạm vi tổ được phân quyền.'),
-          backgroundColor: CaslaColors.danger,
-        ),
-      );
-      return;
-    }
+    // `to_ids` on the worker is not the SAP authorization source. The QR may
+    // intentionally represent a worker unknown to this device. Keep a local
+    // context only when Plant + Work Center from the operation QR identify one
+    // exact manager context; SAP validates the actual write server-side.
+    final workContext = emp == null
+        ? null
+        : resolveWorkContext(
+            session: emp,
+            plant: _selectedOrder!['plant']?.toString() ?? '',
+            workCenter: _selectedOrder!['work_center']?.toString() ?? '',
+          );
+    final toId = workContext?.workId ?? '';
     final createdBy = emp?.maNv ?? '';
 
     final dateFormatted = DateFormat('yyyy-MM-dd').format(_startDate);
@@ -320,10 +278,9 @@ class _S07CreateAssignmentWizardScreenState
         actionLabel: 'gửi phân công lên SAP',
       );
       if (!mounted || workerPassword == null) return;
-      if (!appState.isSessionGenerationCurrent(generation) ||
-          appState.currentSession?.toIds.contains(toId) != true) {
+      if (!appState.isSessionGenerationCurrent(generation)) {
         throw Exception(
-          'Phiên hoặc quyền đã thay đổi. Vui lòng mở lại thao tác.',
+          'Phiên đăng nhập đã thay đổi. Vui lòng mở lại thao tác.',
         );
       }
       final receipt = await appState.assignmentRepo.createAssignment(
@@ -348,15 +305,13 @@ class _S07CreateAssignmentWizardScreenState
         context,
         receipt: receipt,
         successMessage:
-            'Đã giao ${qty.toStringAsFixed(0)} cái cho ${_selectedWorker!['ten']}.',
+            'Đã giao $qty $_selectedUom cho ${_selectedWorker!['ten']}.',
       );
     } on Exception catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            e.toString().replaceFirst(RegExp(r'^Exception:\s*'), ''),
-          ),
+          content: Text(friendlySapErrorMessage(e)),
           backgroundColor: CaslaColors.danger,
         ),
       );
@@ -614,12 +569,30 @@ class _S07CreateAssignmentWizardScreenState
                     ),
                     decoration: InputDecoration(
                       errorText: _quantityError,
-                      suffixText: 'cái',
-                      suffixStyle: const TextStyle(
-                        fontSize: 13,
-                        color: CaslaColors.muted,
-                        fontWeight: FontWeight.w600,
-                      ),
+                      // suffixText fades out while an empty field is unfocused.
+                      // Keep the QR unit visible before the first keystroke.
+                      suffixIcon: _selectedUom.isEmpty
+                          ? null
+                          : Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                              ),
+                              child: Center(
+                                widthFactor: 1,
+                                heightFactor: 1,
+                                child: Text(
+                                  _selectedUom,
+                                  key: const ValueKey(
+                                    'assignment-quantity-unit',
+                                  ),
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    color: CaslaColors.muted,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ),
                     ),
                   ),
 

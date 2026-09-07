@@ -86,7 +86,14 @@ class _SupervisorShellState extends ConsumerState<SupervisorShell> {
       body: IndexedStack(
         index: selectedIndex,
         children: List<Widget>.generate(tabs.length, (index) {
-          if (!_visitedTabIndices.contains(index)) return const SizedBox.shrink();
+          if (!_visitedTabIndices.contains(index)) {
+            return const SizedBox.shrink();
+          }
+          // An offstage hardware scanner must not consume another tab's scans.
+          if (index != selectedIndex &&
+              tabs[index].screen is S10ConfirmScanScreen) {
+            return const SizedBox.shrink();
+          }
           return TickerMode(
             enabled: index == selectedIndex,
             child: tabs[index].screen,

@@ -11,6 +11,7 @@ class OperationQrResult {
   final String productCode;
   final String productName;
   final String workCenter;
+  final String plant;
   final String workCenterDescription;
   final String orderCode;
   final double? operationQuantity;
@@ -25,6 +26,7 @@ class OperationQrResult {
     required this.productCode,
     required this.productName,
     required this.workCenter,
+    required this.plant,
     required this.workCenterDescription,
     required this.orderCode,
     required this.operationQuantity,
@@ -32,7 +34,10 @@ class OperationQrResult {
     this.error,
   });
 
-  factory OperationQrResult.invalid(String rawPayload, [String message = 'Mã QR công đoạn không hợp lệ']) {
+  factory OperationQrResult.invalid(
+    String rawPayload, [
+    String message = 'Mã QR công đoạn không hợp lệ',
+  ]) {
     return OperationQrResult(
       isValid: false,
       rawPayload: rawPayload,
@@ -41,6 +46,7 @@ class OperationQrResult {
       productCode: '',
       productName: '',
       workCenter: '',
+      plant: '',
       workCenterDescription: '',
       orderCode: '',
       operationQuantity: null,
@@ -90,11 +96,11 @@ class OperationQrParser {
     // A bare production-order/operation pair is accepted only when it is
     // explicitly delimited; never guess from an arbitrary product name.
     final parts = input.split(RegExp(r'\s*[|;/]\s*'));
-    final looksLikeProductionOrder = RegExp(r'^\d{8,12}$').hasMatch(parts[0].trim());
-    final looksLikeOperation = RegExp(r'^\d{4}$').hasMatch(parts[1].trim());
-    if (parts.length >= 2 &&
-        looksLikeProductionOrder &&
-        looksLikeOperation) {
+    final looksLikeProductionOrder =
+        parts.isNotEmpty && RegExp(r'^\d{8,12}$').hasMatch(parts[0].trim());
+    final looksLikeOperation =
+        parts.length > 1 && RegExp(r'^\d{4}$').hasMatch(parts[1].trim());
+    if (parts.length >= 2 && looksLikeProductionOrder && looksLikeOperation) {
       return OperationQrResult(
         isValid: true,
         rawPayload: input,
@@ -103,6 +109,7 @@ class OperationQrParser {
         productCode: parts.length > 2 ? parts[2].trim() : '',
         productName: parts.length > 3 ? parts[3].trim() : '',
         workCenter: '',
+        plant: '',
         workCenterDescription: '',
         orderCode: '',
         operationQuantity: null,
@@ -167,6 +174,12 @@ class OperationQrParser {
         'workcenterid',
         'mawc',
       ]),
+      plant: _firstValue(normalized, const [
+        'plant',
+        'plantcode',
+        'werks',
+        'nhamay',
+      ]),
       workCenterDescription: _firstValue(normalized, const [
         'workcenterdescription',
         'workcentername',
@@ -189,17 +202,72 @@ class OperationQrParser {
   static String _normalizeKey(String key) {
     var value = key.toLowerCase();
     const accents = {
-      'á': 'a', 'à': 'a', 'ả': 'a', 'ã': 'a', 'ạ': 'a', 'ă': 'a',
-      'ắ': 'a', 'ằ': 'a', 'ẳ': 'a', 'ẵ': 'a', 'ặ': 'a', 'â': 'a',
-      'ấ': 'a', 'ầ': 'a', 'ẩ': 'a', 'ẫ': 'a', 'ậ': 'a', 'đ': 'd',
-      'é': 'e', 'è': 'e', 'ẻ': 'e', 'ẽ': 'e', 'ẹ': 'e', 'ê': 'e',
-      'ế': 'e', 'ề': 'e', 'ể': 'e', 'ễ': 'e', 'ệ': 'e', 'í': 'i',
-      'ì': 'i', 'ỉ': 'i', 'ĩ': 'i', 'ị': 'i', 'ó': 'o', 'ò': 'o',
-      'ỏ': 'o', 'õ': 'o', 'ọ': 'o', 'ô': 'o', 'ố': 'o', 'ồ': 'o',
-      'ổ': 'o', 'ỗ': 'o', 'ộ': 'o', 'ơ': 'o', 'ớ': 'o', 'ờ': 'o',
-      'ở': 'o', 'ỡ': 'o', 'ợ': 'o', 'ú': 'u', 'ù': 'u', 'ủ': 'u',
-      'ũ': 'u', 'ụ': 'u', 'ư': 'u', 'ứ': 'u', 'ừ': 'u', 'ử': 'u',
-      'ữ': 'u', 'ự': 'u', 'ý': 'y', 'ỳ': 'y', 'ỷ': 'y', 'ỹ': 'y',
+      'á': 'a',
+      'à': 'a',
+      'ả': 'a',
+      'ã': 'a',
+      'ạ': 'a',
+      'ă': 'a',
+      'ắ': 'a',
+      'ằ': 'a',
+      'ẳ': 'a',
+      'ẵ': 'a',
+      'ặ': 'a',
+      'â': 'a',
+      'ấ': 'a',
+      'ầ': 'a',
+      'ẩ': 'a',
+      'ẫ': 'a',
+      'ậ': 'a',
+      'đ': 'd',
+      'é': 'e',
+      'è': 'e',
+      'ẻ': 'e',
+      'ẽ': 'e',
+      'ẹ': 'e',
+      'ê': 'e',
+      'ế': 'e',
+      'ề': 'e',
+      'ể': 'e',
+      'ễ': 'e',
+      'ệ': 'e',
+      'í': 'i',
+      'ì': 'i',
+      'ỉ': 'i',
+      'ĩ': 'i',
+      'ị': 'i',
+      'ó': 'o',
+      'ò': 'o',
+      'ỏ': 'o',
+      'õ': 'o',
+      'ọ': 'o',
+      'ô': 'o',
+      'ố': 'o',
+      'ồ': 'o',
+      'ổ': 'o',
+      'ỗ': 'o',
+      'ộ': 'o',
+      'ơ': 'o',
+      'ớ': 'o',
+      'ờ': 'o',
+      'ở': 'o',
+      'ỡ': 'o',
+      'ợ': 'o',
+      'ú': 'u',
+      'ù': 'u',
+      'ủ': 'u',
+      'ũ': 'u',
+      'ụ': 'u',
+      'ư': 'u',
+      'ứ': 'u',
+      'ừ': 'u',
+      'ử': 'u',
+      'ữ': 'u',
+      'ự': 'u',
+      'ý': 'y',
+      'ỳ': 'y',
+      'ỷ': 'y',
+      'ỹ': 'y',
       'ỵ': 'y',
     };
     for (final entry in accents.entries) {

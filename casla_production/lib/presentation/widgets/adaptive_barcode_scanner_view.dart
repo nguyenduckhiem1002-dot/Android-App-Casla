@@ -118,6 +118,8 @@ class _AdaptiveBarcodeScannerViewState extends State<AdaptiveBarcodeScannerView>
         _forceCamera ||
         !_isRouteVisible ||
         !mounted ||
+        !TickerMode.valuesOf(context).enabled ||
+        !(_route?.isCurrent ?? true) ||
         _isHandlingScan) {
       return;
     }
