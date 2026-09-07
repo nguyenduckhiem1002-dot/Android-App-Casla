@@ -29,20 +29,23 @@ void main() {
     CaslaDatabase.resetForTesting();
     db = CaslaDatabase.instance;
     final gateway = NoopSapGateway();
-    final verifiedSync = VerifiedSyncCoordinator(
-      database: db,
-      gateway: gateway,
-    );
+    final successfulMutationGateway = _SuccessfulGateway();
     assignmentRepo = AssignmentRepositoryImpl(db, gateway: gateway);
     productionRepo = ProductionRepositoryImpl(
       db,
-      gateway: gateway,
-      verifiedSync: verifiedSync,
+      gateway: successfulMutationGateway,
+      verifiedSync: VerifiedSyncCoordinator(
+        database: db,
+        gateway: successfulMutationGateway,
+      ),
     );
     recallRepo = RecallRepositoryImpl(
       db,
-      gateway: gateway,
-      verifiedSync: verifiedSync,
+      gateway: successfulMutationGateway,
+      verifiedSync: VerifiedSyncCoordinator(
+        database: db,
+        gateway: successfulMutationGateway,
+      ),
     );
   });
 
@@ -465,6 +468,15 @@ class _PasswordGateway implements SapWriteGateway {
     entityTypes.add(request.entityType);
     return SapWriteResult(sapId: 'sap-${request.entityId}');
   }
+
+  @override
+  Future<bool> refreshSession() async => false;
+}
+
+class _SuccessfulGateway implements SapWriteGateway {
+  @override
+  Future<SapWriteResult> push(SyncPushRequest request) async =>
+      SapWriteResult(sapId: 'sap-${request.entityId}');
 
   @override
   Future<bool> refreshSession() async => false;

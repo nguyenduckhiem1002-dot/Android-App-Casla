@@ -208,6 +208,31 @@ void main() {
     expect(markedSource!['sync_status'], 'FAILED');
   });
 
+  test('a rejected completion reopens a locally completed assignment', () async {
+    final queueItem = await queueProduction();
+    final completedBefore = await db.getCompletedQuantity('asg-001');
+    await db.updateAssignmentStatus('asg-001', 'COMPLETED', 'PENDING');
+    final source = await db.getSyncSourceRow(
+      'PRODUCTION_RECORD',
+      'prod-push-test',
+    );
+
+    await pushAndRecord(
+      database: db,
+      gateway: _FakeGateway(onPush: (_) => throw Exception('SAP từ chối')),
+      backoff: SyncBackoff(),
+      queueItem: queueItem,
+      source: source!,
+    );
+
+    final assignment = await db.getAssignmentById('asg-001');
+    expect(assignment!['status'], 'OPEN');
+    expect(
+      await db.getCompletedQuantity('asg-001'),
+      completedBefore - 5,
+    );
+  });
+
   test(
     'the worker password is forwarded to the gateway, never persisted',
     () async {

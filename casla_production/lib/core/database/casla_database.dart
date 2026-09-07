@@ -1233,10 +1233,14 @@ class CaslaDatabase {
                  -- the column `a.*` already supplies.
                  COALESCE(NULLIF(a.unit_of_measure, ''), o.uom) AS display_uom,
                  (SELECT COALESCE(SUM(p.quantity), 0)
-                  FROM production_records p WHERE p.phan_cong_id = a.id)
+                  FROM production_records p
+                  WHERE p.phan_cong_id = a.id
+                    AND COALESCE(p.sync_status, 'PENDING') != 'FAILED')
                     AS completed_quantity,
                  (SELECT COALESCE(SUM(r.quantity), 0)
-                  FROM recall_records r WHERE r.phan_cong_id = a.id)
+                  FROM recall_records r
+                  WHERE r.phan_cong_id = a.id
+                    AND COALESCE(r.sync_status, 'PENDING') != 'FAILED')
                     AS recalled_quantity
           FROM assignments a
           LEFT JOIN employees e ON e.id = a.nhan_vien_id
@@ -1351,12 +1355,14 @@ class CaslaDatabase {
 
       final completedRows = await txn.rawQuery(
         'SELECT COALESCE(SUM(quantity), 0) AS total '
-        'FROM production_records WHERE phan_cong_id = ?',
+        'FROM production_records WHERE phan_cong_id = ? '
+        "AND COALESCE(sync_status, '') != 'FAILED'",
         [assignmentId],
       );
       final recalledRows = await txn.rawQuery(
         'SELECT COALESCE(SUM(quantity), 0) AS total '
-        'FROM recall_records WHERE phan_cong_id = ?',
+        'FROM recall_records WHERE phan_cong_id = ? '
+        "AND COALESCE(sync_status, '') != 'FAILED'",
         [assignmentId],
       );
       final assigned = _toDouble(assignment['assigned_quantity']);
@@ -1437,7 +1443,8 @@ class CaslaDatabase {
     final db = await _database;
     final rows = await db.rawQuery(
       'SELECT COALESCE(SUM(quantity), 0) AS total '
-      'FROM production_records WHERE phan_cong_id = ?',
+      "FROM production_records WHERE phan_cong_id = ? "
+      "AND COALESCE(sync_status, 'PENDING') != 'FAILED'",
       [assignmentId],
     );
     return _toDouble(rows.first['total']);
@@ -1456,7 +1463,8 @@ class CaslaDatabase {
     final db = await _database;
     final rows = await db.rawQuery(
       'SELECT phan_cong_id, SUM(quantity) AS total '
-      'FROM $table GROUP BY phan_cong_id',
+      "FROM $table WHERE COALESCE(sync_status, 'PENDING') != 'FAILED' "
+      'GROUP BY phan_cong_id',
     );
     return {
       for (final row in rows)
@@ -1470,7 +1478,8 @@ class CaslaDatabase {
       'SELECT COALESCE(SUM(p.quantity), 0) AS total '
       'FROM production_records p '
       'JOIN assignments a ON a.id = p.phan_cong_id '
-      'WHERE a.nhan_vien_id = ? AND p.business_date = ?',
+      "WHERE a.nhan_vien_id = ? AND p.business_date = ? "
+      "AND COALESCE(p.sync_status, 'PENDING') != 'FAILED'",
       [workerId, businessDate],
     );
     return _toDouble(rows.first['total']);
@@ -1595,12 +1604,14 @@ class CaslaDatabase {
 
       final completedRows = await txn.rawQuery(
         'SELECT COALESCE(SUM(quantity), 0) AS total '
-        'FROM production_records WHERE phan_cong_id = ?',
+        "FROM production_records WHERE phan_cong_id = ? "
+        "AND COALESCE(sync_status, 'PENDING') != 'FAILED'",
         [assignmentId],
       );
       final recalledRows = await txn.rawQuery(
         'SELECT COALESCE(SUM(quantity), 0) AS total '
-        'FROM recall_records WHERE phan_cong_id = ?',
+        "FROM recall_records WHERE phan_cong_id = ? "
+        "AND COALESCE(sync_status, 'PENDING') != 'FAILED'",
         [assignmentId],
       );
       final assigned = _toDouble(assignment['assigned_quantity']);
@@ -1636,7 +1647,8 @@ class CaslaDatabase {
     final db = await _database;
     final rows = await db.rawQuery(
       'SELECT COALESCE(SUM(quantity), 0) AS total '
-      'FROM recall_records WHERE phan_cong_id = ?',
+      "FROM recall_records WHERE phan_cong_id = ? "
+      "AND COALESCE(sync_status, 'PENDING') != 'FAILED'",
       [assignmentId],
     );
     return _toDouble(rows.first['total']);
@@ -2212,6 +2224,13 @@ class CaslaDatabase {
           whereArgs: [queueItem['entity_id']],
         );
       }
+      if (status == 'FAILED' && table != null && table != 'assignments') {
+        await _restoreAssignmentStatusAfterRejectedTransaction(
+          txn,
+          entityType: queueItem['entity_type'] as String,
+          entityId: queueItem['entity_id'] as String,
+        );
+      }
       changed = true;
     });
     if (!changed) return;
@@ -2219,6 +2238,68 @@ class CaslaDatabase {
     _notifyAssignments();
     _notifyProduction();
     _notifyRecalls();
+  }
+
+  /// A local write is optimistic so the UI can work offline. If SAP
+  /// permanently rejects that write, its quantity must stop contributing to
+  /// the assignment balance and a locally completed assignment must reopen.
+  /// The rejected row stays in the database for audit and troubleshooting.
+  Future<void> _restoreAssignmentStatusAfterRejectedTransaction(
+    Transaction txn, {
+    required String entityType,
+    required String entityId,
+  }) async {
+    final table = _entitySourceTables[entityType];
+    if (table == null || table == 'assignments') return;
+
+    final sourceRows = await txn.query(
+      table,
+      columns: ['phan_cong_id'],
+      where: 'id = ?',
+      whereArgs: [entityId],
+      limit: 1,
+    );
+    if (sourceRows.isEmpty) return;
+    final assignmentId = sourceRows.single['phan_cong_id']?.toString();
+    if (assignmentId == null || assignmentId.isEmpty) return;
+
+    final assignmentRows = await txn.query(
+      'assignments',
+      columns: ['assigned_quantity'],
+      where: 'id = ?',
+      whereArgs: [assignmentId],
+      limit: 1,
+    );
+    if (assignmentRows.isEmpty) return;
+    final assigned = _toDouble(assignmentRows.single['assigned_quantity']);
+
+    final completedRows = await txn.rawQuery(
+      "SELECT COALESCE(SUM(quantity), 0) AS total "
+      "FROM production_records WHERE phan_cong_id = ? "
+      "AND COALESCE(sync_status, 'PENDING') != 'FAILED'",
+      [assignmentId],
+    );
+    final recalledRows = await txn.rawQuery(
+      "SELECT COALESCE(SUM(quantity), 0) AS total "
+      "FROM recall_records WHERE phan_cong_id = ? "
+      "AND COALESCE(sync_status, 'PENDING') != 'FAILED'",
+      [assignmentId],
+    );
+    final completed = _toDouble(completedRows.single['total']);
+    final recalled = _toDouble(recalledRows.single['total']);
+    final remaining = assigned - completed - recalled;
+    final nextStatus = remaining <= 0.0001
+        ? completed >= assigned - 0.0001
+              ? 'COMPLETED'
+              : 'RECALLED'
+        : 'OPEN';
+
+    await txn.update(
+      'assignments',
+      {'status': nextStatus},
+      where: 'id = ?',
+      whereArgs: [assignmentId],
+    );
   }
 
   /// Removes a confirmed queue item and stamps its source row as SYNCED.

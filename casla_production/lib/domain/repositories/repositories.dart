@@ -34,7 +34,6 @@ abstract class AssignmentRepository {
 
   Stream<List<Assignment>> watchWorkerAssignments(String workerId);
   Stream<List<Assignment>> watchAssignmentsByTeams(List<String> teamIds);
-  Stream<List<Assignment>> watchAllAssignments();
   Stream<Assignment?> watchAssignment(String id);
   Future<Assignment?> getAssignmentById(String id);
 }
@@ -53,9 +52,7 @@ abstract class ProductionRepository {
     String? workerPassword,
   });
 
-  Stream<List<ProductionRecord>> watchRecordsByAssignment(String assignmentId);
   Future<double> getCompletedQuantity(String assignmentId);
-  Future<double> getTodayCompleted(String workerId, String businessDate);
 }
 
 /// Recall operations

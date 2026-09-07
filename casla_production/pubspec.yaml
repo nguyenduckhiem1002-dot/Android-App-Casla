@@ -65,7 +65,8 @@ flutter_launcher_icons:
 flutter:
   uses-material-design: true
   assets:
-    - assets/images/
+    - assets/images/logo.svg
+    - assets/images/logo_white.svg
 
 
 #   fonts:

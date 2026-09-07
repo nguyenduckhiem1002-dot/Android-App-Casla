@@ -65,7 +65,9 @@ void main() {
     final reopened = CaslaDatabase.instance;
     expect(identical(reopened, first), isFalse);
 
-    expect(await reopened.getCompletedQuantity('asg-001'), 466.0);
+    // A permanent SAP rejection remains auditable on disk, but must not count
+    // toward the assignment's usable completion balance.
+    expect(await reopened.getCompletedQuantity('asg-001'), 436.0);
 
     final queueAfter = await reopened.watchSyncQueue().first;
     final itemAfter = queueAfter.firstWhere(

@@ -5,6 +5,8 @@
 // version, seed it the way that version's app would have, then walk it forward
 // with `migrate` and assert nothing already on disk was lost.
 
+import 'dart:io';
+
 import 'package:casla_production/core/database/casla_schema.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -206,6 +208,141 @@ void main() {
 
     await db.close();
   });
+
+  test(
+    'v5 -> v6 preserves an already frozen unit and repairs work context',
+    () async {
+      final db = await openDatabase(
+        inMemoryDatabasePath,
+        version: 5,
+        onCreate: (db, _) async {
+          await db.execute('CREATE TABLE orders (id TEXT, uom TEXT)');
+          await db.execute(
+            'CREATE TABLE assignments '
+            '(id TEXT, don_hang_id TEXT, unit_of_measure TEXT)',
+          );
+          for (final table in ['production_records', 'recall_records']) {
+            await db.execute(
+              'CREATE TABLE $table '
+              '(id TEXT, phan_cong_id TEXT, unit_of_measure TEXT)',
+            );
+          }
+        },
+      );
+      addTearDown(db.close);
+      await db.insert('orders', {'id': 'order-1', 'uom': 'ST'});
+      await db.insert('assignments', {
+        'id': 'assignment-1',
+        'don_hang_id': 'order-1',
+        'unit_of_measure': 'KG',
+      });
+
+      await migrate(db, 5, 6);
+
+      expect((await db.query('assignments')).single['unit_of_measure'], 'KG');
+      final orderColumns = (await db.rawQuery(
+        'PRAGMA table_info(orders)',
+      )).map((column) => column['name']);
+      expect(orderColumns, containsAll(['plant', 'work_center']));
+    },
+  );
+
+  for (final oldVersion in [5, 6]) {
+    test(
+      'v$oldVersion upgrades on reopen and preserves parent and child units',
+      () async {
+        final directory = await Directory.systemTemp.createTemp(
+          'casla-migration-',
+        );
+        addTearDown(() => directory.delete(recursive: true));
+        final path = '${directory.path}/upgrade.db';
+        final old = await openDatabase(
+          path,
+          version: oldVersion,
+          onCreate: (db, _) async {
+            await createSchema(db);
+            await db.execute('ALTER TABLE orders DROP COLUMN plant');
+            await db.execute('ALTER TABLE orders DROP COLUMN work_center');
+          },
+        );
+        await old.insert('orders', {
+          'id': 'order',
+          'ma_don_hang': 'order',
+          'ten_sp': 'Product',
+          'so_luong_don': 10.0,
+          'trang_thai': 'OPEN',
+          'uom': 'ST',
+        });
+        await old.insert('assignments', {
+          'id': 'parent',
+          'don_hang_id': 'order',
+          'nhan_vien_id': 'worker',
+          'to_id': 'team',
+          'assigned_quantity': 10.0,
+          'unit_of_measure': 'KG',
+          'business_date': '2026-09-07',
+          'shift_id': 'SHIFT_1',
+          'status': 'OPEN',
+          'created_by': 'manager',
+          'occurred_at_utc': 1,
+          'device_id': 'test',
+          'sync_status': 'PENDING',
+          'idempotency_key': 'parent',
+          'created_at_utc': 1,
+        });
+        for (final table in ['production_records', 'recall_records']) {
+          for (final unit in <String?>[null, '', 'KG', 'ST']) {
+            final id = '$table-$unit';
+            await old.insert(table, {
+              'id': id,
+              'phan_cong_id': 'parent',
+              'quantity': 0.1,
+              'unit_of_measure': unit,
+              'business_date': '2026-09-07',
+              'shift_id': 'SHIFT_1',
+              if (table == 'recall_records') 'reason_code': 'PLAN_CHANGE',
+              'created_by': 'manager',
+              'occurred_at_utc': 1,
+              'device_id': 'test',
+              'sync_status': 'PENDING',
+              'idempotency_key': id,
+              'created_at_utc': 1,
+            });
+          }
+        }
+        await old.close();
+        final upgraded = await openDatabase(
+          path,
+          version: schemaVersion,
+          onUpgrade: migrate,
+        );
+        addTearDown(upgraded.close);
+        expect(await upgraded.getVersion(), greaterThan(oldVersion));
+        expect(
+          (await upgraded.rawQuery(
+            'PRAGMA table_info(orders)',
+          )).map((c) => c['name']),
+          containsAll(['plant', 'work_center']),
+        );
+        expect(
+          (await upgraded.query('assignments')).single['unit_of_measure'],
+          'KG',
+        );
+        for (final table in ['production_records', 'recall_records']) {
+          final rows = await upgraded.query(table, orderBy: 'id');
+          expect(rows, hasLength(4));
+          for (final row in rows) {
+            expect(
+              row['unit_of_measure'],
+              row['id'] == '$table-ST' ? 'ST' : 'KG',
+            );
+            expect(row['idempotency_key'], row['id']);
+            expect(row['quantity'], 0.1);
+          }
+        }
+      },
+    );
+  }
 
   for (final preexisting in [false, true]) {
     test(

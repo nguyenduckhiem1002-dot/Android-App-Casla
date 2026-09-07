@@ -428,13 +428,6 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
   }
 
   @override
-  Stream<List<Assignment>> watchAllAssignments() {
-    return db.watchAllAssignments().asyncMap((entities) async {
-      return _mapToAssignmentsBatch(entities);
-    });
-  }
-
-  @override
   Stream<Assignment?> watchAssignment(String id) {
     return db.watchAssignmentById(id).asyncMap((entity) async {
       if (entity == null) return null;
@@ -628,37 +621,8 @@ class ProductionRepositoryImpl implements ProductionRepository {
   }
 
   @override
-  Stream<List<ProductionRecord>> watchRecordsByAssignment(String assignmentId) {
-    return db
-        .watchRecordsByAssignment(assignmentId)
-        .map(
-          (list) => list
-              .map(
-                (r) => ProductionRecord(
-                  id: r['id'] as String,
-                  assignmentId: r['phan_cong_id'] as String,
-                  quantity: r['quantity'] as double,
-                  businessDate: r['business_date'] as String,
-                  shiftId: r['shift_id'] as String,
-                  note: r['note'] as String?,
-                  createdBy: r['created_by'] as String,
-                  occurredAtUtc: r['occurred_at_utc'] as int,
-                  deviceId: r['device_id'] as String,
-                  idempotencyKey: r['idempotency_key'] as String,
-                  syncStatus: SyncStatus.fromStorage(r['sync_status']),
-                ),
-              )
-              .toList(),
-        );
-  }
-
-  @override
   Future<double> getCompletedQuantity(String assignmentId) =>
       db.getCompletedQuantity(assignmentId);
-
-  @override
-  Future<double> getTodayCompleted(String workerId, String businessDate) =>
-      db.getTodayCompleted(workerId, businessDate);
 }
 
 // ─── Recall Repository ──────────────────────────────────────────────

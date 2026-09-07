@@ -9,7 +9,7 @@
 import 'package:sqflite/sqflite.dart';
 
 /// Bump on every schema change and add the matching step to [migrate].
-const int schemaVersion = 6;
+const int schemaVersion = 7;
 
 /// Tables holding transactions that must survive a restart until SAP confirms
 /// them. The retention policy in Spec 4.7 forbids clearing these.
@@ -280,6 +280,7 @@ const Map<int, Future<void> Function(Database)> _migrations = {
   3: _upgradeV3ToV4,
   4: _upgradeV4ToV5,
   5: _upgradeV5ToV6,
+  6: _upgradeV6ToV7,
 };
 
 /// v2 — SAP live keys on `orders`.
@@ -365,6 +366,20 @@ Future<void> _upgradeV3ToV4(Database db) async {
 /// best available answer for history — it is exactly what the old code would
 /// have sent — and it is applied once, now, rather than re-read on every push.
 Future<void> _upgradeV5ToV6(Database db) async {
+  await _repairTransactionUnits(db);
+}
+
+/// Re-run the idempotent repair for devices that already installed v6.
+/// Existing nonempty units and idempotency keys must remain unchanged.
+Future<void> _upgradeV6ToV7(Database db) async {
+  await _repairTransactionUnits(db);
+}
+
+Future<void> _repairTransactionUnits(Database db) async {
+  // A short-lived v5 branch added transaction units before the work-context
+  // columns were merged. Repair both halves here so those devices converge on
+  // the current schema when they jump straight to v6.
+  await _addColumns(db, 'orders', const ['plant', 'work_center']);
   for (final table in const [
     'assignments',
     'production_records',
@@ -373,17 +388,23 @@ Future<void> _upgradeV5ToV6(Database db) async {
     await _addColumns(db, table, const ['unit_of_measure']);
   }
 
+  // Never overwrite a unit that was already frozen on a transaction. That
+  // value is part of the original SAP request; the order row may have been
+  // rescanned later with another UOM.
   await db.execute(
     'UPDATE assignments SET unit_of_measure = '
-    '(SELECT o.uom FROM orders o WHERE o.id = assignments.don_hang_id)',
+    '(SELECT o.uom FROM orders o WHERE o.id = assignments.don_hang_id) '
+    "WHERE unit_of_measure IS NULL OR TRIM(unit_of_measure) = ''",
   );
   for (final table in ['production_records', 'recall_records']) {
     await db.execute(
       'UPDATE $table SET unit_of_measure = ('
-      '  SELECT o.uom FROM assignments a'
-      '  JOIN orders o ON o.id = a.don_hang_id'
+      "  SELECT COALESCE(NULLIF(TRIM(a.unit_of_measure), ''), o.uom) "
+      '  FROM assignments a'
+      '  LEFT JOIN orders o ON o.id = a.don_hang_id'
       '  WHERE a.id = $table.phan_cong_id'
-      ')',
+      ') '
+      "WHERE unit_of_measure IS NULL OR TRIM(unit_of_measure) = ''",
     );
   }
 }
