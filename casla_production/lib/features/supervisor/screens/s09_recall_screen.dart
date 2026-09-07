@@ -11,11 +11,8 @@ import '../../../presentation/widgets/casla_empty_state.dart';
 import '../../../presentation/widgets/casla_skeleton.dart';
 import '../../../presentation/widgets/mutation_feedback.dart';
 import '../../../presentation/widgets/worker_verification_dialog.dart';
-<<<<<<< HEAD
-import '../../../domain/policies/production_math.dart';
-=======
 import '../../../core/sync/sync_failure.dart';
->>>>>>> 5bd6656 (Refactor app architecture and update UI flows)
+import '../../../domain/policies/production_math.dart';
 
 class S09RecallScreen extends ConsumerStatefulWidget {
   final Assignment assignment;

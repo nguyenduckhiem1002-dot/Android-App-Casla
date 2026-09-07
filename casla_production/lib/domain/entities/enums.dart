@@ -62,11 +62,12 @@ enum SyncStatus {
 }
 
 /// Vai trò người dùng (Spec 2)
+/// Chỉ hai vai trò này tồn tại: `parseAuthorization` suy ra vai trò từ FuncID
+/// SAP trả về, và nó chỉ có thể trả về `supervisor` (có `PP_INITIAL_ASSIGN`)
+/// hoặc `worker` (chỉ có quyền xem lịch sử).
 enum UserRole {
   worker,
-  supervisor,
-  inspector,
-  sapAdmin;
+  supervisor;
 
   String get label {
     switch (this) {
@@ -74,63 +75,34 @@ enum UserRole {
         return 'Công nhân';
       case UserRole.supervisor:
         return 'Supervisor';
-      case UserRole.inspector:
-        return 'Kiểm tra';
-      case UserRole.sapAdmin:
-        return 'Quản trị SAP';
     }
   }
 }
 
 /// Ma trận quyền chi tiết (Spec 2.1)
 ///
-/// Chỉ ba giá trị có [code] bắt đầu bằng `PP_` là FuncID có thật trong
-/// `ztb_mob_func` — SAP chỉ phát hành `PP_INITIAL_ASSIGN`, `PP_HIST_SELF` và
-/// `PP_HIST_TEAM`. Các [code] còn lại (`ASSIGN_QUANTITY`, `VIEW_SYNC_STATUS`,
-/// …) là từ vựng nội bộ của app từ bản spec cũ; backend không hề biết đến
-/// chúng, nên tuyệt đối không dùng để so khớp với FuncID SAP trả về —
-/// `AuthRepositoryImpl.parseAuthorization` suy ra chúng từ vai trò.
+/// Đây là các cổng chặn màn hình *nội bộ app*, không phải FuncID của SAP.
+/// SAP chỉ phát hành ba FuncID (`PP_INITIAL_ASSIGN`, `PP_HIST_SELF`,
+/// `PP_HIST_TEAM`); `AuthRepositoryImpl.parseAuthorization` đọc ba mã đó rồi
+/// suy ra tập quyền dưới đây từ vai trò. Trước kia enum này còn mang một
+/// getter `code` sinh ra các chuỗi kiểu `ASSIGN_QUANTITY` để so khớp với
+/// FuncID — chúng chưa bao giờ tồn tại trong `ztb_mob_func`, và việc so khớp
+/// đó chính là thứ đã xếp nhầm tài khoản quản lý thành công nhân. Getter đã
+/// bị bỏ để không ai vô tình dùng lại.
 enum Permission {
-  viewOwnProduction,
-  recordOwnProduction,
   assignQuantity,
   recallAssignment,
   viewTeamProduction,
   viewEmployeeHistory,
   viewSyncStatus,
   switchUser,
-  // Real FuncIDs from ZUI_PP_OPALLOC's getWorkHistory (zcl_pp_work_history) —
-  // a separate RBAC axis from the write permissions above. An account can
-  // hold either without the other: PP_HIST_SELF only ever returns that
-  // account's own rows (WorkerID sent from the app is ignored server-side),
-  // PP_HIST_TEAM returns whoever the account booked as a supervisor.
+  // Hai giá trị dưới đây ánh xạ 1-1 với PP_HIST_SELF / PP_HIST_TEAM trong
+  // `zcl_pp_work_history` — một trục RBAC riêng so với nhóm quyền ghi ở trên.
+  // Một tài khoản có thể có cái này mà không có cái kia: PP_HIST_SELF luôn chỉ
+  // trả về dòng của chính tài khoản đó (WorkerID app gửi lên bị bỏ qua),
+  // PP_HIST_TEAM trả về những người mà tài khoản đó đứng tên tổ trưởng.
   viewOwnProductionHistory,
-  viewTeamProductionHistory;
-
-  String get code {
-    switch (this) {
-      case Permission.viewOwnProduction:
-        return 'VIEW_OWN_PRODUCTION';
-      case Permission.recordOwnProduction:
-        return 'RECORD_OWN_PRODUCTION';
-      case Permission.assignQuantity:
-        return 'ASSIGN_QUANTITY';
-      case Permission.recallAssignment:
-        return 'RECALL_ASSIGNMENT';
-      case Permission.viewTeamProduction:
-        return 'VIEW_TEAM_PRODUCTION';
-      case Permission.viewEmployeeHistory:
-        return 'VIEW_EMPLOYEE_HISTORY';
-      case Permission.viewSyncStatus:
-        return 'VIEW_SYNC_STATUS';
-      case Permission.switchUser:
-        return 'SWITCH_USER';
-      case Permission.viewOwnProductionHistory:
-        return 'PP_HIST_SELF';
-      case Permission.viewTeamProductionHistory:
-        return 'PP_HIST_TEAM';
-    }
-  }
+  viewTeamProductionHistory,
 }
 
 /// Lý do thu hồi (Spec 5.3 S09)

@@ -135,11 +135,8 @@ void main() {
       expect(row['production_order'], '000010001234');
       expect(row['operation'], '0010');
       expect(row.containsKey('operation_qr_payload'), isTrue);
-<<<<<<< HEAD
-=======
       expect(row.containsKey('plant'), isTrue);
       expect(row.containsKey('work_center'), isTrue);
->>>>>>> 5bd6656 (Refactor app architecture and update UI flows)
 
       // The fresh-install schema is checked through an explicit table-info query
       // because this test database does not seed employees by default.
@@ -153,17 +150,16 @@ void main() {
     },
   );
 
-<<<<<<< HEAD
-  test('v4 -> v5 freezes the unit onto existing transactions', () async {
-    // A v4 device mid-shift: an assignment already queued under KG, and the
+  test('v5 -> v6 freezes the unit onto existing transactions', () async {
+    // A v5 device mid-shift: an assignment already queued under KG, and the
     // order row it points at. The migration has to answer "what unit was this
     // entered in" for rows that never recorded one.
     final db = await openDatabase(
       inMemoryDatabasePath,
-      version: 4,
+      version: 5,
       onCreate: (db, _) => createSchema(db),
     );
-    for (final statement in _transactionTablesV4) {
+    for (final statement in _transactionTablesV5) {
       await db.execute(statement);
     }
     await db.insert('orders', {
@@ -191,7 +187,7 @@ void main() {
       'created_at_utc': 1,
     });
 
-    await migrate(db, 4, 5);
+    await migrate(db, 5, 6);
 
     final assignment = (await db.query('assignments')).single;
     expect(assignment['assigned_quantity'], 12.5);
@@ -210,7 +206,7 @@ void main() {
 
     await db.close();
   });
-=======
+
   for (final preexisting in [false, true]) {
     test(
       'v3 -> v4 preserves QR data with preexisting columns: $preexisting',
@@ -273,14 +269,13 @@ void main() {
       await db.close();
     },
   );
->>>>>>> 5bd6656 (Refactor app architecture and update UI flows)
 }
 
-/// The three transaction tables exactly as `createSchema` shipped them at v4,
-/// before the v5 migration added `unit_of_measure`. Frozen copies on purpose —
+/// The three transaction tables exactly as `createSchema` shipped them at v5,
+/// before the v6 migration added `unit_of_measure`. Frozen copies on purpose —
 /// see [_ordersV1]. The test opens at the *current* schema (so the rest of the
 /// database is real) and then rolls just these three back to their v4 shape.
-const _transactionTablesV4 = [
+const _transactionTablesV5 = [
   'DROP TABLE production_records',
   'DROP TABLE recall_records',
   'DROP TABLE assignments',

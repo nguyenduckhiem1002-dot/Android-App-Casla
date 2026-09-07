@@ -296,8 +296,6 @@ class S13AccountScreen extends ConsumerWidget {
   }
 
   String _permissionLabel(Permission permission) => switch (permission) {
-    Permission.viewOwnProduction => 'Xem sản lượng cá nhân',
-    Permission.recordOwnProduction => 'Ghi sản lượng cá nhân',
     Permission.assignQuantity => 'Giao chỉ tiêu số lượng',
     Permission.recallAssignment => 'Thu hồi phân công',
     Permission.viewTeamProduction => 'Xem sản lượng tổ',
