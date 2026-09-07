@@ -15,11 +15,8 @@ import '../../../presentation/widgets/kpi_card.dart';
 import '../../../presentation/widgets/num_pad.dart';
 import '../../../presentation/widgets/ring_progress_card.dart';
 import '../../../presentation/widgets/status_chip.dart';
-<<<<<<< HEAD
-import '../../../domain/policies/production_math.dart';
-=======
 import '../../../core/sync/sync_failure.dart';
->>>>>>> 5bd6656 (Refactor app architecture and update UI flows)
+import '../../../domain/policies/production_math.dart';
 
 class S08AssignmentDetailScreen extends ConsumerStatefulWidget {
   final Assignment assignment;

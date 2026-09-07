@@ -9,7 +9,7 @@
 import 'package:sqflite/sqflite.dart';
 
 /// Bump on every schema change and add the matching step to [migrate].
-const int schemaVersion = 5;
+const int schemaVersion = 6;
 
 /// Tables holding transactions that must survive a restart until SAP confirms
 /// them. The retention policy in Spec 4.7 forbids clearing these.
@@ -279,6 +279,7 @@ const Map<int, Future<void> Function(Database)> _migrations = {
   2: _upgradeV2ToV3,
   3: _upgradeV3ToV4,
   4: _upgradeV4ToV5,
+  5: _upgradeV5ToV6,
 };
 
 /// v2 — SAP live keys on `orders`.
@@ -297,12 +298,27 @@ Future<void> _upgradeV1ToV2(Database db) async {
 /// These are hints for selecting the manager's existing Work Context; SAP
 /// remains authoritative when the mutation is submitted.
 Future<void> _upgradeV4ToV5(Database db) async {
-  final columns = (await db.rawQuery(
-    'PRAGMA table_info(orders)',
+  await _addColumns(db, 'orders', const ['plant', 'work_center']);
+}
+
+/// Adds any of [columns] that `table` does not already have.
+///
+/// `ALTER TABLE ... ADD COLUMN` throws on a duplicate, and two migrations were
+/// briefly both numbered v5 on master (one adding orders.plant/work_center, one
+/// adding unit_of_measure to the transaction tables). A device that opened the
+/// app while that was true may hold either half. Checking first lets every
+/// device converge on the same schema no matter which half it already ran.
+Future<void> _addColumns(
+  Database db,
+  String table,
+  List<String> columns,
+) async {
+  final existing = (await db.rawQuery(
+    'PRAGMA table_info($table)',
   )).map((column) => column['name']).toSet();
-  for (final column in ['plant', 'work_center']) {
-    if (!columns.contains(column)) {
-      await db.execute('ALTER TABLE orders ADD COLUMN $column TEXT');
+  for (final column in columns) {
+    if (!existing.contains(column)) {
+      await db.execute('ALTER TABLE $table ADD COLUMN $column TEXT');
     }
   }
 }
@@ -336,7 +352,7 @@ Future<void> _upgradeV3ToV4(Database db) async {
   }
 }
 
-/// v5 — freeze the unit of measure onto each transaction.
+/// v6 — freeze the unit of measure onto each transaction.
 ///
 /// Until now the gateway read `orders.uom` when it built the payload. Scanning
 /// the same production order + operation again with a different unit rewrites
@@ -348,14 +364,14 @@ Future<void> _upgradeV3ToV4(Database db) async {
 /// Existing rows are backfilled from the order they belong to. That is the
 /// best available answer for history — it is exactly what the old code would
 /// have sent — and it is applied once, now, rather than re-read on every push.
-Future<void> _upgradeV4ToV5(Database db) async {
-  await db.execute('ALTER TABLE assignments ADD COLUMN unit_of_measure TEXT');
-  await db.execute(
-    'ALTER TABLE production_records ADD COLUMN unit_of_measure TEXT',
-  );
-  await db.execute(
-    'ALTER TABLE recall_records ADD COLUMN unit_of_measure TEXT',
-  );
+Future<void> _upgradeV5ToV6(Database db) async {
+  for (final table in const [
+    'assignments',
+    'production_records',
+    'recall_records',
+  ]) {
+    await _addColumns(db, table, const ['unit_of_measure']);
+  }
 
   await db.execute(
     'UPDATE assignments SET unit_of_measure = '
