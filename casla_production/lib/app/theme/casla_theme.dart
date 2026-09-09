@@ -22,6 +22,12 @@ class CaslaTheme {
         onSurface: CaslaColors.primaryNavy,
       ),
       scaffoldBackgroundColor: CaslaColors.background,
+      visualDensity: VisualDensity.standard,
+      materialTapTargetSize: MaterialTapTargetSize.padded,
+      snackBarTheme: SnackBarThemeData(
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
       appBarTheme: const AppBarTheme(
         backgroundColor: CaslaColors.primaryNavy,
         foregroundColor: Colors.white,
@@ -46,7 +52,9 @@ class CaslaTheme {
           foregroundColor: CaslaColors.navy900,
           elevation: 0,
           minimumSize: const Size(double.infinity, 52),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
           textStyle: const TextStyle(
             fontWeight: FontWeight.w700,
             fontSize: 15,
@@ -59,7 +67,9 @@ class CaslaTheme {
           foregroundColor: CaslaColors.primaryNavy,
           minimumSize: const Size(double.infinity, 50),
           side: const BorderSide(color: CaslaColors.primaryNavy, width: 1.5),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
           textStyle: const TextStyle(
             fontWeight: FontWeight.w700,
             fontSize: 15,
@@ -68,6 +78,9 @@ class CaslaTheme {
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
+        floatingLabelBehavior: FloatingLabelBehavior.always,
+        helperMaxLines: 3,
+        errorMaxLines: 3,
         filled: true,
         fillColor: CaslaColors.surface,
         hintStyle: const TextStyle(color: CaslaColors.muted, fontSize: 14),
@@ -101,6 +114,14 @@ class CaslaTheme {
         space: 1,
       ),
       bottomNavigationBarTheme: const BottomNavigationBarThemeData(
+        selectedLabelStyle: TextStyle(
+          fontWeight: FontWeight.w700,
+          fontSize: 12,
+        ),
+        unselectedLabelStyle: TextStyle(
+          fontWeight: FontWeight.w500,
+          fontSize: 12,
+        ),
         backgroundColor: CaslaColors.surface,
         selectedItemColor: CaslaColors.primaryNavy,
         unselectedItemColor: CaslaColors.muted,

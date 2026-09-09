@@ -7,6 +7,7 @@ import '../../../main.dart';
 import '../../../presentation/widgets/mutation_feedback.dart';
 import '../../../presentation/widgets/adaptive_barcode_scanner_view.dart';
 import '../../../presentation/widgets/worker_verification_dialog.dart';
+import '../../../presentation/widgets/active_shift_context_card.dart';
 
 import '../../../core/utils/worker_qr_parser.dart';
 import '../../../core/utils/operation_qr_parser.dart';
@@ -27,7 +28,6 @@ class _S07CreateAssignmentWizardScreenState
   Map<String, dynamic>? _selectedOrder;
   final TextEditingController _qtyController = TextEditingController();
   final TextEditingController _noteController = TextEditingController();
-  DateTime _startDate = DateTime.now();
   bool _isSubmitting = false;
   String? _quantityError;
   String get _selectedUom => _selectedOrder?['uom']?.toString().trim() ?? '';
@@ -176,6 +176,13 @@ class _S07CreateAssignmentWizardScreenState
     );
   }
 
+  void _showAssignmentError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: CaslaColors.danger),
+    );
+  }
+
   Future<void> _showManualOrderSelection({bool isFromCamera = false}) async {
     final db = ref.read(appStateProvider).db;
     final openOrders = await db.getOpenOrders();
@@ -256,17 +263,45 @@ class _S07CreateAssignmentWizardScreenState
     // intentionally represent a worker unknown to this device. Keep a local
     // context only when Plant + Work Center from the operation QR identify one
     // exact manager context; SAP validates the actual write server-side.
-    final workContext = emp == null
+    final scannedContext = emp == null
         ? null
         : resolveWorkContext(
             session: emp,
             plant: _selectedOrder!['plant']?.toString() ?? '',
             workCenter: _selectedOrder!['work_center']?.toString() ?? '',
           );
+    final activeShift = appState.activeShift;
+    final qrPlant = _selectedOrder!['plant']?.toString().trim() ?? '';
+    if (activeShift == null) {
+      _showAssignmentError('Chưa chọn ca làm việc.');
+      return;
+    }
+    if (qrPlant.isNotEmpty && activeShift.plant != qrPlant) {
+      _showAssignmentError(
+        'Ca đang chọn thuộc nhà máy ${activeShift.plant}, '
+        'nhưng mã công đoạn thuộc nhà máy $qrPlant. Hãy đổi ca đúng nhà máy.',
+      );
+      return;
+    }
+    if (scannedContext != null &&
+        appState.activeWorkContext?.workId != scannedContext.workId) {
+      _showAssignmentError(
+        'Mã công đoạn thuộc Work Center ${scannedContext.workCenter}. '
+        'Hãy đổi phạm vi làm việc trước khi giao.',
+      );
+      return;
+    }
+    // Setup is the manager's selected scope. A QR without Plant/WorkCenter
+    // uses that scope; a QR carrying both keeps the exact SAP-matched context.
+    final workContext = scannedContext ?? appState.activeWorkContext;
     final toId = workContext?.workId ?? '';
     final createdBy = emp?.maNv ?? '';
 
-    final dateFormatted = DateFormat('yyyy-MM-dd').format(_startDate);
+    // The selected shift setup is the sole source of the operation's business
+    // date. SAP verifies it against ExecutedAt, including the overnight shift.
+    final dateFormatted = DateFormat(
+      'yyyy-MM-dd',
+    ).format(appState.activeBusinessDate);
     final generation = appState.sessionGeneration;
     setState(() => _isSubmitting = true);
 
@@ -292,7 +327,9 @@ class _S07CreateAssignmentWizardScreenState
         // Legacy field required by the current repository/SAP payload. Shift
         // selection is no longer part of the assignment workflow; keep the
         // previously used value until the backend contract makes it optional.
-        shiftId: 'SHIFT_1',
+        shiftId:
+            ref.read(appStateProvider).activeShift?.shiftId ??
+            (throw StateError('Chưa chọn ca làm việc.')),
         note: _noteController.text.trim().isEmpty
             ? null
             : _noteController.text.trim(),
@@ -347,6 +384,8 @@ class _S07CreateAssignmentWizardScreenState
 
   @override
   Widget build(BuildContext context) {
+    final appState = ref.watch(appStateProvider);
+    final businessDate = appState.activeBusinessDate;
     final workerDisplayName = _selectedWorker != null
         ? (_selectedWorker!['display'] ??
               '${_selectedWorker!['ma_nv']} ( ${_selectedWorker!['ten']} )')
@@ -399,6 +438,15 @@ class _S07CreateAssignmentWizardScreenState
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  ActiveShiftContextCard(
+                    workContext: appState.activeWorkContext,
+                    shift: appState.activeShift,
+                    businessDate: businessDate,
+                    compact: true,
+                    onEdit: () =>
+                        context.push('/supervisor-setup', extra: true),
+                  ),
+                  const SizedBox(height: 18),
                   // 1. Sản phẩm (Quét mã QR) Field
                   RichText(
                     text: const TextSpan(
@@ -598,10 +646,11 @@ class _S07CreateAssignmentWizardScreenState
 
                   const SizedBox(height: 16),
 
-                  // 4. Ngày bắt đầu Field
+                  // 4. Ngày làm việc follows the active shift setup. SAP
+                  // verifies it against the actual occurrence timestamp.
                   RichText(
                     text: const TextSpan(
-                      text: 'Ngày bắt đầu ',
+                      text: 'Ngày làm việc ',
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
@@ -616,50 +665,27 @@ class _S07CreateAssignmentWizardScreenState
                     ),
                   ),
                   const SizedBox(height: 6),
-                  InkWell(
-                    onTap: () async {
-                      final now = DateTime.now();
-                      final picked = await showDatePicker(
-                        context: context,
-                        initialDate: _startDate,
-                        firstDate: DateTime(now.year - 2, 1, 1),
-                        lastDate: DateTime(now.year + 2, 12, 31),
-                      );
-                      if (picked != null) {
-                        setState(() {
-                          _startDate = picked;
-                        });
-                      }
-                    },
-                    borderRadius: BorderRadius.circular(8),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 13,
-                        vertical: 12,
-                      ),
-                      decoration: BoxDecoration(
-                        color: CaslaColors.surface,
-                        border: Border.all(color: CaslaColors.line, width: 1.5),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            DateFormat('dd/MM/yyyy').format(_startDate),
-                            style: const TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                              color: CaslaColors.primaryNavy,
-                            ),
-                          ),
-                          const Icon(
-                            Icons.calendar_today_outlined,
-                            size: 18,
+                  InputDecorator(
+                    decoration: const InputDecoration(
+                      helperText: 'Đổi ngày hoặc ca tại Cài đặt ca làm việc.',
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          DateFormat('dd/MM/yyyy').format(businessDate),
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
                             color: CaslaColors.primaryNavy,
                           ),
-                        ],
-                      ),
+                        ),
+                        const Icon(
+                          Icons.calendar_today_outlined,
+                          size: 18,
+                          color: CaslaColors.primaryNavy,
+                        ),
+                      ],
                     ),
                   ),
 

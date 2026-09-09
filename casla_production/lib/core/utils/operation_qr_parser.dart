@@ -151,6 +151,19 @@ class OperationQrParser {
       'slcongdoan',
       'soluongcongdoan',
     ]);
+    final explicitUnit = _firstValue(normalized, const [
+      'unit',
+      'unitofmeasure',
+      'uom',
+      'donvitinh',
+    ]);
+    // Printed legacy labels append the SAP unit to the formatted quantity.
+    // A separate field wins when present; keep supporting labels already printed.
+    final suffixUnit =
+        RegExp(
+          r'^\s*-?[\d.,]+\s+([^\s]+)\s*$',
+        ).firstMatch(quantityRaw)?.group(1) ??
+        '';
 
     return OperationQrResult(
       isValid: true,
@@ -191,11 +204,7 @@ class OperationQrParser {
         'donhang',
       ]),
       operationQuantity: _parseQuantity(quantityRaw),
-      unitOfMeasure: _firstValue(normalized, const [
-        'unitofmeasure',
-        'uom',
-        'donvitinh',
-      ]),
+      unitOfMeasure: explicitUnit.isNotEmpty ? explicitUnit : suffixUnit,
     );
   }
 

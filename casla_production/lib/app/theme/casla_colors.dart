@@ -48,5 +48,5 @@ class CaslaColors {
   // Banner
   static const Color bannerText = Color(0xFF6B5320);
 
-  static const Color navy100 = Color(0xFFE8EAF6);
+  static const Color navy100 = Color(0xFFEDF1F5);
 }

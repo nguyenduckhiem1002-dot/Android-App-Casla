@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 import 'package:logger/logger.dart';
 
 import '../../core/config/app_config.dart';
+import 'odata_error.dart';
 
 class SapConfigurationException implements Exception {
   final String message;
@@ -51,8 +52,8 @@ class SapODataClient {
         receiveTimeout: const Duration(seconds: 20),
         sendTimeout: const Duration(seconds: 20),
         headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
+          'Accept': 'application/json;IEEE754Compatible=true',
+          'Content-Type': 'application/json;IEEE754Compatible=true',
           ..._transportHeaders(),
         },
       ),
@@ -86,10 +87,14 @@ class SapODataClient {
           // or Dio's error message: each can contain credentials in legacy
           // OData calls. The path/status/type is enough for debug diagnosis.
           if (kDebugMode) {
+            final operation = safeOperationLabel(error.requestOptions.path);
+            final diagnostic = odataSafeDiagnostic(error);
             _logger.e(
               'SAP request failed: ${error.requestOptions.method} '
+              'operation=$operation '
               'status=${error.response?.statusCode ?? '-'} '
-              'type=${error.type.name}',
+              'type=${error.type.name}'
+              '${diagnostic == null ? '' : ' code=$diagnostic'}',
             );
           }
           handler.next(error);
@@ -105,7 +110,10 @@ class SapODataClient {
       dio.interceptors.add(
         InterceptorsWrapper(
           onRequest: (options, handler) {
-            _logger.d('SAP request: ${options.method}');
+            _logger.d(
+              'SAP request: ${options.method} '
+              'operation=${safeOperationLabel(options.path)}',
+            );
             handler.next(options);
           },
         ),
@@ -154,6 +162,22 @@ class SapODataClient {
       (match) => '${match.group(1)}=[REDACTED]',
     );
     return out;
+  }
+
+  /// Keeps only a bounded endpoint/action label. Query parameters are removed
+  /// before parsing so a legacy URL can never leak credentials into logs.
+  @visibleForTesting
+  static String safeOperationLabel(String path) {
+    final withoutQuery = path.split('?').first;
+    final lastSegment = withoutQuery
+        .split('/')
+        .where((segment) => segment.isNotEmpty)
+        .lastOrNull;
+    if (lastSegment == null) return 'request';
+    final action = lastSegment.split('.').last;
+    return RegExp(r'^[A-Za-z][A-Za-z0-9_]{0,79}$').hasMatch(action)
+        ? action
+        : 'request';
   }
 
   static String _normalizeBaseUrl(String value) {

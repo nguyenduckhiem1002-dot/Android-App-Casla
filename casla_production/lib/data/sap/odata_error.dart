@@ -11,7 +11,24 @@
 // code as the message (`report_failure(text: 'AUTH_FAILED')`), so extracting it
 // is how callers recover which specific rule rejected the request.
 
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
+
+Map<dynamic, dynamic>? _odataErrorEnvelope(DioException error) {
+  Object? data = error.response?.data;
+  if (data is String) {
+    final text = data.trim();
+    if (text.startsWith('{')) {
+      try {
+        data = jsonDecode(text);
+      } on FormatException {
+        return null;
+      }
+    }
+  }
+  return data is Map ? data : null;
+}
 
 /// Pulls the business error code/message out of an OData V4 error envelope.
 ///
@@ -20,8 +37,8 @@ import 'package:dio/dio.dart';
 /// anything that isn't this shape (a gateway timeout's HTML error page, a
 /// malformed body) rather than throwing.
 String? odataErrorMessage(DioException error) {
-  final data = error.response?.data;
-  if (data is! Map) return null;
+  final data = _odataErrorEnvelope(error);
+  if (data == null) return null;
 
   final errorNode = data['error'];
   if (errorNode is! Map) return null;
@@ -31,6 +48,69 @@ String? odataErrorMessage(DioException error) {
   if (message is Map) {
     final value = message['value'];
     if (value is String && value.trim().isNotEmpty) return value.trim();
+  }
+  return null;
+}
+
+String? _odataErrorCode(DioException error) {
+  final data = _odataErrorEnvelope(error);
+  final errorNode = data?['error'];
+  if (errorNode is! Map) return null;
+  final code = errorNode['code']?.toString().trim();
+  return code == null || code.isEmpty ? null : code;
+}
+
+Iterable<String> _errorTexts(Object? value) sync* {
+  if (value is String) {
+    yield value;
+  } else if (value is Map) {
+    for (final child in value.values) {
+      yield* _errorTexts(child);
+    }
+  } else if (value is Iterable) {
+    for (final child in value) {
+      yield* _errorTexts(child);
+    }
+  }
+}
+
+bool _isOutdatedShiftContract(DioException error) {
+  final data = _odataErrorEnvelope(error);
+  if (data == null) return false;
+  for (final text in _errorTexts(data['error'])) {
+    final normalized = text.toLowerCase();
+    final mentionsNewField =
+        normalized.contains('shiftid') || normalized.contains('executedat');
+    final rejectsField =
+        normalized.contains('does not exist') ||
+        normalized.contains('not found') ||
+        normalized.contains('not defined') ||
+        normalized.contains('not allowed') ||
+        normalized.contains('unknown') ||
+        normalized.contains('unexpected') ||
+        normalized.contains('invalid parameter') ||
+        normalized.contains('invalid property');
+    if (mentionsNewField && rejectsField) return true;
+  }
+  return false;
+}
+
+/// A bounded, secret-free diagnosis suitable for logs and support reports.
+/// Never returns the raw response message because Gateway errors may echo
+/// request values. Known business codes and technical OData codes are safe.
+String? odataSafeDiagnostic(DioException error) {
+  if (_isOutdatedShiftContract(error)) return 'SAP_SHIFT_CONTRACT_OUTDATED';
+
+  final message = odataErrorMessage(error);
+  if (message != null && RegExp(r'^[A-Z][A-Z0-9_]{2,80}$').hasMatch(message)) {
+    return message;
+  }
+
+  final code = _odataErrorCode(error);
+  if (code != null &&
+      code.length <= 120 &&
+      RegExp(r'^[A-Za-z0-9_./-]+$').hasMatch(code)) {
+    return code;
   }
   return null;
 }
@@ -55,7 +135,21 @@ class SapBusinessError implements Exception {
 /// response carries a recognizable business code, otherwise rethrows the
 /// original [DioException] untouched so generic classification still applies.
 Never rethrowAsBusinessError(DioException error) {
+  if (_isOutdatedShiftContract(error)) {
+    throw SapBusinessError(
+      'SAP_SHIFT_CONTRACT_OUTDATED',
+      httpStatus: error.response?.statusCode,
+    );
+  }
   final code = odataErrorMessage(error);
+  // This Gateway parser message is technical, not an ABAP business code.
+  // Keep diagnostics stable without showing raw server text as a worker error.
+  if (code == 'Error while parsing an XML stream') {
+    throw SapBusinessError(
+      'SAP_PAYLOAD_FORMAT_ERROR',
+      httpStatus: error.response?.statusCode,
+    );
+  }
   if (code != null) {
     throw SapBusinessError(code, httpStatus: error.response?.statusCode);
   }

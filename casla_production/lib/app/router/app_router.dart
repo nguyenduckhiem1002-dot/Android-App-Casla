@@ -10,6 +10,7 @@ import 'app_route_observer.dart';
 
 import '../../features/authentication/screens/s02b_account_login_screen.dart';
 import '../../features/account/screens/mandatory_password_change_screen.dart';
+import '../../features/account/screens/supervisor_shift_setup_screen.dart';
 import '../../features/shared/screens/supervisor_shell.dart';
 import '../../features/supervisor/screens/s06b_employee_daily_detail_screen.dart';
 import '../../features/supervisor/screens/s07_create_assignment_wizard_screen.dart';
@@ -18,6 +19,8 @@ import '../../features/supervisor/screens/s09_recall_screen.dart';
 import '../../features/supervisor/screens/s10_confirm_scan_screen.dart';
 import '../../features/sync/screens/s12_sync_screen.dart';
 import '../../features/shared/screens/worker_shell.dart';
+
+const _skipSupervisorSetupExtra = 'skip-supervisor-setup';
 
 final routerProvider = Provider<GoRouter>((ref) {
   // `refreshListenable` below re-evaluates redirects on session changes, so the
@@ -60,6 +63,23 @@ final routerProvider = Provider<GoRouter>((ref) {
           return isPasswordChangeRoute ? null : '/password-change-required';
         }
 
+        if (session.role == UserRole.supervisor &&
+            appState.needsSupervisorSetup &&
+            state.extra != _skipSupervisorSetupExtra) {
+          return state.matchedLocation == '/supervisor-setup'
+              ? null
+              : '/supervisor-setup';
+        }
+
+        // A configured supervisor may reopen this screen from Settings to
+        // change the active work context or shift. When setup was reached by
+        // the auth redirect, leave it as soon as the restored selection is
+        // valid; otherwise the app can remain stuck on this screen forever.
+        if (state.matchedLocation == '/supervisor-setup') {
+          if (state.extra == true) return null;
+          return appState.needsSupervisorSetup ? null : homeRoute;
+        }
+
         if (isPasswordChangeRoute) return homeRoute;
 
         if (isGoingToLogin) {
@@ -95,13 +115,20 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/login',
         builder: (context, state) {
-          final initialUsername = state.extra is String ? state.extra as String : null;
+          final initialUsername = state.extra is String
+              ? state.extra as String
+              : null;
           return S02bAccountLoginScreen(initialUsername: initialUsername);
         },
       ),
       GoRoute(
         path: '/password-change-required',
         builder: (context, state) => const MandatoryPasswordChangeScreen(),
+      ),
+      GoRoute(
+        path: '/supervisor-setup',
+        builder: (context, state) =>
+            SupervisorShiftSetupScreen(returnToPrevious: state.extra == true),
       ),
       GoRoute(
         path: '/supervisor',

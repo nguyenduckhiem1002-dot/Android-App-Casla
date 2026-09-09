@@ -28,7 +28,7 @@ void main() {
       cacheSubject: () => 'user-a:self',
       telemetry: telemetry,
       now: () => now,
-      loadRemote: ({required range, dateFrom, dateTo}) async {
+      loadRemote: ({required range, dateFrom, dateTo, shiftId}) async {
         calls++;
         return _result(workerName: 'Nguyễn Văn A');
       },
@@ -53,7 +53,7 @@ void main() {
       final repo = WorkHistoryRepositoryImpl(
         db,
         cacheSubject: () => 'worker-recovery',
-        loadRemote: ({required range, dateFrom, dateTo}) async {
+        loadRemote: ({required range, dateFrom, dateTo, shiftId}) async {
           if (shouldFail) throw Exception('offline');
           return _result(workerName: 'Cached worker');
         },
@@ -115,7 +115,7 @@ void main() {
       cacheSubject: () => 'user-a:self',
       freshFor: const Duration(minutes: 2),
       now: () => now,
-      loadRemote: ({required range, dateFrom, dateTo}) async {
+      loadRemote: ({required range, dateFrom, dateTo, shiftId}) async {
         calls++;
         if (calls == 2) await refreshGate.future;
         return _result(workerName: currentName);
@@ -148,7 +148,7 @@ void main() {
       db,
       cacheSubject: () => 'user-a:self',
       telemetry: telemetry,
-      loadRemote: ({required range, dateFrom, dateTo}) async {
+      loadRemote: ({required range, dateFrom, dateTo, shiftId}) async {
         throw Exception('offline');
       },
     );
@@ -173,7 +173,7 @@ void main() {
     final repo = WorkHistoryRepositoryImpl(
       db,
       cacheSubject: () => subject,
-      loadRemote: ({required range, dateFrom, dateTo}) async {
+      loadRemote: ({required range, dateFrom, dateTo, shiftId}) async {
         calls++;
         return _result(workerName: workerName);
       },
@@ -193,7 +193,7 @@ void main() {
     final repo = WorkHistoryRepositoryImpl(
       db,
       cacheSubject: () => 'user-a:team',
-      loadRemote: ({required range, dateFrom, dateTo}) async =>
+      loadRemote: ({required range, dateFrom, dateTo, shiftId}) async =>
           _result(workerId: 'MNV00123', workerName: 'Tên cập nhật'),
     );
 
@@ -208,7 +208,7 @@ void main() {
     final repo = WorkHistoryRepositoryImpl(
       db,
       cacheSubject: () => 'user-a:team',
-      loadRemote: ({required range, dateFrom, dateTo}) async =>
+      loadRemote: ({required range, dateFrom, dateTo, shiftId}) async =>
           _result(workerId: 'MNV00999', workerName: 'Nhân viên SAP'),
     );
 
@@ -229,7 +229,7 @@ void main() {
         db,
         cacheSubject: () => 'active-session',
         onAuthorizationRejected: (_) async => authorizationCallbacks++,
-        loadRemote: ({required range, dateFrom, dateTo}) async {
+        loadRemote: ({required range, dateFrom, dateTo, shiftId}) async {
           calls++;
           if (rejected) {
             throw const SapBusinessError('TOKEN_INVALID_OR_EXPIRED');
@@ -261,7 +261,7 @@ void main() {
       final repo = WorkHistoryRepositoryImpl(
         db,
         cacheSubject: () => 'active-session',
-        loadRemote: ({required range, dateFrom, dateTo}) async =>
+        loadRemote: ({required range, dateFrom, dateTo, shiftId}) async =>
             _result(workerName: workerName),
       );
       final values = <String>[];

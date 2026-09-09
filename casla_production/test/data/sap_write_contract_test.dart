@@ -14,6 +14,7 @@ import 'package:casla_production/data/sap/sap_odata_client.dart';
 import 'package:casla_production/data/sap/sap_pp_opalloc_gateway.dart';
 import 'package:casla_production/data/sap/sap_session_provider.dart';
 import 'package:casla_production/domain/policies/production_math.dart';
+import 'package:casla_production/domain/entities/work_history.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -60,6 +61,9 @@ void main() {
       InterceptorsWrapper(
         onRequest: (request, handler) {
           if (request.method == 'POST') {
+            // A decimal encoded as a JSON string requires explicit OData
+            // IEEE754 negotiation, including on the actual outgoing request.
+            expect(request.contentType, contains('IEEE754Compatible=true'));
             payloads.add(Map<String, dynamic>.from(request.data as Map));
           }
           handler.resolve(
@@ -121,6 +125,12 @@ void main() {
       double.parse(payloads.single['Quantity'] as String),
     );
     expect(row['assigned_quantity'], ProductionMath.toSapScale(1.2345));
+    expect(payloads.single['ShiftID'], 'SHIFT_1');
+    expect(payloads.single['ExecutedAt'], isA<String>());
+    expect(
+      DateTime.tryParse(payloads.single['ExecutedAt'] as String)?.isUtc,
+      isTrue,
+    );
   });
 
   test('rescanning the operation cannot restate an existing '
@@ -177,4 +187,39 @@ void main() {
       expect(payloads.last['UnitOfMeasure'], 'KG');
     },
   );
+
+  test('work history sends the selected shift and exact date window', () async {
+    await gateway.getWorkHistory(
+      range: HistoryRange.week,
+      dateFrom: DateTime(2026, 9, 7),
+      dateTo: DateTime(2026, 9, 13),
+      shiftId: 'SHIFT_1',
+    );
+
+    expect(payloads.single['RangeCode'], 'C');
+    expect(payloads.single['DateFrom'], '2026-09-07');
+    expect(payloads.single['DateTo'], '2026-09-13');
+    expect(payloads.single['WorkerID'], '');
+    expect(payloads.single['ShiftID'], 'SHIFT_1');
+    expect(payloads.single['SummaryOnly'], isFalse);
+  });
+
+  for (final fields in [
+    '"sl_cong_doan":"10.000,000","unit":"ST"',
+    '"sl_cong_doan":"10.000,000 ST"',
+    '"sl_cong_doan":"10.000,000 KG","unit":"ST"',
+  ]) {
+    test('QR unit reaches stored assignment and SAP POST: $fields', () async {
+      final parsed = OperationQrParser.parse(
+        '{"ProductionOrder":"000001000020","Operation":"0010",$fields}',
+      );
+      expect(parsed.unitOfMeasure, 'ST');
+      expect(parsed.operationQuantity, 10000);
+      final order = await db.upsertOrderFromOperationQr(parsed);
+      final id = await assign(orderId: order!['id'] as String, quantity: 10);
+      expect((await db.getAssignmentById(id))!['unit_of_measure'], 'ST');
+      expect(payloads.single['UnitOfMeasure'], 'ST');
+      expect(payloads.single['Quantity'], '10.000');
+    });
+  }
 }

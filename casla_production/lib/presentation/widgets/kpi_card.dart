@@ -23,12 +23,8 @@ class KpiCard extends StatelessWidget {
       return Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [CaslaColors.primaryNavy, CaslaColors.navy700],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          borderRadius: BorderRadius.circular(12),
+          color: CaslaColors.primaryNavy,
+          borderRadius: BorderRadius.circular(16),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -38,16 +34,15 @@ class KpiCard extends StatelessWidget {
             Text(
               label,
               style: const TextStyle(
-                fontSize: 11.5,
-                color: CaslaColors.accentLabelDark,
+                fontSize: 13,
+                color: CaslaColors.contextChipText,
                 fontWeight: FontWeight.w600,
                 letterSpacing: 0.2,
               ),
             ),
-            const SizedBox(height: 4),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.baseline,
-              textBaseline: TextBaseline.alphabetic,
+            const SizedBox(height: 12),
+            Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 Text(
                   value,
@@ -82,7 +77,7 @@ class KpiCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: CaslaColors.surface,
         border: Border.all(color: CaslaColors.line),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(16),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -92,16 +87,15 @@ class KpiCard extends StatelessWidget {
           Text(
             label,
             style: const TextStyle(
-              fontSize: 11,
+              fontSize: 13,
               color: CaslaColors.muted,
               fontWeight: FontWeight.w600,
               letterSpacing: 0.2,
             ),
           ),
-          const SizedBox(height: 4),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.baseline,
-            textBaseline: TextBaseline.alphabetic,
+          const SizedBox(height: 12),
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               Text(
                 value,

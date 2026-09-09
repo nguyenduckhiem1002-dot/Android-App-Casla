@@ -9,7 +9,7 @@
 import 'package:sqflite/sqflite.dart';
 
 /// Bump on every schema change and add the matching step to [migrate].
-const int schemaVersion = 7;
+const int schemaVersion = 8;
 
 /// Tables holding transactions that must survive a restart until SAP confirms
 /// them. The retention policy in Spec 4.7 forbids clearing these.
@@ -258,6 +258,13 @@ const List<String> _createStatements = [
   )
   ''',
   'CREATE INDEX idx_audit_occurred ON audit_log(occurred_at_utc)',
+  '''
+  CREATE TABLE local_settings (
+    setting_key TEXT PRIMARY KEY,
+    setting_value TEXT NOT NULL,
+    updated_at_utc INTEGER NOT NULL
+  )
+  ''',
 ];
 
 Future<void> createSchema(Database db) async {
@@ -281,6 +288,7 @@ const Map<int, Future<void> Function(Database)> _migrations = {
   4: _upgradeV4ToV5,
   5: _upgradeV5ToV6,
   6: _upgradeV6ToV7,
+  7: _upgradeV7ToV8,
 };
 
 /// v2 — SAP live keys on `orders`.
@@ -373,6 +381,18 @@ Future<void> _upgradeV5ToV6(Database db) async {
 /// Existing nonempty units and idempotency keys must remain unchanged.
 Future<void> _upgradeV6ToV7(Database db) async {
   await _repairTransactionUnits(db);
+}
+
+/// v8 — durable, account-scoped local UI settings such as the selected
+/// supervisor work context and shift. This table contains no SAP credentials.
+Future<void> _upgradeV7ToV8(Database db) async {
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS local_settings (
+      setting_key TEXT PRIMARY KEY,
+      setting_value TEXT NOT NULL,
+      updated_at_utc INTEGER NOT NULL
+    )
+  ''');
 }
 
 Future<void> _repairTransactionUnits(Database db) async {

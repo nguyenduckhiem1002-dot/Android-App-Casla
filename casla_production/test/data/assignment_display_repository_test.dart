@@ -1,5 +1,6 @@
 import 'package:casla_production/core/database/casla_database.dart';
 import 'package:casla_production/data/repositories/repositories_impl.dart';
+import 'package:casla_production/core/utils/operation_qr_parser.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../support/database_test_harness.dart';
@@ -19,6 +20,22 @@ void main() {
   test(
     'selected assignment retains display fields and independent totals',
     () async {
+      await db.upsertOrderFromOperationQr(
+        const OperationQrResult(
+          isValid: true,
+          rawPayload: '{"ProductionOrder":"000010001234"}',
+          productionOrder: '000010001234',
+          operation: '0010',
+          productCode: 'SP-AKG',
+          productName: 'Áo khoác gió — size L',
+          workCenter: '67110021',
+          plant: '6711',
+          workCenterDescription: 'Demo',
+          orderCode: 'DH-2026-00417',
+          operationQuantity: 1000,
+          unitOfMeasure: 'cái',
+        ),
+      );
       for (var i = 0; i < 2; i++) {
         await db.insertRecallRecord({
           'id': 'recall-display-$i',
@@ -39,6 +56,8 @@ void main() {
       final assignment = (await repo.getAssignmentById('asg-001'))!;
       expect(assignment.workerMaNv, 'MNV00123');
       expect(assignment.orderCode, 'DH-2026-00417');
+      expect(assignment.plant, '6711');
+      expect(assignment.workCenter, '67110021');
       expect(
         assignment.completedQuantity,
         await db.getCompletedQuantity('asg-001'),
@@ -65,4 +84,39 @@ void main() {
     expect(rows.every((row) => row['completed_quantity'] == 0), isTrue);
     expect(await db.getAssignmentDisplayRows([]), isEmpty);
   });
+
+  test(
+    'report counts child transactions in their own shift, retaining lifetime balance',
+    () async {
+      await db.recordProductionOffline(
+        assignmentId: 'asg-001',
+        quantity: 7,
+        businessDate: '2026-09-09',
+        shiftId: 'NIGHT',
+        createdBy: 'test',
+        deviceId: 'test',
+      );
+      await db.recordProductionOffline(
+        assignmentId: 'asg-001',
+        quantity: 3,
+        businessDate: '2026-09-09',
+        shiftId: 'DAY',
+        createdBy: 'test',
+        deviceId: 'test',
+      );
+      final rows = await db.getAssignmentDisplayRows(
+        ['asg-001'],
+        fromBusinessDate: '2026-09-09',
+        toBusinessDate: '2026-09-09',
+        shiftId: 'NIGHT',
+      );
+      expect(rows, hasLength(1));
+      expect(rows.single['assigned_quantity'], 0);
+      expect(rows.single['completed_quantity'], 7);
+      expect(rows.single['recalled_quantity'], 0);
+      final lifetime = await db.getAssignmentDisplayRows(['asg-001']);
+      expect(lifetime.single['assigned_quantity'], greaterThan(0));
+      expect(lifetime.single['completed_quantity'], greaterThanOrEqualTo(10));
+    },
+  );
 }

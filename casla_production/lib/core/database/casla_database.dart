@@ -1006,6 +1006,27 @@ class CaslaDatabase {
     return (productionOrder: productionOrder, operation: operation);
   }
 
+  Future<String?> getLocalSetting(String key) async {
+    final db = await _database;
+    final rows = await db.query(
+      'local_settings',
+      columns: ['setting_value'],
+      where: 'setting_key = ?',
+      whereArgs: [key],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : rows.first['setting_value']?.toString();
+  }
+
+  Future<void> setLocalSetting(String key, String value) async {
+    final db = await _database;
+    await db.insert('local_settings', {
+      'setting_key': key,
+      'setting_value': value,
+      'updated_at_utc': DateTime.now().toUtc().millisecondsSinceEpoch,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
   /// Resolves a scanned or typed code to exactly one order.
   ///
   /// Matching is exact on the identifier fields only. It used to fall back to a
@@ -1212,8 +1233,11 @@ class CaslaDatabase {
   /// join. Chunking stays below SQLite parameter limits; all chunks share one
   /// snapshot so status and totals cannot come from different commits.
   Future<List<Map<String, dynamic>>> getAssignmentDisplayRows(
-    Iterable<String> assignmentIds,
-  ) async {
+    Iterable<String> assignmentIds, {
+    String? fromBusinessDate,
+    String? toBusinessDate,
+    String? shiftId,
+  }) async {
     final ids = assignmentIds.toSet().toList(growable: false);
     if (ids.isEmpty) return [];
     final db = await _database;
@@ -1223,10 +1247,33 @@ class CaslaDatabase {
       for (var start = 0; start < ids.length; start += chunkSize) {
         final chunk = ids.skip(start).take(chunkSize).toList(growable: false);
         final placeholders = List.filled(chunk.length, '?').join(',');
-        final rows = await txn.rawQuery('''
+        final periodArgs = <Object?>[];
+        String period(String alias) {
+          final clauses = <String>[];
+          if (fromBusinessDate != null) {
+            clauses.add('$alias.business_date >= ?');
+            periodArgs.add(fromBusinessDate);
+          }
+          if (toBusinessDate != null) {
+            clauses.add('$alias.business_date <= ?');
+            periodArgs.add(toBusinessDate);
+          }
+          if (shiftId != null && shiftId.trim().isNotEmpty) {
+            clauses.add('$alias.shift_id = ?');
+            periodArgs.add(shiftId.trim());
+          }
+          return clauses.isEmpty ? '' : ' AND ${clauses.join(' AND ')}';
+        }
+
+        final productionPeriod = period('p');
+        final recallPeriod = period('r');
+        final rows = await txn.rawQuery(
+          '''
           SELECT a.*, e.ma_nv AS worker_code, e.ten AS worker_name,
                  o.ma_don_hang AS order_code, o.ma_sp AS product_code,
                  o.ten_sp AS product_name,
+                 o.plant AS order_plant,
+                 o.work_center AS order_work_center,
                  -- The unit frozen onto the assignment wins; `o.uom` is
                  -- only the fallback for rows created before v5. Aliased
                  -- away from `unit_of_measure` so it cannot collide with
@@ -1235,20 +1282,47 @@ class CaslaDatabase {
                  (SELECT COALESCE(SUM(p.quantity), 0)
                   FROM production_records p
                   WHERE p.phan_cong_id = a.id
+                    $productionPeriod
                     AND COALESCE(p.sync_status, 'PENDING') != 'FAILED')
                     AS completed_quantity,
                  (SELECT COALESCE(SUM(r.quantity), 0)
                   FROM recall_records r
                   WHERE r.phan_cong_id = a.id
+                    $recallPeriod
                     AND COALESCE(r.sync_status, 'PENDING') != 'FAILED')
                     AS recalled_quantity
           FROM assignments a
           LEFT JOIN employees e ON e.id = a.nhan_vien_id
           LEFT JOIN orders o ON o.id = a.don_hang_id
           WHERE a.id IN ($placeholders)
-        ''', chunk);
+        ''',
+          [...periodArgs, ...chunk],
+        );
         for (final row in rows) {
-          byId[row['id'] as String] = Map<String, dynamic>.from(row);
+          final value = Map<String, dynamic>.from(row);
+          if (fromBusinessDate != null ||
+              toBusinessDate != null ||
+              shiftId != null) {
+            final date = row['business_date'] as String;
+            final assignedInPeriod =
+                (fromBusinessDate == null ||
+                    date.compareTo(fromBusinessDate) >= 0) &&
+                (toBusinessDate == null ||
+                    date.compareTo(toBusinessDate) <= 0) &&
+                (shiftId == null ||
+                    shiftId.trim().isEmpty ||
+                    row['shift_id'] == shiftId.trim()) &&
+                row['sync_status'] != 'FAILED';
+            if (!assignedInPeriod) {
+              value['assigned_quantity'] = 0.0;
+            }
+            if (!assignedInPeriod &&
+                _toDouble(value['completed_quantity']) == 0 &&
+                _toDouble(value['recalled_quantity']) == 0) {
+              continue;
+            }
+          }
+          byId[row['id'] as String] = value;
         }
       }
       return [
@@ -1507,6 +1581,7 @@ class CaslaDatabase {
     String employeeId, {
     String? fromBusinessDate,
     String? toBusinessDate,
+    String? shiftId,
   }) async {
     final db = await _database;
     final where = StringBuffer('a.nhan_vien_id = ?');
@@ -1520,12 +1595,20 @@ class CaslaDatabase {
       where.write(' AND p.business_date <= ?');
       args.add(toBusinessDate);
     }
+    final normalizedShiftId = shiftId?.trim() ?? '';
+    if (normalizedShiftId.isNotEmpty) {
+      where.write(' AND p.shift_id = ?');
+      args.add(normalizedShiftId);
+    }
 
     return _rows(
       await db.rawQuery('''
         SELECT p.*,
                COALESCE(o.ten_sp, 'Không rõ sản phẩm') AS ten_sp,
                a.don_hang_id AS ma_don_hang,
+               a.to_id AS work_context_id,
+               o.plant AS plant,
+               o.work_center AS work_center,
                COALESCE(e.ten, p.created_by) AS nguoi_xac_nhan
         FROM production_records p
         JOIN assignments a ON a.id = p.phan_cong_id
@@ -1541,6 +1624,7 @@ class CaslaDatabase {
     String employeeId, {
     String? fromBusinessDate,
     String? toBusinessDate,
+    String? shiftId,
   }) {
     return _watch(
       _productionController,
@@ -1548,6 +1632,7 @@ class CaslaDatabase {
         employeeId,
         fromBusinessDate: fromBusinessDate,
         toBusinessDate: toBusinessDate,
+        shiftId: shiftId,
       ),
     );
   }

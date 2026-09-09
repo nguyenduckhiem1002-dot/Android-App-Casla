@@ -31,10 +31,18 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
   DateTime? _customDateTo;
   late Stream<WorkHistoryResult> _historyStream;
   int _visibleEntryCount = _historyEntryPageSize;
+  bool _historyDataReady = false;
+  WorkHistoryResult? _lastHistoryResult;
 
   @override
   void initState() {
     super.initState();
+    _replaceHistoryStream();
+  }
+
+  void _replaceHistoryStream() {
+    _historyDataReady = false;
+    _lastHistoryResult = null;
     _historyStream = _watchHistory();
   }
 
@@ -70,7 +78,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
     setState(() {
       _range = range;
       _visibleEntryCount = _historyEntryPageSize;
-      _historyStream = _watchHistory();
+      _replaceHistoryStream();
     });
   }
 
@@ -97,11 +105,14 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
 
   Future<void> _pickSingleDate() async {
     final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
     final picked = await showDatePicker(
       context: context,
-      initialDate: _customDateFrom ?? now,
+      initialDate: (_customDateFrom != null && !_customDateFrom!.isAfter(today))
+          ? _customDateFrom!
+          : today,
       firstDate: DateTime(2020),
-      lastDate: now.add(const Duration(days: 365)),
+      lastDate: today,
       helpText: 'CHỌN NGÀY',
       cancelText: 'HỦY',
       confirmText: 'CHỌN',
@@ -127,24 +138,32 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
       _customDateFrom = DateTime(picked.year, picked.month, picked.day);
       _customDateTo = DateTime(picked.year, picked.month, picked.day);
       _visibleEntryCount = _historyEntryPageSize;
-      _historyStream = _watchHistory();
+      _replaceHistoryStream();
     });
   }
 
   Future<void> _pickDateRange() async {
     final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final savedFrom = _customDateFrom == null
+        ? null
+        : (_customDateFrom!.isAfter(today) ? today : _customDateFrom!);
+    final savedTo = _customDateTo == null
+        ? null
+        : (_customDateTo!.isAfter(today) ? today : _customDateTo!);
     final initialRange =
-        (_customDateFrom != null &&
-            _customDateTo != null &&
-            !_customDateFrom!.isAtSameMomentAs(_customDateTo!))
-        ? DateTimeRange(start: _customDateFrom!, end: _customDateTo!)
-        : DateTimeRange(start: now.subtract(const Duration(days: 7)), end: now);
+        (savedFrom != null && savedTo != null && !savedFrom.isAfter(savedTo))
+        ? DateTimeRange(start: savedFrom, end: savedTo)
+        : DateTimeRange(
+            start: today.subtract(const Duration(days: 7)),
+            end: today,
+          );
 
     final picked = await showDateRangePicker(
       context: context,
       initialDateRange: initialRange,
       firstDate: DateTime(2020),
-      lastDate: now.add(const Duration(days: 365)),
+      lastDate: today,
       helpText: 'CHỌN KHOẢNG NGÀY (TỐI ĐA 1 THÁNG)',
       cancelText: 'HỦY',
       confirmText: 'CHỌN',
@@ -193,7 +212,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
         picked.end.day,
       );
       _visibleEntryCount = _historyEntryPageSize;
-      _historyStream = _watchHistory();
+      _replaceHistoryStream();
     });
   }
 
@@ -373,6 +392,19 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
         child: StreamBuilder<WorkHistoryResult>(
           stream: _historyStream,
           builder: (context, snapshot) {
+            // StreamBuilder drops the previous `data` when a later refresh
+            // emits an error. Keep the last successful result so a temporary
+            // SAP/network failure does not replace usable cached content with
+            // a full-screen error.
+            if (snapshot.hasData &&
+                snapshot.connectionState != ConnectionState.waiting) {
+              _lastHistoryResult = snapshot.data;
+              _historyDataReady = true;
+            }
+            final result = _historyDataReady
+                ? snapshot.data ?? _lastHistoryResult
+                : null;
+
             return CustomScrollView(
               key: PageStorageKey<String>('worker-history-${_range.code}'),
               physics: const AlwaysScrollableScrollPhysics(),
@@ -383,18 +415,18 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
                 ),
                 const SliverToBoxAdapter(child: SizedBox(height: 14)),
                 if (snapshot.connectionState == ConnectionState.waiting &&
-                    !snapshot.hasData)
+                    result == null)
                   _boxSliver(
                     const _HistorySkeleton(),
                     padding: const EdgeInsets.symmetric(horizontal: 18),
                   )
-                else if (snapshot.hasData) ...[
+                else if (result != null) ...[
                   if (snapshot.hasError)
                     _boxSliver(
                       _buildCachedRefreshWarning(),
                       padding: const EdgeInsets.symmetric(horizontal: 18),
                     ),
-                  ..._buildContentSlivers(snapshot.data!),
+                  ..._buildContentSlivers(result),
                 ] else if (snapshot.hasError)
                   _boxSliver(
                     _buildError(snapshot.error!),
@@ -636,10 +668,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
     context.go('/login');
   }
 
-  Widget _boxSliver(
-    Widget child, {
-    required EdgeInsets padding,
-  }) {
+  Widget _boxSliver(Widget child, {required EdgeInsets padding}) {
     return SliverPadding(
       padding: padding,
       sliver: SliverToBoxAdapter(child: child),
@@ -722,41 +751,38 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
         SliverPadding(
           padding: const EdgeInsets.symmetric(horizontal: 18),
           sliver: SliverList(
-            delegate: SliverChildBuilderDelegate(
-              (context, index) {
-                final isLast = index == visibleEntryCount - 1;
-                return DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: CaslaColors.surface,
-                    border: Border(
-                      left: const BorderSide(color: CaslaColors.line),
-                      right: const BorderSide(color: CaslaColors.line),
-                      top: index == 0
-                          ? const BorderSide(color: CaslaColors.line)
-                          : BorderSide.none,
-                      bottom: BorderSide(color: CaslaColors.line),
-                    ),
-                    borderRadius: index == 0 || isLast
-                        ? BorderRadius.vertical(
-                            top: index == 0
-                                ? const Radius.circular(14)
-                                : Radius.zero,
-                            bottom: isLast
-                                ? const Radius.circular(14)
-                                : Radius.zero,
-                          )
-                        : null,
+            delegate: SliverChildBuilderDelegate((context, index) {
+              final isLast = index == visibleEntryCount - 1;
+              return DecoratedBox(
+                decoration: BoxDecoration(
+                  color: CaslaColors.surface,
+                  border: Border(
+                    left: const BorderSide(color: CaslaColors.line),
+                    right: const BorderSide(color: CaslaColors.line),
+                    top: index == 0
+                        ? const BorderSide(color: CaslaColors.line)
+                        : BorderSide.none,
+                    bottom: BorderSide(color: CaslaColors.line),
                   ),
-                  child: Column(
-                    children: [
-                      _buildEntryTile(result.entries[index]),
-                      if (!isLast) const Divider(height: 1),
-                    ],
-                  ),
-                );
-              },
-              childCount: visibleEntryCount,
-            ),
+                  borderRadius: index == 0 || isLast
+                      ? BorderRadius.vertical(
+                          top: index == 0
+                              ? const Radius.circular(14)
+                              : Radius.zero,
+                          bottom: isLast
+                              ? const Radius.circular(14)
+                              : Radius.zero,
+                        )
+                      : null,
+                ),
+                child: Column(
+                  children: [
+                    _buildEntryTile(result.entries[index]),
+                    if (!isLast) const Divider(height: 1),
+                  ],
+                ),
+              );
+            }, childCount: visibleEntryCount),
           ),
         ),
       );

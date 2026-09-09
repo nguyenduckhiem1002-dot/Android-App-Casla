@@ -63,7 +63,10 @@ class _WorkerVerificationDialogState extends State<_WorkerVerificationDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      scrollable: true,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       title: const Text('Xác minh công nhân'),
+      titleTextStyle: Theme.of(context).textTheme.titleLarge,
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -82,6 +85,12 @@ class _WorkerVerificationDialogState extends State<_WorkerVerificationDialog> {
             autofocus: true,
             autocorrect: false,
             enableSuggestions: false,
+            enableIMEPersonalizedLearning: false,
+            keyboardType: TextInputType.visiblePassword,
+            // This is a one-shot worker verification secret, not an account
+            // credential. `null` explicitly disables Android/web autofill;
+            // an empty list still allows the platform to infer autofill.
+            autofillHints: null,
             obscureText: _obscure,
             textInputAction: TextInputAction.done,
             onSubmitted: (_) => _submit(),
@@ -89,7 +98,7 @@ class _WorkerVerificationDialogState extends State<_WorkerVerificationDialog> {
               if (_error != null) setState(() => _error = null);
             },
             decoration: InputDecoration(
-              labelText: 'Mật khẩu SAP của công nhân',
+              labelText: 'Mật khẩu công nhân',
               errorText: _error,
               suffixIcon: IconButton(
                 tooltip: _obscure ? 'Hiện mật khẩu' : 'Ẩn mật khẩu',
@@ -104,6 +113,8 @@ class _WorkerVerificationDialogState extends State<_WorkerVerificationDialog> {
           ),
         ],
       ),
+      actionsPadding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+      actionsOverflowButtonSpacing: 8,
       actions: [
         TextButton(onPressed: _close, child: const Text('Hủy')),
         FilledButton(

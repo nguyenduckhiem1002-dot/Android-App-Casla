@@ -28,6 +28,27 @@ DioException _dio(DioExceptionType type, {int? status, Object? body}) {
 }
 
 void main() {
+  test('SAP XML parser response is a payload error, not worker rejection', () {
+    final error = _dio(
+      DioExceptionType.badResponse,
+      status: 400,
+      body: {
+        'error': {
+          'code': 'CX_SXML_PARSE_ERROR',
+          'message': 'Error while parsing an XML stream',
+        },
+      },
+    );
+    try {
+      rethrowAsBusinessError(error);
+    } catch (converted) {
+      final failure = classifySyncError(converted);
+      expect(failure.code, 'SAP_PAYLOAD_FORMAT_ERROR');
+      expect(failure.kind, SyncFailureKind.permanent);
+      expect(failure.message, isNot(contains('XML')));
+      expect(failure.message, contains('định dạng'));
+    }
+  });
   group('transient — the record stays queued', () {
     test('connection timeout', () {
       final failure = classifySyncError(
@@ -160,6 +181,43 @@ void main() {
       );
 
       expect(failure.message, 'Phân công đã đóng');
+    });
+
+    test('reads an OData envelope returned as a JSON string', () {
+      final error = _dio(
+        DioExceptionType.badResponse,
+        status: 400,
+        body:
+            '{"error":{"code":"BAD_REQUEST",'
+            '"message":"SHIFT_NOT_APPLICABLE"}}',
+      );
+
+      expect(odataErrorMessage(error), 'SHIFT_NOT_APPLICABLE');
+    });
+
+    test('identifies a service binding missing the shift parameters', () {
+      final error = _dio(
+        DioExceptionType.badResponse,
+        status: 400,
+        body: {
+          'error': {
+            'code': '/IWCOR/CX_OD_BAD_REQUEST',
+            'message': "The parameter 'ShiftID' does not exist",
+          },
+        },
+      );
+
+      expect(odataSafeDiagnostic(error), 'SAP_SHIFT_CONTRACT_OUTDATED');
+      expect(
+        () => rethrowAsBusinessError(error),
+        throwsA(
+          isA<SapBusinessError>().having(
+            (item) => item.code,
+            'code',
+            'SAP_SHIFT_CONTRACT_OUTDATED',
+          ),
+        ),
+      );
     });
 
     test('falls back to a readable default when SAP sends no envelope', () {

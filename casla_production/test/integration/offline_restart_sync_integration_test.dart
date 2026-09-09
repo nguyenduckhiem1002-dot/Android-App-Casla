@@ -86,6 +86,34 @@ void main() {
       expect(offlineRecord['device_id'], equals('PDA-TEST-002'));
     });
 
+    test('production history can be narrowed to the selected shift', () async {
+      await db.recordProductionOffline(
+        assignmentId: 'asg-005',
+        quantity: 80.0,
+        businessDate: '2026-08-08',
+        shiftId: 'SHIFT_1',
+        createdBy: 'MNV00199',
+        deviceId: 'PDA-TEST-002',
+      );
+      await db.recordProductionOffline(
+        assignmentId: 'asg-005',
+        quantity: 40.0,
+        businessDate: '2026-08-08',
+        shiftId: 'SHIFT_2',
+        createdBy: 'MNV00199',
+        deviceId: 'PDA-TEST-002',
+      );
+
+      final history = await db.getProductionHistory(
+        'emp-5',
+        shiftId: 'SHIFT_2',
+      );
+
+      expect(history, hasLength(1));
+      expect(history.single['shift_id'], equals('SHIFT_2'));
+      expect(history.single['quantity'], equals(40.0));
+    });
+
     test('3. Queue items can be removed after a simulated sync', () async {
       // Retrieve all pending queue items
       final pendingQueue = await db.watchSyncFeed().first;

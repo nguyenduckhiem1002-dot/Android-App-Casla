@@ -406,6 +406,22 @@ void main() {
       await db.close();
     },
   );
+
+  test('v7 -> v8 creates account-scoped local settings', () async {
+    final db = await openDatabase(inMemoryDatabasePath, version: 7);
+    addTearDown(db.close);
+
+    await migrate(db, 7, 8);
+    await db.insert('local_settings', {
+      'setting_key': 'supervisor_setup:user-a',
+      'setting_value': '{"ShiftID":"NIGHT"}',
+      'updated_at_utc': 1,
+    });
+
+    final row = (await db.query('local_settings')).single;
+    expect(row['setting_key'], 'supervisor_setup:user-a');
+    expect(row['setting_value'], '{"ShiftID":"NIGHT"}');
+  });
 }
 
 /// The three transaction tables exactly as `createSchema` shipped them at v5,

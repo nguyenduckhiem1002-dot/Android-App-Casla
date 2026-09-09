@@ -60,6 +60,14 @@ void main() {
       );
     });
 
+    test('builds the shift catalog root from the shared SAP base URL', () {
+      expect(
+        AppConfig.joinServiceUrl(base, AppConfig.shiftApiServiceSuffix),
+        'https://my426501-api.s4hana.cloud.sap/sap/opu/odata4/sap/'
+        'zapi_pp_shift/srvd_a2x/sap/zui_pp_shift_api/0001/',
+      );
+    });
+
     test('tolerates a base missing its trailing slash', () {
       expect(
         AppConfig.joinServiceUrl('https://host/sap/opu/odata4/sap', 'suffix/'),

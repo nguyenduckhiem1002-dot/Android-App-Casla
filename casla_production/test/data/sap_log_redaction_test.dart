@@ -107,4 +107,24 @@ void main() {
       expect(out, contains('svc'));
     });
   });
+
+  group('SapODataClient.safeOperationLabel', () {
+    test('keeps only the OData action name', () {
+      expect(
+        SapODataClient.safeOperationLabel(
+          'OperationAllocations/com.sap.example.submitInitialAssign',
+        ),
+        'submitInitialAssign',
+      );
+    });
+
+    test('does not expose query values', () {
+      expect(
+        SapODataClient.safeOperationLabel(
+          'login?WorkerPassword=top-secret&AccessToken=token',
+        ),
+        'login',
+      );
+    });
+  });
 }

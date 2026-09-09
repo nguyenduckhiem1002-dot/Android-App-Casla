@@ -15,6 +15,8 @@ class Assignment {
   final String orderCode;
   final String productCode;
   final String productName;
+  final String plant;
+  final String workCenter;
   final String uom;
   final double assignedQuantity;
   final double completedQuantity;
@@ -37,6 +39,8 @@ class Assignment {
     required this.orderCode,
     required this.productCode,
     required this.productName,
+    this.plant = '',
+    this.workCenter = '',
     required this.uom,
     required this.assignedQuantity,
     required this.completedQuantity,
@@ -88,6 +92,8 @@ class Assignment {
       orderCode: orderCode,
       productCode: productCode,
       productName: productName,
+      plant: plant,
+      workCenter: workCenter,
       uom: uom,
       assignedQuantity: assignedQuantity,
       completedQuantity: completedQuantity ?? this.completedQuantity,

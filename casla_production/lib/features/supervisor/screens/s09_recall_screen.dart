@@ -86,6 +86,33 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
     final appState = ref.read(appStateProvider);
     final emp = appState.currentSession;
     final supervisorMaNv = emp?.maNv ?? '';
+    final activeShift = appState.activeShift;
+    if (activeShift == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Hãy thiết lập ca làm việc trước khi thu hồi.'),
+          backgroundColor: CaslaColors.danger,
+        ),
+      );
+      return;
+    }
+    final assignmentPlant = widget.assignment.plant.trim();
+    if (assignmentPlant.isNotEmpty &&
+        activeShift.plant.trim() != assignmentPlant) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Ca đang chọn thuộc nhà máy ${activeShift.plant}, nhưng công đoạn '
+            'thuộc nhà máy $assignmentPlant. Hãy đổi ca làm việc trước khi thu hồi.',
+          ),
+          backgroundColor: CaslaColors.danger,
+        ),
+      );
+      return;
+    }
+    final businessDate = DateFormat(
+      'yyyy-MM-dd',
+    ).format(appState.activeBusinessDate);
     final generation = appState.sessionGeneration;
     setState(() => _isSubmitting = true);
 
@@ -110,8 +137,8 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
         note: _noteController.text.trim().isEmpty
             ? null
             : _noteController.text.trim(),
-        businessDate: DateFormat('yyyy-MM-dd').format(DateTime.now()),
-        shiftId: widget.assignment.shiftId,
+        businessDate: businessDate,
+        shiftId: activeShift.shiftId,
         createdBy: supervisorMaNv,
         workerPassword: workerPassword,
       );

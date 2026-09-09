@@ -189,7 +189,33 @@ class _S08AssignmentDetailScreenState
     final supervisorMaNv = emp?.maNv ?? '';
 
     final asgId = widget.assignment.id;
-    final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
+    final activeShift = appState.activeShift;
+    if (activeShift == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Hãy thiết lập ca làm việc trước khi xác nhận.'),
+          backgroundColor: CaslaColors.danger,
+        ),
+      );
+      return;
+    }
+    final assignmentPlant = widget.assignment.plant.trim();
+    if (assignmentPlant.isNotEmpty &&
+        activeShift.plant.trim() != assignmentPlant) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Ca đang chọn thuộc nhà máy ${activeShift.plant}, nhưng công đoạn '
+            'thuộc nhà máy $assignmentPlant. Hãy đổi ca làm việc trước khi xác nhận.',
+          ),
+          backgroundColor: CaslaColors.danger,
+        ),
+      );
+      return;
+    }
+    final businessDate = DateFormat(
+      'yyyy-MM-dd',
+    ).format(appState.activeBusinessDate);
     final generation = appState.sessionGeneration;
     setState(() => _isSubmitting = true);
 
@@ -212,8 +238,8 @@ class _S08AssignmentDetailScreenState
       final receipt = await appState.productionRepo.recordProduction(
         assignmentId: asgId,
         quantity: qty,
-        businessDate: today,
-        shiftId: widget.assignment.shiftId,
+        businessDate: businessDate,
+        shiftId: activeShift.shiftId,
         createdBy: supervisorMaNv,
         workerPassword: workerPassword,
       );

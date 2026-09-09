@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../presentation/widgets/casla_logo.dart';
 import '../../../app/theme/casla_colors.dart';
+import '../../../core/database/casla_database.dart';
 import '../../../domain/entities/enums.dart';
 import '../../../main.dart';
 
@@ -18,9 +19,11 @@ class S02bAccountLoginScreen extends ConsumerStatefulWidget {
 
 class _S02bAccountLoginScreenState
     extends ConsumerState<S02bAccountLoginScreen> {
+  static const _rememberedUsernameKey = 'remembered_login_username';
   late TextEditingController _usernameController;
   final TextEditingController _passwordController = TextEditingController();
   bool _obscurePassword = true;
+  bool _rememberUsername = false;
   String? _errorMessage;
   bool _isLoading = false;
 
@@ -30,6 +33,46 @@ class _S02bAccountLoginScreenState
     _usernameController = TextEditingController(
       text: widget.initialUsername ?? '',
     );
+    _restoreRememberedUsername();
+  }
+
+  Future<void> _restoreRememberedUsername() async {
+    if (widget.initialUsername?.trim().isNotEmpty == true) return;
+    final remembered = await ref
+        .read(appStateProvider)
+        .db
+        .getLocalSetting(_rememberedUsernameKey);
+    if (!mounted || remembered == null || remembered.trim().isEmpty) return;
+    if (_usernameController.text.trim().isNotEmpty) return;
+    _usernameController.text = remembered.trim();
+    _usernameController.selection = TextSelection.collapsed(
+      offset: _usernameController.text.length,
+    );
+    setState(() => _rememberUsername = true);
+  }
+
+  Future<void> _persistRememberedUsername(
+    CaslaDatabase database,
+    String username, {
+    required bool remember,
+  }) async {
+    try {
+      await database.setLocalSetting(
+        _rememberedUsernameKey,
+        remember ? username : '',
+      );
+    } catch (_) {
+      // Remembering the username is a convenience; it must never make a
+      // successful SAP login look like a failed login.
+    }
+  }
+
+  Future<void> _setRememberUsername(bool remember) async {
+    final database = ref.read(appStateProvider).db;
+    setState(() => _rememberUsername = remember);
+    if (!remember) {
+      await _persistRememberedUsername(database, '', remember: false);
+    }
   }
 
   @override
@@ -58,8 +101,19 @@ class _S02bAccountLoginScreenState
 
     try {
       final appState = ref.read(appStateProvider);
+      final database = appState.db;
+      final rememberUsername = _rememberUsername;
       final accepted = await appState.loginByCredentials(username, password);
-      if (!mounted || !accepted) return;
+      if (!accepted) return;
+      // Login notifies the router and may dispose this screen immediately.
+      // Persist using values captured before that notification, without
+      // touching `ref` or widget state after disposal.
+      await _persistRememberedUsername(
+        database,
+        username,
+        remember: rememberUsername,
+      );
+      if (!mounted) return;
       final role = appState.currentSession?.role;
       _passwordController.clear();
       context.go(role == UserRole.worker ? '/history' : '/supervisor');
@@ -270,7 +324,38 @@ class _S02bAccountLoginScreenState
                               ),
                             ),
                           ),
-                          const SizedBox(height: 24),
+                          const SizedBox(height: 8),
+
+                          Semantics(
+                            checked: _rememberUsername,
+                            label: 'Ghi nhớ tài khoản trên thiết bị',
+                            child: CheckboxListTile(
+                              contentPadding: EdgeInsets.zero,
+                              dense: true,
+                              controlAffinity: ListTileControlAffinity.leading,
+                              title: const Text(
+                                'Ghi nhớ tài khoản',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: CaslaColors.primaryNavy,
+                                ),
+                              ),
+                              subtitle: const Text(
+                                'Chỉ lưu mã tài khoản, không lưu mật khẩu.',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: CaslaColors.muted,
+                                ),
+                              ),
+                              value: _rememberUsername,
+                              onChanged: _isLoading
+                                  ? null
+                                  : (value) =>
+                                        _setRememberUsername(value ?? false),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
 
                           // Login Button
                           ElevatedButton(

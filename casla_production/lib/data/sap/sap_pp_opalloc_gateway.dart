@@ -141,6 +141,8 @@ class SapPpOpAllocGateway implements SapWriteGateway {
         'Quantity': _quantity(assignment['assigned_quantity']),
         'UnitOfMeasure': _unitOfMeasure(assignment, order),
         'ExecutionDate': assignment['business_date'],
+        'ShiftID': assignment['shift_id'],
+        'ExecutedAt': _executedAt(assignment['occurred_at_utc']),
         'AccessToken': accessToken,
         'DeviceID': deviceId,
         'WorkerPassword': _requireWorkerPassword(request),
@@ -187,6 +189,8 @@ class SapPpOpAllocGateway implements SapWriteGateway {
         'Quantity': _quantity(record['quantity']),
         'UnitOfMeasure': _unitOfMeasure(record, order),
         'ExecutionDate': record['business_date'],
+        'ShiftID': record['shift_id'],
+        'ExecutedAt': _executedAt(record['occurred_at_utc']),
         // The assignment's own SAP lineage, if `submitInitialAssign` already
         // synced it — optional per the EDMX, so a not-yet-synced assignment
         // (still PENDING) simply omits it rather than blocking the confirm.
@@ -237,6 +241,8 @@ class SapPpOpAllocGateway implements SapWriteGateway {
         'Quantity': _quantity(record['quantity']),
         'UnitOfMeasure': _unitOfMeasure(record, order),
         'ExecutionDate': record['business_date'],
+        'ShiftID': record['shift_id'],
+        'ExecutedAt': _executedAt(record['occurred_at_utc']),
         'OriginalTransactionUUID': _nullIfEmpty(assignment['sap_id']),
         'AccessToken': accessToken,
         'DeviceID': deviceId,
@@ -357,12 +363,14 @@ class SapPpOpAllocGateway implements SapWriteGateway {
     required HistoryRange range,
     DateTime? dateFrom,
     DateTime? dateTo,
+    String? shiftId,
   }) async {
     try {
       return await _getWorkHistoryOnce(
         range,
         dateFrom: dateFrom,
         dateTo: dateTo,
+        shiftId: shiftId,
       );
     } on SapSessionInvalidatedException {
       rethrow;
@@ -372,7 +380,12 @@ class SapPpOpAllocGateway implements SapWriteGateway {
       // refresh too; that failure — not the original one — is what the
       // caller should see and act on ("phiên đăng nhập đã hết hạn").
       if (!await refreshSession()) rethrow;
-      return _getWorkHistoryOnce(range, dateFrom: dateFrom, dateTo: dateTo);
+      return _getWorkHistoryOnce(
+        range,
+        dateFrom: dateFrom,
+        dateTo: dateTo,
+        shiftId: shiftId,
+      );
     }
   }
 
@@ -380,6 +393,7 @@ class SapPpOpAllocGateway implements SapWriteGateway {
     HistoryRange range, {
     DateTime? dateFrom,
     DateTime? dateTo,
+    String? shiftId,
   }) async {
     final sessionGeneration = session.generation;
     final accessToken = session.accessToken;
@@ -398,6 +412,14 @@ class SapPpOpAllocGateway implements SapWriteGateway {
     final dateToStr = dateTo != null
         ? '${dateTo.year.toString().padLeft(4, '0')}-${dateTo.month.toString().padLeft(2, '0')}-${dateTo.day.toString().padLeft(2, '0')}'
         : null;
+    final normalizedShiftId = shiftId?.trim() ?? '';
+    // D/W/M are server-relative windows. When the UI supplies an explicit
+    // calendar window (including a selected day), use C so SAP honours the
+    // exact DateFrom/DateTo instead of silently replacing it with "today" or
+    // a rolling 7/30-day period.
+    final rangeCode = dateFromStr != null && dateToStr != null
+        ? HistoryRange.custom.code
+        : range.code;
 
     try {
       _ensureSessionCurrent(sessionGeneration, accessToken);
@@ -408,10 +430,11 @@ class SapPpOpAllocGateway implements SapWriteGateway {
         data: {
           'AccessToken': accessToken,
           'DeviceID': deviceId,
-          'RangeCode': range.code,
-          'DateFrom': ?dateFromStr,
-          'DateTo': ?dateToStr,
+          'RangeCode': rangeCode,
+          'DateFrom': dateFromStr,
+          'DateTo': dateToStr,
           'WorkerID': '',
+          'ShiftID': normalizedShiftId,
           'SummaryOnly': false,
         },
       );
@@ -508,10 +531,9 @@ class SapPpOpAllocGateway implements SapWriteGateway {
     return password;
   }
 
-  /// `Edm.Decimal` on this service is IEEE754Compatible — SAP Gateway's
-  /// default for RAP OData V4 — so it must travel as a JSON string, not a
-  /// bare number, or a strict client-side encoder would send it as a float
-  /// and risk precision loss on the 3-decimal scale SAP expects.
+  /// Encode Edm.Decimal as a string to retain the SAP three-decimal scale.
+  /// SapODataClient explicitly declares IEEE754Compatible=true in Content-Type
+  /// and Accept; string decimals are NOT the default for plain application/json.
   static String _quantity(Object? value) {
     final quantity = value is num ? value.toDouble() : 0.0;
     // Repositories already store at this scale, so this only formats — it is
@@ -524,6 +546,15 @@ class SapPpOpAllocGateway implements SapWriteGateway {
   static String? _nullIfEmpty(Object? value) {
     final text = value?.toString();
     return (text == null || text.isEmpty) ? null : text;
+  }
+
+  static String? _executedAt(Object? value) {
+    final millis = value is num ? value.toInt() : int.tryParse('$value');
+    if (millis == null || millis <= 0) return null;
+    return DateTime.fromMillisecondsSinceEpoch(
+      millis,
+      isUtc: true,
+    ).toIso8601String();
   }
 
   void _ensureSessionCurrent(int expectedGeneration, String expectedToken) {

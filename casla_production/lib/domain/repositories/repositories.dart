@@ -32,8 +32,18 @@ abstract class AssignmentRepository {
     String? workerPassword,
   });
 
-  Stream<List<Assignment>> watchWorkerAssignments(String workerId);
-  Stream<List<Assignment>> watchAssignmentsByTeams(List<String> teamIds);
+  Stream<List<Assignment>> watchWorkerAssignments(
+    String workerId, {
+    String? fromBusinessDate,
+    String? toBusinessDate,
+    String? shiftId,
+  });
+  Stream<List<Assignment>> watchAssignmentsByTeams(
+    List<String> teamIds, {
+    String? fromBusinessDate,
+    String? toBusinessDate,
+    String? shiftId,
+  });
   Stream<Assignment?> watchAssignment(String id);
   Future<Assignment?> getAssignmentById(String id);
 }
@@ -82,6 +92,7 @@ abstract class WorkHistoryRepository {
     required HistoryRange range,
     DateTime? dateFrom,
     DateTime? dateTo,
+    String? shiftId,
     bool forceRefresh = false,
   });
 
@@ -91,5 +102,6 @@ abstract class WorkHistoryRepository {
     required HistoryRange range,
     DateTime? dateFrom,
     DateTime? dateTo,
+    String? shiftId,
   });
 }

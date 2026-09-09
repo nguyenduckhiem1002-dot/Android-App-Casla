@@ -42,6 +42,12 @@ class AppConfig {
   static const String ppOpAllocServiceSuffix =
       'zapi_pp_opalloc/srvd_a2x/sap/zui_pp_opalloc/0001/';
 
+  /// ZUI_PP_SHIFT_API is exposed under the same tenant root as the other
+  /// mobile OData services. Configure SAP_BASE_URL once for all of them.
+  @visibleForTesting
+  static const String shiftApiServiceSuffix =
+      'zapi_pp_shift/srvd_a2x/sap/zui_pp_shift_api/0001/';
+
   /// Full service root for `ZUI_MOB_AUTH` (login/refresh/logout/changePassword).
   static String get sapAuthServiceUrl =>
       joinServiceUrl(sapBaseUrl, authServiceSuffix);
@@ -50,6 +56,9 @@ class AppConfig {
   /// submitConfirm/submitRecall/submitReverse/getSyncStatus/getWorkHistory).
   static String get sapPpOpAllocServiceUrl =>
       joinServiceUrl(sapBaseUrl, ppOpAllocServiceSuffix);
+
+  static String get sapShiftApiServiceUrl =>
+      joinServiceUrl(sapBaseUrl, shiftApiServiceSuffix);
 
   /// Joins [sapBaseUrl] with a service-binding suffix. A blank [base] means
   /// SAP_BASE_URL was never configured — stays blank rather than becoming a

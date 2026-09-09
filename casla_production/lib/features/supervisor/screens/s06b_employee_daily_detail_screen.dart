@@ -6,6 +6,7 @@ import '../../../app/theme/casla_colors.dart';
 import '../../../core/utils/quantity_formatter.dart';
 import '../../../domain/entities/entities.dart';
 import '../../../domain/entities/work_history.dart';
+import '../../../domain/policies/history_work_context.dart';
 import '../../../main.dart';
 import '../../../presentation/widgets/casla_skeleton.dart';
 import '../../../presentation/widgets/status_chip.dart';
@@ -50,19 +51,14 @@ class _S06bEmployeeDailyDetailScreenState
   late Stream<WorkHistoryResult> _historyStream;
   late Stream<List<Assignment>> _assignmentStream;
   late Stream<List<Map<String, dynamic>>> _productionStream;
+  bool _historyDataReady = false;
+  WorkHistoryResult? _lastHistoryResult;
 
   String _dateStr(DateTime d) => DateFormat('yyyy-MM-dd').format(d);
   DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 
   bool get _isSameDay =>
       _dateOnly(_dateFrom).isAtSameMomentAs(_dateOnly(_dateTo));
-
-  bool _isInRange(String businessDate) {
-    final parsed = DateTime.tryParse(businessDate);
-    if (parsed == null) return false;
-    final d = _dateOnly(parsed);
-    return !d.isBefore(_dateOnly(_dateFrom)) && !d.isAfter(_dateOnly(_dateTo));
-  }
 
   String get _dateHeaderLabel {
     final df = DateFormat('dd/MM/yyyy');
@@ -85,21 +81,33 @@ class _S06bEmployeeDailyDetailScreenState
 
   void _resetDataStreams() {
     final appState = ref.read(appStateProvider);
+    _historyDataReady = false;
+    _lastHistoryResult = null;
     final fromStr = _dateStr(_dateFrom);
     final toStr = _dateStr(_dateTo);
     _historyStream = appState.workHistoryRepo.watchWorkHistory(
       range: HistoryRange.custom,
       dateFrom: _dateFrom,
       dateTo: _dateTo,
+      shiftId: _selectedShiftId,
     );
     _assignmentStream = appState.assignmentRepo.watchWorkerAssignments(
       _workerId,
+      fromBusinessDate: fromStr,
+      toBusinessDate: toStr,
+      shiftId: _selectedShiftId,
     );
     _productionStream = appState.db.watchProductionHistory(
       _workerId,
       fromBusinessDate: fromStr,
       toBusinessDate: toStr,
+      shiftId: _selectedShiftId,
     );
+  }
+
+  String? get _selectedShiftId {
+    final value = widget.worker['shift_id']?.toString().trim();
+    return value == null || value.isEmpty ? null : value;
   }
 
   Future<WorkHistoryResult> _fetchHistory({bool forceRefresh = false}) {
@@ -110,6 +118,7 @@ class _S06bEmployeeDailyDetailScreenState
           range: HistoryRange.custom,
           dateFrom: _dateFrom,
           dateTo: _dateTo,
+          shiftId: _selectedShiftId,
           forceRefresh: forceRefresh,
         );
   }
@@ -134,7 +143,7 @@ class _S06bEmployeeDailyDetailScreenState
       context: context,
       initialDateRange: DateTimeRange(start: start, end: end),
       firstDate: DateTime(now.year - 2, 1, 1),
-      lastDate: DateTime(now.year + 2, 12, 31),
+      lastDate: today,
       helpText: 'CHỌN KHOẢNG NGÀY (NHIỀU NGÀY)',
       cancelText: 'HỦY',
       confirmText: 'ÁP DỤNG',
@@ -177,9 +186,11 @@ class _S06bEmployeeDailyDetailScreenState
     final now = DateTime.now();
     final picked = await showDatePicker(
       context: context,
-      initialDate: _dateFrom,
+      initialDate: _dateFrom.isAfter(_dateOnly(now))
+          ? _dateOnly(now)
+          : _dateFrom,
       firstDate: DateTime(now.year - 2, 1, 1),
-      lastDate: DateTime(now.year + 2, 12, 31),
+      lastDate: _dateOnly(now),
       helpText: 'CHỌN NGÀY',
       cancelText: 'HỦY',
       confirmText: 'CHỌN',
@@ -655,6 +666,18 @@ class _S06bEmployeeDailyDetailScreenState
               child: StreamBuilder<WorkHistoryResult>(
                 stream: _historyStream,
                 builder: (context, sapSnapshot) {
+                  // Preserve the last SAP result while a background refresh
+                  // is failing; otherwise StreamBuilder exposes an error-only
+                  // snapshot and the detail page loses its cached content.
+                  if (sapSnapshot.hasData &&
+                      sapSnapshot.connectionState != ConnectionState.waiting) {
+                    _lastHistoryResult = sapSnapshot.data;
+                    _historyDataReady = true;
+                  }
+                  final sapResult = _historyDataReady
+                      ? sapSnapshot.data ?? _lastHistoryResult
+                      : null;
+
                   return StreamBuilder<List<Assignment>>(
                     stream: _assignmentStream,
                     builder: (context, assignmentSnapshot) {
@@ -674,16 +697,42 @@ class _S06bEmployeeDailyDetailScreenState
                                   ConnectionState.waiting &&
                               !prodSnapshot.hasData;
 
-                          if (isSapLoading &&
-                              isAssignLoading &&
+                          if (isSapLoading ||
+                              isAssignLoading ||
                               isProdLoading) {
                             return const _EmployeeDetailSkeleton();
                           }
 
                           // 1. Process SAP Data
-                          final sapResult = sapSnapshot.data;
+                          var scopedResult = sapResult;
+                          final workId = widget.worker['work_context_id'];
+                          final selectedContext = ref
+                              .read(appStateProvider)
+                              .currentSession
+                              ?.workContexts
+                              .where((c) => c.workId == workId)
+                              .firstOrNull;
+                          if (sapResult != null && workId != null) {
+                            try {
+                              scopedResult = historyForWorkContext(
+                                sapResult,
+                                plant: selectedContext?.plant ?? '',
+                                workCenter: selectedContext?.workCenter ?? '',
+                              );
+                            } on FormatException catch (error) {
+                              return ListView(
+                                children: [
+                                  Padding(
+                                    padding: const EdgeInsets.all(24),
+                                    child: Text(error.message),
+                                  ),
+                                ],
+                              );
+                            }
+                          }
                           final allSapEntries =
-                              sapResult?.entries ?? const <WorkHistoryEntry>[];
+                              scopedResult?.entries ??
+                              const <WorkHistoryEntry>[];
                           final workerSapEntries = allSapEntries
                               .where(
                                 (e) =>
@@ -708,7 +757,7 @@ class _S06bEmployeeDailyDetailScreenState
                               .where((e) => e.transactionType == 'CONFIRM')
                               .toList();
 
-                          final sapSummary = sapResult?.workers
+                          final sapSummary = scopedResult?.workers
                               .where(
                                 (w) =>
                                     w.workerId == workerCode ||
@@ -726,9 +775,27 @@ class _S06bEmployeeDailyDetailScreenState
                           final allAssignments =
                               assignmentSnapshot.data ?? const <Assignment>[];
                           final filteredAssignments = allAssignments
-                              .where((a) => _isInRange(a.businessDate))
+                              .where(
+                                (a) =>
+                                    (workId == null ||
+                                    a.teamId == workId ||
+                                    (selectedContext != null &&
+                                        a.plant == selectedContext.plant &&
+                                        a.workCenter ==
+                                            selectedContext.workCenter)),
+                              )
                               .toList();
-                          final productionRecords = prodSnapshot.data ?? [];
+                          final productionRecords = (prodSnapshot.data ?? [])
+                              .where(
+                                (r) =>
+                                    workId == null ||
+                                    r['work_context_id'] == workId ||
+                                    (selectedContext != null &&
+                                        r['plant'] == selectedContext.plant &&
+                                        r['work_center'] ==
+                                            selectedContext.workCenter),
+                              )
+                              .toList();
 
                           // 3. Compute Totals
                           double totalAssigned = 0.0;
@@ -757,7 +824,8 @@ class _S06bEmployeeDailyDetailScreenState
                             }
                             // Sum local assignments
                             for (final a in filteredAssignments) {
-                              totalAssigned += a.effectiveAssigned;
+                              totalAssigned +=
+                                  a.assignedQuantity - a.recalledQuantity;
                               totalCompleted += a.completedQuantity;
                             }
                             // Local production records if not already in completed
@@ -768,24 +836,7 @@ class _S06bEmployeeDailyDetailScreenState
                                     (r['quantity'] as num?)?.toDouble() ?? 0.0;
                               }
                             }
-                            totalRemaining = (totalAssigned - totalCompleted)
-                                .clamp(0.0, double.infinity);
-                          }
-
-                          // Fallback to widget extra if 0
-                          if (totalAssigned == 0 &&
-                              widget.worker['assigned_qty'] != null) {
-                            totalAssigned =
-                                (widget.worker['assigned_qty'] as num)
-                                    .toDouble();
-                            totalCompleted =
-                                (widget.worker['completed_qty'] as num?)
-                                    ?.toDouble() ??
-                                0.0;
-                            totalRemaining =
-                                (widget.worker['remaining_qty'] as num?)
-                                    ?.toDouble() ??
-                                0.0;
+                            totalRemaining = totalAssigned - totalCompleted;
                           }
 
                           final completionRate = totalAssigned > 0

@@ -2,6 +2,7 @@
 // Manages current user session, permissions, and navigation state
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import '../../data/repositories/repositories_impl.dart';
@@ -17,6 +18,7 @@ import '../sync/sync_engine.dart';
 import '../sync/sync_access_scope.dart';
 import '../sync/verified_sync_coordinator.dart';
 import 'session_coordinator.dart';
+import '../../data/sap/sap_shift_controller.dart';
 
 /// App-level state holder (simple ChangeNotifier for MVP, upgrade to Riverpod later)
 class AppState extends ChangeNotifier {
@@ -29,7 +31,13 @@ class AppState extends ChangeNotifier {
   late final SapPpOpAllocGateway sapGateway;
   late final SyncEngine syncEngine;
   late final VerifiedSyncCoordinator verifiedSync;
+  late final SapShiftController shiftController;
   late final SessionCoordinator _session;
+  UserWorkContext? _activeWorkContext;
+  SapShift? _activeShift;
+  DateTime _activeBusinessDate = DateTime.now();
+  DateTime? _setupExpiresAt;
+  Timer? _setupExpiryTimer;
 
   AppState() : db = CaslaDatabase.instance {
     authRepo = AuthRepositoryImpl(db);
@@ -40,6 +48,9 @@ class AppState extends ChangeNotifier {
       db: db,
       client: SapODataClient(baseUrl: AppConfig.sapPpOpAllocServiceUrl),
       session: _AppStateSapSession(this),
+    );
+    shiftController = SapShiftController(
+      SapODataClient(baseUrl: AppConfig.sapShiftApiServiceUrl),
     );
     verifiedSync = VerifiedSyncCoordinator(
       database: db,
@@ -61,7 +72,13 @@ class AppState extends ChangeNotifier {
     );
     workHistoryRepo = WorkHistoryRepositoryImpl(
       db,
-      loadRemote: sapGateway.getWorkHistory,
+      loadRemote: ({required range, dateFrom, dateTo, shiftId}) =>
+          sapGateway.getWorkHistory(
+            range: range,
+            dateFrom: dateFrom,
+            dateTo: dateTo,
+            shiftId: shiftId,
+          ),
       cacheSubject: () => _workHistoryCacheSubject,
       isCacheSubjectCurrent: _isCurrentWorkHistorySubject,
       onAuthorizationRejected: (subject) async {
@@ -105,7 +122,7 @@ class AppState extends ChangeNotifier {
     // A cache entry belongs to one exact local session lifetime, SAP endpoint
     // and authorization scope. This prevents a new user (or a user whose
     // scope was reduced) from seeing an earlier account's cached history.
-    return 'v2:${_session.generation}:${AppConfig.sapPpOpAllocServiceUrl}:'
+    return 'v3:${_session.generation}:${AppConfig.sapPpOpAllocServiceUrl}:'
         '${session.id}:${session.maNv}:${scopes.join(',')}:'
         '${workScopes.join(',')}';
   }
@@ -130,6 +147,7 @@ class AppState extends ChangeNotifier {
   }
 
   void _onSessionChanged() {
+    _reconcileSupervisorSetupWithSession();
     // Do not start a background write loop before login (or while the account
     // is restricted to a mandatory password change). It otherwise consumes
     // global queue items with no authenticated owner.
@@ -141,6 +159,41 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _reconcileSupervisorSetupWithSession() {
+    final session = _session.currentSession;
+    if (session == null || session.role != UserRole.supervisor) return;
+
+    final current = _activeWorkContext;
+    if (current == null) return;
+
+    final refreshedWork = _findCurrentWorkContext(session, current.workId);
+    if (refreshedWork == null) {
+      _setupExpiryTimer?.cancel();
+      _setupExpiresAt = null;
+      _activeWorkContext = null;
+      _activeShift = null;
+      return;
+    }
+
+    _activeWorkContext = refreshedWork;
+    final shift = _activeShift;
+    if (shift == null ||
+        shift.plant != refreshedWork.plant ||
+        !shift.isValidOn(_activeBusinessDate)) {
+      _setupExpiryTimer?.cancel();
+      _setupExpiresAt = null;
+      _activeShift = null;
+    }
+  }
+
+  DateTime _nextSupervisorSetupBoundary([DateTime? value]) {
+    final now = value ?? DateTime.now();
+    final todayAtEight = DateTime(now.year, now.month, now.day, 8);
+    return now.isBefore(todayAtEight)
+        ? todayAtEight
+        : todayAtEight.add(const Duration(days: 1));
+  }
+
   // ─── Session ──────────────────────────────────────────────────────
   UserSession? get currentSession => _session.currentSession;
   int get sessionGeneration => _session.generation;
@@ -148,15 +201,188 @@ class AppState extends ChangeNotifier {
       _session.isGenerationCurrent(generation);
   bool get isLoggedIn => _session.isLoggedIn;
   UserRole? get currentRole => _session.currentSession?.role;
+  bool get _setupExpired =>
+      _setupExpiresAt != null && !DateTime.now().isBefore(_setupExpiresAt!);
+  UserWorkContext? get activeWorkContext =>
+      _setupExpired ? null : _activeWorkContext;
+  SapShift? get activeShift => _setupExpired ? null : _activeShift;
+  DateTime get activeBusinessDate => _activeBusinessDate;
+  bool get needsSupervisorSetup =>
+      currentRole == UserRole.supervisor &&
+      currentSession != null &&
+      !currentSession!.passwordChangeRequired &&
+      (activeWorkContext == null || activeShift == null);
+
+  Future<void> completeSupervisorSetup({
+    required UserWorkContext workContext,
+    required SapShift shift,
+    required DateTime businessDate,
+  }) async {
+    final session = currentSession;
+    if (session == null || session.role != UserRole.supervisor) {
+      throw StateError('Phiên quản lý không còn hiệu lực.');
+    }
+    _activeWorkContext = workContext;
+    _activeShift = shift;
+    _activeBusinessDate = DateTime(
+      businessDate.year,
+      businessDate.month,
+      businessDate.day,
+    );
+    final now = DateTime.now();
+    // A selection remains valid for the working day. "Ngày mới" starts at
+    // 08:00 the following calendar day, even when the setup is completed
+    // before 08:00 today.
+    final expiresAt = _nextSupervisorSetupBoundary(now);
+    _setupExpiresAt = expiresAt;
+    _scheduleSetupExpiry();
+    try {
+      await _persistSupervisorSetup(session);
+    } catch (_) {
+      _setupExpiryTimer?.cancel();
+      _setupExpiresAt = null;
+      _activeWorkContext = null;
+      _activeShift = null;
+      rethrow;
+    }
+    notifyListeners();
+  }
+
+  Future<void> _restoreSupervisorSetup(
+    UserSession session, {
+    required int generation,
+  }) async {
+    _setupExpiryTimer?.cancel();
+    _setupExpiresAt = null;
+    _activeWorkContext = null;
+    _activeShift = null;
+    final today = DateTime.now();
+    _activeBusinessDate = DateTime(today.year, today.month, today.day);
+    if (session.role != UserRole.supervisor || session.passwordChangeRequired) {
+      return;
+    }
+    final raw = await db.getLocalSetting('supervisor_setup:${session.id}');
+    if (!isSessionGenerationCurrent(generation) ||
+        currentSession?.id != session.id) {
+      return;
+    }
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final data = jsonDecode(raw);
+      if (data is! Map) return;
+      final expiresAtMs = data['expires_at_local_ms'];
+      final shiftData = data['shift'];
+      if (expiresAtMs is! num || shiftData is! Map) return;
+      final expiresAt = DateTime.fromMillisecondsSinceEpoch(
+        expiresAtMs.toInt(),
+      );
+      final setupBoundary = _nextSupervisorSetupBoundary();
+      final effectiveExpiresAt = expiresAt.isAfter(setupBoundary)
+          ? setupBoundary
+          : expiresAt;
+      if (!DateTime.now().isBefore(effectiveExpiresAt)) return;
+      final businessDate = DateTime.tryParse('${data['business_date'] ?? ''}');
+      if (businessDate == null) return;
+      final savedWorkId = '${data['work_id'] ?? ''}';
+      final workContext = _findCurrentWorkContext(session, savedWorkId);
+      if (workContext == null) return;
+      final shift = SapShift.fromJson(Map<String, dynamic>.from(shiftData));
+      if (shift.plant != workContext.plant || !shift.isValidOn(businessDate)) {
+        return;
+      }
+      _activeWorkContext = workContext;
+      _activeShift = shift;
+      _activeBusinessDate = DateTime(
+        businessDate.year,
+        businessDate.month,
+        businessDate.day,
+      );
+       _setupExpiresAt = effectiveExpiresAt;
+      _scheduleSetupExpiry();
+      notifyListeners();
+    } catch (_) {
+      // A corrupt/stale preference must never block login. The setup screen
+      // will ask for a fresh selection instead.
+      _activeWorkContext = null;
+      _activeShift = null;
+      _setupExpiresAt = null;
+    }
+  }
+
+  UserWorkContext? _findCurrentWorkContext(UserSession session, String workId) {
+    for (final context in session.workContexts) {
+      if (context.workId == workId) return context;
+    }
+    return null;
+  }
+
+  Future<void> _persistSupervisorSetup(UserSession session) async {
+    final work = _activeWorkContext;
+    final shift = _activeShift;
+    final expiresAt = _setupExpiresAt;
+    if (work == null || shift == null || expiresAt == null) return;
+    await db.setLocalSetting(
+      'supervisor_setup:${session.id}',
+      jsonEncode({
+        'work_id': work.workId,
+        'work_name': work.workName,
+        'plant': work.plant,
+        'work_center': work.workCenter,
+        'bo_phan': work.boPhan,
+        'location': work.location,
+        'business_date': _activeBusinessDate.toIso8601String(),
+        'expires_at_local_ms': expiresAt.millisecondsSinceEpoch,
+        'shift': {
+          'Plant': shift.plant,
+          'ShiftID': shift.shiftId,
+          'ValidFrom': shift.validFrom.toIso8601String(),
+          'ShiftName': shift.shiftName,
+          'StartTime': shift.startTime,
+          'EndTime': shift.endTime,
+          'EndDayOffset': shift.endDayOffset,
+          'SAPTimeZone': shift.timeZone,
+          'ValidTo': shift.validTo?.toIso8601String(),
+          'IsActive': shift.isActive,
+        },
+      }),
+    );
+  }
+
+  void _scheduleSetupExpiry() {
+    _setupExpiryTimer?.cancel();
+    final expiresAt = _setupExpiresAt;
+    if (expiresAt == null) return;
+    final delay = expiresAt.difference(DateTime.now());
+    if (delay.isNegative) return;
+    _setupExpiryTimer = Timer(
+      delay + const Duration(seconds: 1),
+      _expireSupervisorSetup,
+    );
+  }
+
+  void _expireSupervisorSetup() {
+    if (!_setupExpired) return;
+    _setupExpiresAt = null;
+    _activeWorkContext = null;
+    _activeShift = null;
+    final now = DateTime.now();
+    _activeBusinessDate = DateTime(now.year, now.month, now.day);
+    notifyListeners();
+  }
 
   Future<bool> loginByCredentials(String username, String password) async {
     final generation = _session.beginLogin();
     // Login, logout and refresh must not share a stale CSRF/cookie jar.
     authRepo.resetTransportSession();
     sapGateway.resetTransportSession();
+    _setupExpiryTimer?.cancel();
+    _setupExpiresAt = null;
+    _activeWorkContext = null;
+    _activeShift = null;
     try {
       final session = await authRepo.loginByCredentials(username, password);
       if (_session.completeLogin(generation: generation, session: session)) {
+        await _restoreSupervisorSetup(session, generation: _session.generation);
         return true;
       }
 
@@ -173,6 +399,10 @@ class AppState extends ChangeNotifier {
     // End local access first. Remote revocation is best effort and must never
     // stall the UI, nor share the next login's CSRF/cookie state.
     final previous = _session.clear();
+    _setupExpiryTimer?.cancel();
+    _setupExpiresAt = null;
+    _activeWorkContext = null;
+    _activeShift = null;
     authRepo.resetTransportSession();
     sapGateway.resetTransportSession();
     if (previous != null) unawaited(_revokeDiscardedSession(previous));
@@ -189,6 +419,7 @@ class AppState extends ChangeNotifier {
 
   @override
   void dispose() {
+    _setupExpiryTimer?.cancel();
     _session.removeListener(_onSessionChanged);
     _session.dispose();
     workHistoryRepo.dispose();

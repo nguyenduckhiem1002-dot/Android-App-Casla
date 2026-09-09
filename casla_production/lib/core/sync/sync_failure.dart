@@ -272,6 +272,12 @@ const Set<String> _sapRefreshableAuthCodes = {'TOKEN_INVALID_OR_EXPIRED'};
 /// Anything else falls back to a generic "SAP đã từ chối" message that still
 /// carries the raw code for a supervisor to search on.
 const Map<String, String> _sapBusinessMessages = {
+  'SAP_SHIFT_CONTRACT_OUTDATED':
+      'API phân công trên SAP chưa được publish với tham số ca làm việc. '
+      'Hãy activate và publish lại service binding ZAPI_PP_OPALLOC; giao dịch vẫn được giữ trên thiết bị.',
+  'SAP_PAYLOAD_FORMAT_ERROR':
+      'SAP không đọc được định dạng dữ liệu gửi lên. '
+      'Cần kiểm tra phiên bản ứng dụng và hợp đồng API; giao dịch vẫn được giữ trên thiết bị.',
   'AUTH_FAILED': 'Không thể xác thực phiên đăng nhập. Vui lòng đăng nhập lại.',
   'DEVICE_MISMATCH':
       'Token không thuộc thiết bị này. Vui lòng đăng nhập lại trên thiết bị này.',

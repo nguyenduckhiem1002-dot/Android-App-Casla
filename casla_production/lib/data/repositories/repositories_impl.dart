@@ -409,21 +409,41 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
   }
 
   @override
-  Stream<List<Assignment>> watchWorkerAssignments(String workerId) {
+  Stream<List<Assignment>> watchWorkerAssignments(
+    String workerId, {
+    String? fromBusinessDate,
+    String? toBusinessDate,
+    String? shiftId,
+  }) {
     return db.watchAssignmentsByWorker(workerId).asyncMap((entities) async {
-      return _mapToAssignmentsBatch(entities);
+      return _mapToAssignmentsBatch(
+        entities,
+        fromBusinessDate: fromBusinessDate,
+        toBusinessDate: toBusinessDate,
+        shiftId: shiftId,
+      );
     });
   }
 
   @override
-  Stream<List<Assignment>> watchAssignmentsByTeams(List<String> teamIds) {
+  Stream<List<Assignment>> watchAssignmentsByTeams(
+    List<String> teamIds, {
+    String? fromBusinessDate,
+    String? toBusinessDate,
+    String? shiftId,
+  }) {
     final normalized = teamIds
         .map((teamId) => teamId.trim())
         .where((teamId) => teamId.isNotEmpty)
         .toSet()
         .toList(growable: false);
     return db.watchAssignmentsByTeams(normalized).asyncMap((entities) async {
-      return _mapToAssignmentsBatch(entities);
+      return _mapToAssignmentsBatch(
+        entities,
+        fromBusinessDate: fromBusinessDate,
+        toBusinessDate: toBusinessDate,
+        shiftId: shiftId,
+      );
     });
   }
 
@@ -446,12 +466,18 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
 
   /// Maps only the selected assignments from one consistent display snapshot.
   Future<List<Assignment>> _mapToAssignmentsBatch(
-    List<Map<String, dynamic>> entities,
-  ) async {
+    List<Map<String, dynamic>> entities, {
+    String? fromBusinessDate,
+    String? toBusinessDate,
+    String? shiftId,
+  }) async {
     if (entities.isEmpty) return [];
 
     final snapshots = await db.getAssignmentDisplayRows(
       entities.map((entity) => entity['id'] as String),
+      fromBusinessDate: fromBusinessDate,
+      toBusinessDate: toBusinessDate,
+      shiftId: shiftId,
     );
 
     final result = <Assignment>[];
@@ -474,6 +500,8 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
           orderCode: entity['order_code'] as String? ?? orderId,
           productCode: entity['product_code'] as String? ?? 'SP',
           productName: entity['product_name'] as String? ?? 'Sản phẩm',
+          plant: entity['order_plant'] as String? ?? '',
+          workCenter: entity['order_work_center'] as String? ?? '',
           uom: entity['display_uom'] as String? ?? 'cái',
           assignedQuantity: entity['assigned_quantity'] as double,
           completedQuantity: completed,
@@ -754,6 +782,7 @@ typedef WorkHistoryLoader =
       required HistoryRange range,
       DateTime? dateFrom,
       DateTime? dateTo,
+      String? shiftId,
     });
 
 class WorkHistorySessionChangedException implements Exception {
@@ -797,6 +826,7 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
     required HistoryRange range,
     DateTime? dateFrom,
     DateTime? dateTo,
+    String? shiftId,
     bool forceRefresh = false,
   }) async {
     final subject = cacheSubject()?.trim();
@@ -807,6 +837,7 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
           range: range,
           dateFrom: dateFrom,
           dateTo: dateTo,
+          shiftId: shiftId,
         );
         stopwatch.stop();
         telemetry.recordDuration(
@@ -831,6 +862,7 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
       range: range,
       dateFrom: dateFrom,
       dateTo: dateTo,
+      shiftId: shiftId,
     );
     // A forced refresh must join the in-flight map before any SQLite await.
     // Otherwise an already-running SWR refresh can finish while this request
@@ -842,6 +874,7 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
         range: range,
         dateFrom: dateFrom,
         dateTo: dateTo,
+        shiftId: shiftId,
       );
     }
 
@@ -859,6 +892,7 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
               range: range,
               dateFrom: dateFrom,
               dateTo: dateTo,
+              shiftId: shiftId,
             ),
           ),
         );
@@ -875,6 +909,7 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
       range: range,
       dateFrom: dateFrom,
       dateTo: dateTo,
+      shiftId: shiftId,
     );
   }
 
@@ -883,11 +918,17 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
     required HistoryRange range,
     DateTime? dateFrom,
     DateTime? dateTo,
+    String? shiftId,
   }) {
     final subject = cacheSubject()?.trim();
     if (subject == null || subject.isEmpty) {
       return Stream<WorkHistoryResult>.fromFuture(
-        getWorkHistory(range: range, dateFrom: dateFrom, dateTo: dateTo),
+        getWorkHistory(
+          range: range,
+          dateFrom: dateFrom,
+          dateTo: dateTo,
+          shiftId: shiftId,
+        ),
       );
     }
     final cacheKey = _cacheKey(
@@ -895,6 +936,7 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
       range: range,
       dateFrom: dateFrom,
       dateTo: dateTo,
+      shiftId: shiftId,
     );
 
     late final StreamController<WorkHistoryResult> controller;
@@ -927,6 +969,7 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
           range: range,
           dateFrom: dateFrom,
           dateTo: dateTo,
+          shiftId: shiftId,
         );
         if (_isCacheSubjectCurrent(subject)) {
           emitIfNew(result);
@@ -982,6 +1025,7 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
     required HistoryRange range,
     DateTime? dateFrom,
     DateTime? dateTo,
+    String? shiftId,
   }) async {
     final existing = _inFlight[cacheKey];
     if (existing != null) return existing;
@@ -992,6 +1036,7 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
       range: range,
       dateFrom: dateFrom,
       dateTo: dateTo,
+      shiftId: shiftId,
     );
     _inFlight[cacheKey] = future;
 
@@ -1021,6 +1066,7 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
     required HistoryRange range,
     DateTime? dateFrom,
     DateTime? dateTo,
+    String? shiftId,
   }) async {
     _ensureSubjectCurrent(subject);
     final stopwatch = Stopwatch()..start();
@@ -1030,6 +1076,7 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
         range: range,
         dateFrom: dateFrom,
         dateTo: dateTo,
+        shiftId: shiftId,
       );
       stopwatch.stop();
       telemetry.recordDuration(
@@ -1202,6 +1249,7 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
     required HistoryRange range,
     DateTime? dateFrom,
     DateTime? dateTo,
+    String? shiftId,
   }) {
     final anchor = _dateKey(_now());
     final from =
@@ -1209,7 +1257,7 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
         (range == HistoryRange.custom ? '-' : anchor);
     final to =
         _dateKeyOrNull(dateTo) ?? (range == HistoryRange.custom ? '-' : anchor);
-    return '$subject|${range.code}|$from|$to';
+    return '$subject|${range.code}|$from|$to|${shiftId?.trim() ?? ''}';
   }
 
   static String _dateKey(DateTime value) =>

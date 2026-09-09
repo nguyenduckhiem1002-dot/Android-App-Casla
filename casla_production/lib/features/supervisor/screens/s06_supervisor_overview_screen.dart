@@ -3,14 +3,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../../app/theme/casla_colors.dart';
+import '../../../core/auth/session_manager.dart';
+import '../../../data/sap/sap_shift_controller.dart';
 import '../../../domain/entities/entities.dart';
 import '../../../domain/entities/enums.dart';
 import '../../../domain/entities/work_history.dart';
-import '../../../domain/policies/production_math.dart';
+import '../../../domain/policies/history_work_context.dart';
 import '../../../core/utils/quantity_formatter.dart';
 import '../../../main.dart';
 import '../../../presentation/widgets/kpi_card.dart';
 import '../../../presentation/widgets/status_chip.dart';
+import '../../../presentation/widgets/active_shift_context_card.dart';
 import '../../../presentation/widgets/casla_empty_state.dart';
 import '../../../presentation/widgets/casla_skeleton.dart';
 
@@ -74,16 +77,24 @@ class _S06SupervisorOverviewScreenState
   Future<List<Map<String, dynamic>>>? _employeesFuture;
   late Stream<WorkHistoryResult> _historyStream;
   late Stream<List<Assignment>> _assignmentStream;
+  String _historyContextKey = '';
+  String? _historyShiftId;
+  String _historyShiftLabel = 'Tất cả ca';
+  Future<List<SapShift>>? _historyShiftsFuture;
+  String _historyShiftsKey = '';
+  bool _historyDataReady = false;
+  WorkHistoryResult? _lastHistoryResult;
 
   @override
   void initState() {
     super.initState();
     final appState = ref.read(appStateProvider);
-    _historyStream = _watchHistory();
-    _assignmentStream = appState.assignmentRepo.watchAssignmentsByTeams(
-      appState.currentSession?.toIds ?? const <String>[],
-    );
+    _historyContextKey = _currentHistoryContextKey(appState);
+    _replaceHistoryStream();
   }
+
+  String _currentHistoryContextKey(AppState appState) =>
+      appState.activeWorkContext?.workId ?? '';
 
   Stream<WorkHistoryResult> _watchHistory() {
     return ref
@@ -91,16 +102,12 @@ class _S06SupervisorOverviewScreenState
         .workHistoryRepo
         .watchWorkHistory(
           range: _historyRange,
-          dateFrom:
-              _historyRange == HistoryRange.custom ||
-                  _historyRange == HistoryRange.day
-              ? _rangeFrom
-              : null,
-          dateTo:
-              _historyRange == HistoryRange.custom ||
-                  _historyRange == HistoryRange.day
-              ? _rangeTo
-              : null,
+          // Supervisor filters are calendar windows. Sending both dates makes
+          // the gateway use RAP RangeCode C, so "Tuần này" and "Tháng này"
+          // match what the chips display instead of SAP's rolling windows.
+          dateFrom: _rangeFrom,
+          dateTo: _rangeTo,
+          shiftId: _historyShiftId,
         )
         .asyncMap(_ensureHistoryEmployees);
   }
@@ -111,16 +118,9 @@ class _S06SupervisorOverviewScreenState
         .workHistoryRepo
         .getWorkHistory(
           range: _historyRange,
-          dateFrom:
-              _historyRange == HistoryRange.custom ||
-                  _historyRange == HistoryRange.day
-              ? _rangeFrom
-              : null,
-          dateTo:
-              _historyRange == HistoryRange.custom ||
-                  _historyRange == HistoryRange.day
-              ? _rangeTo
-              : null,
+          dateFrom: _rangeFrom,
+          dateTo: _rangeTo,
+          shiftId: _historyShiftId,
           forceRefresh: forceRefresh,
         );
     return _ensureHistoryEmployees(result);
@@ -142,6 +142,19 @@ class _S06SupervisorOverviewScreenState
           );
     }
     return result;
+  }
+
+  void _replaceHistoryStream() {
+    _historyDataReady = false;
+    _lastHistoryResult = null;
+    _historyStream = _watchHistory();
+    final appState = ref.read(appStateProvider);
+    _assignmentStream = appState.assignmentRepo.watchAssignmentsByTeams(
+      appState.currentSession?.toIds ?? const <String>[],
+      fromBusinessDate: DateFormat('yyyy-MM-dd').format(_rangeFrom),
+      toBusinessDate: DateFormat('yyyy-MM-dd').format(_rangeTo),
+      shiftId: _historyShiftId,
+    );
   }
 
   Future<void> _refresh() async {
@@ -184,9 +197,12 @@ class _S06SupervisorOverviewScreenState
       DateTime(value.year, value.month, value.day);
 
   DateTime get _rangeFrom {
+    final today = _dateOnly(DateTime.now());
+    DateTime notAfterToday(DateTime value) =>
+        value.isAfter(today) ? today : value;
     switch (_historyRange) {
       case HistoryRange.day:
-        return _dateOnly(_selectedDate);
+        return notAfterToday(_dateOnly(_selectedDate));
       case HistoryRange.week:
         final anchor = _dateOnly(DateTime.now());
         return anchor.subtract(Duration(days: anchor.weekday - 1));
@@ -194,20 +210,25 @@ class _S06SupervisorOverviewScreenState
         final now = DateTime.now();
         return DateTime(now.year, now.month, 1);
       case HistoryRange.custom:
-        return _customDateFrom ?? _dateOnly(_selectedDate);
+        return notAfterToday(_customDateFrom ?? _dateOnly(_selectedDate));
     }
   }
 
   DateTime get _rangeTo {
+    final today = _dateOnly(DateTime.now());
+    DateTime notAfterToday(DateTime value) =>
+        value.isAfter(today) ? today : value;
     switch (_historyRange) {
       case HistoryRange.day:
-        return _rangeFrom;
+        return notAfterToday(_rangeFrom);
       case HistoryRange.week:
-        return _rangeFrom.add(const Duration(days: 6));
+        return notAfterToday(_rangeFrom.add(const Duration(days: 6)));
       case HistoryRange.month:
-        return DateTime(_rangeFrom.year, _rangeFrom.month + 1, 0);
+        return notAfterToday(
+          DateTime(_rangeFrom.year, _rangeFrom.month + 1, 0),
+        );
       case HistoryRange.custom:
-        return _customDateTo ?? _rangeFrom;
+        return notAfterToday(_customDateTo ?? _rangeFrom);
     }
   }
 
@@ -253,13 +274,6 @@ class _S06SupervisorOverviewScreenState
       return '${format.format(_customDateFrom!)} - ${format.format(_customDateTo!)} ▾';
     }
     return 'Khoảng ngày ▾';
-  }
-
-  bool _isInSelectedRange(String businessDate) {
-    final parsed = DateTime.tryParse(businessDate);
-    if (parsed == null) return false;
-    final date = _dateOnly(parsed);
-    return !date.isBefore(_rangeFrom) && !date.isAfter(_rangeTo);
   }
 
   Future<List<Map<String, dynamic>>> _employeesFor(List<String> teamIds) {
@@ -390,6 +404,109 @@ class _S06SupervisorOverviewScreenState
     return options;
   }
 
+  Future<List<SapShift>> _loadHistoryShifts() {
+    final appState = ref.read(appStateProvider);
+    final plant = appState.activeWorkContext?.plant.trim() ?? '';
+    final date = _rangeFrom;
+    final key = '$plant|${DateFormat('yyyy-MM-dd').format(date)}';
+    if (_historyShiftsFuture == null || _historyShiftsKey != key) {
+      _historyShiftsKey = key;
+      _historyShiftsFuture = plant.isEmpty
+          ? Future<List<SapShift>>.value(const [])
+          : appState.shiftController.getShifts(plant: plant, onDate: date);
+    }
+    return _historyShiftsFuture!;
+  }
+
+  Future<void> _showHistoryShiftSheet() async {
+    List<SapShift> shifts;
+    try {
+      shifts = await _loadHistoryShifts();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Không tải được danh sách ca để tra cứu.'),
+          backgroundColor: CaslaColors.danger,
+        ),
+      );
+      return;
+    }
+    if (!mounted) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(10, 16, 10, 18),
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(8, 0, 8, 10),
+              child: Text(
+                'Lọc lịch sử theo ca',
+                style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w800,
+                  color: CaslaColors.primaryNavy,
+                ),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.all_inclusive),
+              title: const Text('Tất cả ca'),
+              selected: _historyShiftId == null,
+              trailing: _historyShiftId == null
+                  ? const Icon(Icons.check)
+                  : null,
+              onTap: () {
+                setState(() {
+                  _historyShiftId = null;
+                  _historyShiftLabel = 'Tất cả ca';
+                  _replaceHistoryStream();
+                });
+                Navigator.pop(sheetContext);
+              },
+            ),
+            for (final shift in shifts)
+              ListTile(
+                leading: const Icon(Icons.schedule_outlined),
+                title: Text(
+                  shift.shiftName.isEmpty ? shift.shiftId : shift.shiftName,
+                ),
+                subtitle: Text('${shift.shiftId} · ${shift.timeLabel}'),
+                selected: _historyShiftId == shift.shiftId,
+                trailing: _historyShiftId == shift.shiftId
+                    ? const Icon(Icons.check)
+                    : null,
+                onTap: () {
+                  setState(() {
+                    _historyShiftId = shift.shiftId;
+                    _historyShiftLabel = shift.shiftName.isEmpty
+                        ? shift.shiftId
+                        : shift.shiftName;
+                    _replaceHistoryStream();
+                  });
+                  Navigator.pop(sheetContext);
+                },
+              ),
+            if (shifts.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Text(
+                  'Chưa có ca phù hợp với ngày làm việc đang chọn.',
+                  style: TextStyle(color: CaslaColors.muted),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _showTeamFilterSheet() async {
     final appState = ref.read(appStateProvider);
     final session = appState.currentSession;
@@ -484,11 +601,12 @@ class _S06SupervisorOverviewScreenState
 
   Future<void> _pickSingleDate() async {
     final now = DateTime.now();
+    final today = _dateOnly(now);
     final picked = await showDatePicker(
       context: context,
       initialDate: _selectedDate,
       firstDate: DateTime(now.year - 2, 1, 1),
-      lastDate: DateTime(now.year + 2, 12, 31),
+      lastDate: today,
       helpText: 'CHỌN NGÀY',
       cancelText: 'HỦY',
       confirmText: 'CHỌN',
@@ -512,7 +630,7 @@ class _S06SupervisorOverviewScreenState
     setState(() {
       _historyRange = HistoryRange.day;
       _selectedDate = _dateOnly(picked);
-      _historyStream = _watchHistory();
+      _replaceHistoryStream();
     });
   }
 
@@ -582,7 +700,7 @@ class _S06SupervisorOverviewScreenState
                   setState(() {
                     _historyRange = HistoryRange.day;
                     _selectedDate = _dateOnly(DateTime.now());
-                    _historyStream = _watchHistory();
+                    _replaceHistoryStream();
                   });
                 },
               ),
@@ -622,7 +740,7 @@ class _S06SupervisorOverviewScreenState
                     _selectedDate = _dateOnly(
                       DateTime.now().subtract(const Duration(days: 1)),
                     );
-                    _historyStream = _watchHistory();
+                    _replaceHistoryStream();
                   });
                 },
               ),
@@ -681,7 +799,7 @@ class _S06SupervisorOverviewScreenState
       context: context,
       initialDateRange: DateTimeRange(start: start, end: end),
       firstDate: DateTime(now.year - 2, 1, 1),
-      lastDate: DateTime(now.year + 2, 12, 31),
+      lastDate: today,
       helpText: 'CHỌN KHOẢNG NGÀY (NHIỀU NGÀY)',
       fieldStartLabelText: 'Từ ngày',
       fieldEndLabelText: 'Đến ngày',
@@ -720,13 +838,22 @@ class _S06SupervisorOverviewScreenState
       _customDateFrom = from;
       _customDateTo = to;
       _selectedDate = from;
-      _historyStream = _watchHistory();
+      _replaceHistoryStream();
     });
   }
 
   @override
   Widget build(BuildContext context) {
     final appState = ref.watch(appStateProvider);
+    final historyContextKey = _currentHistoryContextKey(appState);
+    if (historyContextKey != _historyContextKey) {
+      _historyContextKey = historyContextKey;
+      _historyShiftId = null;
+      _historyShiftLabel = 'Tất cả ca';
+      _historyShiftsFuture = null;
+      _historyShiftsKey = '';
+      _replaceHistoryStream();
+    }
     final emp = appState.currentSession;
     final supervisorName = emp?.userName ?? 'Supervisor';
 
@@ -886,6 +1013,14 @@ class _S06SupervisorOverviewScreenState
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      ActiveShiftContextCard(
+                        workContext: appState.activeWorkContext,
+                        shift: appState.activeShift,
+                        businessDate: appState.activeBusinessDate,
+                        onEdit: () =>
+                            context.push('/supervisor-setup', extra: true),
+                      ),
+                      const SizedBox(height: 12),
                       Wrap(
                         spacing: 8,
                         runSpacing: 8,
@@ -896,6 +1031,13 @@ class _S06SupervisorOverviewScreenState
                             icon: Icons.groups_outlined,
                             isSelected: true,
                             onTap: _showTeamFilterSheet,
+                          ),
+
+                          _buildFilterChip(
+                            '$_historyShiftLabel ▾',
+                            icon: Icons.schedule_outlined,
+                            isSelected: _historyShiftId != null,
+                            onTap: _showHistoryShiftSheet,
                           ),
 
                           // 2. Chip Hôm nay (hoặc 1 ngày cụ thể)
@@ -913,7 +1055,7 @@ class _S06SupervisorOverviewScreenState
                             onTap: () {
                               setState(() {
                                 _historyRange = HistoryRange.week;
-                                _historyStream = _watchHistory();
+                                _replaceHistoryStream();
                               });
                             },
                           ),
@@ -925,7 +1067,7 @@ class _S06SupervisorOverviewScreenState
                             onTap: () {
                               setState(() {
                                 _historyRange = HistoryRange.month;
-                                _historyStream = _watchHistory();
+                                _replaceHistoryStream();
                               });
                             },
                           ),
@@ -962,6 +1104,18 @@ class _S06SupervisorOverviewScreenState
           child: StreamBuilder<WorkHistoryResult>(
             stream: _historyStream,
             builder: (context, historySnapshot) {
+              // A refresh error is emitted after cached data by the
+              // repository. StreamBuilder does not retain that data on the
+              // error snapshot, so keep the last successful result locally.
+              if (historySnapshot.hasData &&
+                  historySnapshot.connectionState != ConnectionState.waiting) {
+                _lastHistoryResult = historySnapshot.data;
+                _historyDataReady = true;
+              }
+              final sapResult = _historyDataReady
+                  ? historySnapshot.data ?? _lastHistoryResult
+                  : null;
+
               return StreamBuilder<List<Assignment>>(
                 stream: _assignmentStream,
                 builder: (context, assignmentSnapshot) {
@@ -971,22 +1125,61 @@ class _S06SupervisorOverviewScreenState
                       final isHistoryLoading =
                           historySnapshot.connectionState ==
                               ConnectionState.waiting &&
-                          !historySnapshot.hasData;
+                          sapResult == null;
                       final isEmpLoading =
                           empSnapshot.connectionState ==
                               ConnectionState.waiting &&
                           !empSnapshot.hasData;
 
-                      if (isHistoryLoading || isEmpLoading) {
+                      if (isHistoryLoading ||
+                          isEmpLoading ||
+                          assignmentSnapshot.connectionState ==
+                              ConnectionState.waiting) {
                         return const _OverviewSkeleton();
                       }
 
+                      if (historySnapshot.hasError && sapResult == null) {
+                        return _OverviewHistoryError(onRetry: _refresh);
+                      }
+
                       // Process SAP data
-                      final sapResult = historySnapshot.data;
+                      WorkHistoryResult? scopedResult = sapResult;
+                      if (sapResult != null && _selectedTeamScopeIds != null) {
+                        final selected = appState.currentSession?.workContexts
+                            .where((c) => c.workId == _selectedTeamId)
+                            .firstOrNull;
+                        try {
+                          scopedResult = historyForWorkContext(
+                            sapResult,
+                            plant: selected?.plant ?? '',
+                            workCenter: selected?.workCenter ?? '',
+                          );
+                        } on FormatException catch (error) {
+                          return ListView(
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.all(24),
+                                child: Column(
+                                  children: [
+                                    Text(error.message),
+                                    TextButton(
+                                      onPressed: () => setState(() {
+                                        _selectedTeamId = 'ALL';
+                                        _selectedTeamScopeIds = null;
+                                      }),
+                                      child: const Text('Xem tất cả tổ'),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          );
+                        }
+                      }
                       final sapWorkers =
-                          sapResult?.workers ?? const <WorkHistorySummary>[];
+                          scopedResult?.workers ?? const <WorkHistorySummary>[];
                       final sapEntries =
-                          sapResult?.entries ?? const <WorkHistoryEntry>[];
+                          scopedResult?.entries ?? const <WorkHistoryEntry>[];
 
                       // Process Local data
                       final rawAssignments =
@@ -994,9 +1187,6 @@ class _S06SupervisorOverviewScreenState
                       final localAssignments = rawAssignments.where((a) {
                         if (_selectedTeamScopeIds != null &&
                             !_selectedTeamScopeIds!.contains(a.teamId)) {
-                          return false;
-                        }
-                        if (!_isInSelectedRange(a.businessDate)) {
                           return false;
                         }
                         return true;
@@ -1078,15 +1268,8 @@ class _S06SupervisorOverviewScreenState
                           recalledQty += a.recalledQuantity;
                         }
 
-                        final effectiveQty =
-                            ProductionMath.calculateEffectiveAssigned(
-                              workerAssigned,
-                              recalledQty,
-                            );
-                        final remainingQty = ProductionMath.calculateRemaining(
-                          effectiveQty,
-                          completedQty,
-                        );
+                        final effectiveQty = workerAssigned - recalledQty;
+                        final remainingQty = effectiveQty - completedQty;
 
                         workerMap[empCode.isNotEmpty
                             ? empCode
@@ -1292,6 +1475,11 @@ class _S06SupervisorOverviewScreenState
                                                   'date': _rangeFrom,
                                                   'date_from': _rangeFrom,
                                                   'date_to': _rangeTo,
+                                                  'shift_id': _historyShiftId,
+                                                  'work_context_id':
+                                                      _selectedTeamId == 'ALL'
+                                                      ? null
+                                                      : _selectedTeamId,
                                                 },
                                               );
                                             },
@@ -1606,6 +1794,51 @@ class _OverviewSkeleton extends StatelessWidget {
           const CaslaSkeleton(height: 126, radius: 12),
           const SizedBox(height: 10),
         ],
+      ],
+    );
+  }
+}
+
+class _OverviewHistoryError extends StatelessWidget {
+  final Future<void> Function() onRetry;
+
+  const _OverviewHistoryError({required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(24, 64, 24, 24),
+      children: [
+        Icon(
+          Icons.cloud_off_outlined,
+          size: 42,
+          color: CaslaColors.muted.withValues(alpha: 0.75),
+        ),
+        const SizedBox(height: 14),
+        const Text(
+          'Chưa tải được dữ liệu SAP',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+            color: CaslaColors.navy900,
+          ),
+        ),
+        const SizedBox(height: 6),
+        const Text(
+          'Kéo xuống để thử lại hoặc kiểm tra kết nối mạng. Dữ liệu giao việc trên thiết bị vẫn được giữ nguyên.',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: CaslaColors.muted, height: 1.4),
+        ),
+        const SizedBox(height: 18),
+        Center(
+          child: OutlinedButton.icon(
+            onPressed: onRetry,
+            icon: const Icon(Icons.refresh),
+            label: const Text('Thử tải lại'),
+          ),
+        ),
       ],
     );
   }
