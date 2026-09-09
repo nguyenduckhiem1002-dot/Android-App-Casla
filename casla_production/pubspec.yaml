@@ -19,7 +19,7 @@ dependencies:
   mobile_scanner: 7.4.0
 
   # Networking (SAP OData/RAP)
-  dio: 5.11.0
+  dio: 5.11.1
   # Network reachability — drives the sync engine's auto-retry.
   # 7.1.0+ references NWPath.isUltraConstrained (iOS 26 SDK) even behind an
   # `#available` guard — the symbol still has to exist in the SDK the compiler
