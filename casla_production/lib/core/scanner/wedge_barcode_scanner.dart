@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -116,6 +117,11 @@ class WedgeBarcodeScanner implements BarcodeScanner {
     }
 
     final character = event.character;
+    developer.log(
+      'key=${event.logicalKey.keyLabel} hasChar=${character != null && character.isNotEmpty} '
+      'bufLen=${_buffer.length}',
+      name: 'CaslaScan.wedge',
+    );
     if (character == null || character.isEmpty) return false;
     // Control characters carry no barcode content and would corrupt the value.
     if (character.codeUnitAt(0) < 0x20 || character.codeUnitAt(0) == 0x7f) {
@@ -143,6 +149,10 @@ class WedgeBarcodeScanner implements BarcodeScanner {
   }
 
   bool _emit(String? code) {
+    developer.log(
+      'flush -> ${code == null ? "rejected (too short/slow)" : "emit len=${code.length}"}',
+      name: 'CaslaScan.wedge',
+    );
     if (code == null || code.isEmpty) return false;
     if (_controller.isClosed) return false;
 

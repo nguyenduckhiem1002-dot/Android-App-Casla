@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 
 import 'package:flutter/material.dart';
 
@@ -182,6 +183,10 @@ class BarcodeScanListenerState extends State<BarcodeScanListener>
   Future<void> _probeAvailability() async {
     final available = await _scanner.isAvailable();
     final seenBefore = await _preferences.wasHardwareScanSeen();
+    developer.log(
+      'probe available=$available seenBefore=$seenBefore',
+      name: 'CaslaScan',
+    );
     if (!mounted) return;
 
     // A wedge reader is invisible until it first fires, so a device that has
@@ -218,6 +223,13 @@ class BarcodeScanListenerState extends State<BarcodeScanListener>
       (_route?.isCurrent ?? true);
 
   Future<void> _handle(BarcodeScanEvent event) async {
+    developer.log(
+      'event src=${event.symbology ?? event.source.name} '
+      'len=${event.rawValue.trim().length} canAccept=$_canAccept '
+      '(enabled=${widget.enabled} mounted=$mounted routeVisible=$_isRouteVisible '
+      'handling=$_isHandling ticker=${TickerMode.valuesOf(context).enabled})',
+      name: 'CaslaScan',
+    );
     if (!_canAccept) return;
 
     final code = event.rawValue.trim();
