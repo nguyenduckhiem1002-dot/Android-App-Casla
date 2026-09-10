@@ -5,12 +5,13 @@ void main() {
   group('WorkerQrParser', () {
     test('parses JSON and delimited payloads', () {
       final json = WorkerQrParser.parse(
-        '{"ma_nv":"NV42","ten":"Nguyễn Văn B"}',
+        '{"ma_nv":"NV42","ten":"Nguyễn Văn B","bo_phan":"Tổ Cắt 2"}',
       );
       final delimited = WorkerQrParser.parse('NV43 | Trần Thị C');
 
       expect(json.isValid, isTrue);
       expect(json.maNv, 'NV42');
+      expect(json.department, 'Tổ Cắt 2');
       expect(delimited.isValid, isTrue);
       expect(delimited.maNv, 'NV43');
     });

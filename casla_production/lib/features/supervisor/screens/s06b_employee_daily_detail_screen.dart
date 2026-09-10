@@ -51,6 +51,7 @@ class _S06bEmployeeDailyDetailScreenState
   late Stream<WorkHistoryResult> _historyStream;
   late Stream<List<Assignment>> _assignmentStream;
   late Stream<List<Map<String, dynamic>>> _productionStream;
+  late Stream<List<Map<String, dynamic>>> _recallStream;
   bool _historyDataReady = false;
   WorkHistoryResult? _lastHistoryResult;
 
@@ -85,6 +86,12 @@ class _S06bEmployeeDailyDetailScreenState
     _lastHistoryResult = null;
     final fromStr = _dateStr(_dateFrom);
     final toStr = _dateStr(_dateTo);
+    _recallStream = appState.db.watchRecallHistory(
+      _workerId,
+      fromBusinessDate: fromStr,
+      toBusinessDate: toStr,
+      shiftId: _selectedShiftId,
+    );
     _historyStream = appState.workHistoryRepo.watchWorkHistory(
       range: HistoryRange.custom,
       dateFrom: _dateFrom,
@@ -288,7 +295,9 @@ class _S06bEmployeeDailyDetailScreenState
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Row(
+                              Wrap(
+                                spacing: 6,
+                                runSpacing: 4,
                                 children: [
                                   const Text(
                                     'Chọn khoảng ngày',
@@ -299,7 +308,6 @@ class _S06bEmployeeDailyDetailScreenState
                                       color: CaslaColors.navy900,
                                     ),
                                   ),
-                                  const SizedBox(width: 6),
                                   Container(
                                     padding: const EdgeInsets.symmetric(
                                       horizontal: 6,
@@ -570,7 +578,12 @@ class _S06bEmployeeDailyDetailScreenState
     final workerName = widget.worker['ten']?.toString() ?? 'Nhân viên';
     final workerCode = widget.worker['ma_nv']?.toString() ?? 'Chưa có mã';
     final workerTeam =
-        widget.worker['bo_phan']?.toString() ?? 'Chưa xác định tổ';
+        _firstNonEmpty([
+          widget.worker['bo_phan'],
+          widget.worker['department'],
+          widget.worker['team'],
+        ]) ??
+        'Chưa xác định tổ';
     final workerId = widget.worker['id']?.toString() ?? '';
 
     return Scaffold(
@@ -614,10 +627,14 @@ class _S06bEmployeeDailyDetailScreenState
         children: [
           // Date Selector Header
           Container(
-            color: CaslaColors.surface,
+            width: double.infinity,
+            color: CaslaColors.background,
             padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            child: Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 12,
+              runSpacing: 8,
               children: [
                 Row(
                   mainAxisSize: MainAxisSize.min,
@@ -644,11 +661,9 @@ class _S06bEmployeeDailyDetailScreenState
                   icon: const Icon(Icons.tune_rounded, size: 16),
                   label: const Text('Đổi ngày ▾'),
                   style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(0, 48),
                     foregroundColor: CaslaColors.primaryNavy,
-                    side: const BorderSide(
-                      color: CaslaColors.accentGold,
-                      width: 1.3,
-                    ),
+                    side: const BorderSide(color: CaslaColors.line, width: 1.3),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(18),
                     ),
@@ -756,6 +771,15 @@ class _S06bEmployeeDailyDetailScreenState
                           final sapConfirms = workerSapEntries
                               .where((e) => e.transactionType == 'CONFIRM')
                               .toList();
+                          final sapRecalls =
+                              workerSapEntries
+                                  .where((e) => e.transactionType == 'RECALL')
+                                  .toList()
+                                ..sort(
+                                  (a, b) => b.executionDate.compareTo(
+                                    a.executionDate,
+                                  ),
+                                );
 
                           final sapSummary = scopedResult?.workers
                               .where(
@@ -821,6 +845,9 @@ class _S06bEmployeeDailyDetailScreenState
                             }
                             for (final c in sapConfirms) {
                               totalCompleted += c.quantity;
+                            }
+                            for (final recall in sapRecalls) {
+                              totalAssigned -= recall.quantity;
                             }
                             // Sum local assignments
                             for (final a in filteredAssignments) {
@@ -1139,6 +1166,8 @@ class _S06bEmployeeDailyDetailScreenState
                               const SizedBox(height: 20),
 
                               // Section: Lịch sử xác nhận hoàn thành
+                              _buildRecallHistory(sapRecalls),
+                              const SizedBox(height: 20),
                               Row(
                                 mainAxisAlignment:
                                     MainAxisAlignment.spaceBetween,
@@ -1261,19 +1290,34 @@ class _S06bEmployeeDailyDetailScreenState
                                           ),
                                         ),
                                         const SizedBox(width: 12),
-                                        Text(
-                                          '+${formatQuantity(e.quantity)} ${e.unitOfMeasure}',
-                                          style: const TextStyle(
-                                            fontFamily: 'monospace',
-                                            fontWeight: FontWeight.w700,
-                                            fontSize: 14,
-                                            color: CaslaColors.success,
-                                          ),
+                                        Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.end,
+                                          children: [
+                                            _buildHistoryStatusBadge(
+                                              label: e.transactionStatus ==
+                                                      'POSTED'
+                                                  ? 'ĐÃ GHI SỔ'
+                                                  : _historyStatusLabel(
+                                                      e.transactionStatus,
+                                                    ),
+                                              isRecall: false,
+                                            ),
+                                            const SizedBox(height: 6),
+                                            Text(
+                                              '+${formatQuantity(e.quantity)} ${e.unitOfMeasure}',
+                                              style: const TextStyle(
+                                                fontFamily: 'monospace',
+                                                fontWeight: FontWeight.w700,
+                                                fontSize: 14,
+                                                color: CaslaColors.success,
+                                              ),
+                                            ),
+                                          ],
                                         ),
                                       ],
                                     ),
                                   ),
-
                                 // Local production records
                                 for (final r in productionRecords)
                                   Container(
@@ -1320,14 +1364,25 @@ class _S06bEmployeeDailyDetailScreenState
                                           ),
                                         ),
                                         const SizedBox(width: 12),
-                                        Text(
-                                          '+${formatQuantity((r['quantity'] as num).toDouble())} $uom',
-                                          style: const TextStyle(
-                                            fontFamily: 'monospace',
-                                            fontWeight: FontWeight.w700,
-                                            fontSize: 14,
-                                            color: CaslaColors.success,
-                                          ),
+                                        Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.end,
+                                          children: [
+                                            _buildHistoryStatusBadge(
+                                              label: 'ĐÃ GHI SỔ',
+                                              isRecall: false,
+                                            ),
+                                            const SizedBox(height: 6),
+                                            Text(
+                                              '+${formatQuantity((r['quantity'] as num).toDouble())} $uom',
+                                              style: const TextStyle(
+                                                fontFamily: 'monospace',
+                                                fontWeight: FontWeight.w700,
+                                                fontSize: 14,
+                                                color: CaslaColors.success,
+                                              ),
+                                            ),
+                                          ],
                                         ),
                                       ],
                                     ),
@@ -1345,6 +1400,227 @@ class _S06bEmployeeDailyDetailScreenState
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildHistoryStatusBadge({
+    required String label,
+    required bool isRecall,
+  }) {
+    final foreground = isRecall ? CaslaColors.danger : CaslaColors.success;
+    final background =
+        isRecall ? CaslaColors.dangerBg : CaslaColors.successBg;
+    final border = isRecall
+        ? CaslaColors.danger.withValues(alpha: 0.25)
+        : CaslaColors.success.withValues(alpha: 0.25);
+    return Semantics(
+      label: label,
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 28),
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+        decoration: BoxDecoration(
+          color: background,
+          border: Border.all(color: border),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.circle, size: 6, color: foreground),
+            const SizedBox(width: 5),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: foreground,
+                fontSize: 10.5,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.2,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _historyStatusLabel(String status) {
+    return switch (status) {
+      'POSTED' => 'ĐÃ GHI SỔ',
+      'SYNCED' => 'ĐÃ GHI SỔ',
+      'PENDING' => 'CHỜ ĐỒNG BỘ',
+      'NEEDS_VERIFICATION' => 'CẦN XÁC MINH',
+      'FAILED' => 'SAP TỪ CHỐI',
+      _ => status.isEmpty ? 'HOÀN THÀNH' : status,
+    };
+  }
+
+  Widget _buildRecallHistory(List<WorkHistoryEntry> sapRecalls) {
+    String normalize(Object? id) =>
+        (id?.toString() ?? '').replaceAll('-', '').toLowerCase();
+    return StreamBuilder<List<Map<String, dynamic>>>(
+      stream: _recallStream,
+      builder: (context, snapshot) {
+        final ids = sapRecalls.map((e) => normalize(e.transactionUuid)).toSet()
+          ..remove('');
+        final workId = widget.worker['work_context_id'];
+        final selected = ref
+            .read(appStateProvider)
+            .currentSession
+            ?.workContexts
+            .where((c) => c.workId == workId)
+            .firstOrNull;
+        final local = (snapshot.data ?? []).where((r) {
+          final inScope =
+              workId == null ||
+              r['work_context_id'] == workId ||
+              (selected != null &&
+                  r['plant'] == selected.plant &&
+                  r['work_center'] == selected.workCenter);
+          return inScope &&
+              !ids.contains(normalize(r['sap_id'])) &&
+              !ids.contains(normalize(r['idempotency_key']));
+        }).toList();
+        Widget tile(
+          String order,
+          String operation,
+          double quantity,
+          String unit,
+          DateTime time,
+          String status,
+        ) {
+          final normalizedStatus = status.toUpperCase();
+          final badgeLabel = switch (normalizedStatus) {
+            'ĐÃ GHI SỔ' || 'SYNCED' || 'POSTED' => 'ĐÃ THU HỒI',
+            'CẦN XÁC MINH' || 'NEEDS_VERIFICATION' => 'CẦN XÁC MINH',
+            'SAP TỪ CHỐI · KHÔNG TÍNH VÀO SẢN LƯỢNG' || 'FAILED' =>
+              'SAP TỪ CHỐI',
+            _ => 'THU HỒI',
+          };
+          return Container(
+            margin: const EdgeInsets.only(top: 8),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: CaslaColors.surface,
+              border: Border.all(color: CaslaColors.line),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '$order · CĐ: $operation',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: CaslaColors.primaryNavy,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        '${DateFormat('dd/MM HH:mm').format(time)} · $status',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: CaslaColors.muted,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    _buildHistoryStatusBadge(
+                      label: badgeLabel,
+                      isRecall: true,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '−${formatQuantity(quantity)} $unit',
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                        color: CaslaColors.danger,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Lịch sử thu hồi (${sapRecalls.length + local.length})',
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w800,
+                color: CaslaColors.primaryNavy,
+              ),
+            ),
+            if (snapshot.connectionState == ConnectionState.waiting &&
+                !snapshot.hasData)
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: CaslaSkeleton(height: 68, radius: 12),
+              ),
+            if (snapshot.hasError)
+              TextButton(
+                onPressed: () => setState(_resetDataStreams),
+                child: const Text(
+                  'Chưa tải được thu hồi trên thiết bị. Thử lại',
+                ),
+              ),
+            if (sapRecalls.isEmpty &&
+                local.isEmpty &&
+                !snapshot.hasError &&
+                snapshot.connectionState != ConnectionState.waiting)
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Text('Chưa có giao dịch thu hồi trong kỳ này.'),
+              ),
+            for (final e in sapRecalls)
+              tile(
+                e.productionOrder,
+                e.operation,
+                e.quantity,
+                e.unitOfMeasure,
+                e.executionDate,
+                e.transactionStatus == 'POSTED'
+                    ? 'Đã ghi sổ'
+                    : e.transactionStatus,
+              ),
+            for (final r in local)
+              tile(
+                r['production_order']?.toString() ?? '',
+                r['operation']?.toString() ?? '',
+                (r['quantity'] as num).toDouble(),
+                r['unit_of_measure']?.toString() ?? '',
+                DateTime.fromMillisecondsSinceEpoch(
+                  (r['occurred_at_utc'] as num).toInt(),
+                ),
+                switch (r['sync_status']) {
+                  'SYNCED' => 'Đã đồng bộ',
+                  'FAILED' => 'SAP từ chối · Không tính vào sản lượng',
+                  'NEEDS_VERIFICATION' => 'Cần xác minh',
+                  _ => 'Chờ đồng bộ',
+                },
+              ),
+          ],
+        );
+      },
     );
   }
 
@@ -1392,5 +1668,13 @@ class _S06bEmployeeDailyDetailScreenState
         ),
       ],
     );
+  }
+
+  String? _firstNonEmpty(List<Object?> values) {
+    for (final value in values) {
+      final text = value?.toString().trim() ?? '';
+      if (text.isNotEmpty) return text;
+    }
+    return null;
   }
 }

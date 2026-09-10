@@ -52,6 +52,7 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
       final worker = await db.acceptWorkerQr(
         code: parsed.maNv,
         name: parsed.name,
+        department: parsed.department,
         validFrom: parsed.validFrom,
         validTo: parsed.validTo,
       );

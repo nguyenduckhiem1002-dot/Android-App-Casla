@@ -10,10 +10,11 @@ void main() {
     'unknown QR worker is accepted locally without assigning permissions',
     () async {
       final qr = WorkerQrParser.parse(
-        '{"WorkerID":"QR_NEW_01","WorkerName":"Test QR","ValidFrom":"2026-09-01","ValidTo":"2026-09-07"}',
+        '{"WorkerID":"QR_NEW_01","WorkerName":"Test QR","BoPhan":"Tổ Cắt 2","ValidFrom":"2026-09-01","ValidTo":"2026-09-07"}',
       );
       expect(qr.isValid, isTrue);
       expect(qr.name, 'Test QR');
+      expect(qr.department, 'Tổ Cắt 2');
       expect(qr.isEffectiveOn(DateTime(2026, 8, 31)), isFalse);
       expect(qr.isEffectiveOn(DateTime(2026, 9, 1)), isTrue);
       expect(qr.isEffectiveOn(DateTime(2026, 9, 7)), isTrue);
@@ -22,16 +23,23 @@ void main() {
       final worker = await db.acceptWorkerQr(
         code: qr.maNv,
         name: qr.name,
+        department: qr.department,
         validFrom: qr.validFrom,
         validTo: qr.validTo,
       );
       expect(worker['ma_nv'], qr.maNv);
       expect(worker['ten'], 'Test QR');
+      expect(worker['bo_phan'], 'Tổ Cắt 2');
       expect(worker['to_ids'], isEmpty);
       expect(worker['quyen_han'], isEmpty);
-      final again = await db.acceptWorkerQr(code: qr.maNv, name: 'Updated QR');
+      final again = await db.acceptWorkerQr(
+        code: qr.maNv,
+        name: 'Updated QR',
+        department: 'Tổ Cắt 3',
+      );
       expect(again['id'], worker['id']);
       expect(again['ten'], 'Updated QR');
+      expect(again['bo_phan'], 'Tổ Cắt 3');
       expect(again['valid_to'], isNull);
     },
   );

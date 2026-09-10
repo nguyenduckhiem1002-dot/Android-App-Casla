@@ -5,6 +5,7 @@ class WorkerQrResult {
   final bool isValid;
   final String maNv;
   final String name;
+  final String department;
   final DateTime? validFrom;
   final DateTime? validTo;
   final String? error;
@@ -13,6 +14,7 @@ class WorkerQrResult {
     required this.isValid,
     required this.maNv,
     this.name = '',
+    this.department = '',
     this.validFrom,
     this.validTo,
     this.error,
@@ -25,6 +27,7 @@ class WorkerQrResult {
   factory WorkerQrResult.success(
     String maNv, {
     String name = '',
+    String department = '',
     DateTime? validFrom,
     DateTime? validTo,
   }) {
@@ -32,6 +35,7 @@ class WorkerQrResult {
       isValid: true,
       maNv: maNv.trim(),
       name: name,
+      department: department.trim(),
       validFrom: validFrom,
       validTo: validTo,
     );
@@ -156,6 +160,17 @@ class WorkerQrParser {
         'ten',
         'hoten',
         'tennhanvien',
+      ]),
+      department: _firstValue(normalized, const [
+        'bophan',
+        'bo_phan',
+        'department',
+        'team',
+        'to',
+        'tenbo phan',
+        'tenbo_phan',
+        'donvi',
+        'donvitochuc',
       ]),
       validFrom: from.value,
       validTo: to.value,

@@ -11,7 +11,6 @@ import '../../../domain/entities/work_history.dart';
 import '../../../domain/policies/history_work_context.dart';
 import '../../../core/utils/quantity_formatter.dart';
 import '../../../main.dart';
-import '../../../presentation/widgets/kpi_card.dart';
 import '../../../presentation/widgets/status_chip.dart';
 import '../../../presentation/widgets/active_shift_context_card.dart';
 import '../../../presentation/widgets/casla_empty_state.dart';
@@ -255,14 +254,6 @@ class _S06SupervisorOverviewScreenState
     }
   }
 
-  String get _dayChipLabel {
-    if (_historyRange == HistoryRange.day) {
-      final display = _formatDisplayDate(_selectedDate);
-      return display == 'Hôm nay' ? 'Hôm nay ▾' : '$display ▾';
-    }
-    return 'Hôm nay ▾';
-  }
-
   String get _customRangeChipLabel {
     if (_historyRange == HistoryRange.custom &&
         _customDateFrom != null &&
@@ -418,6 +409,8 @@ class _S06SupervisorOverviewScreenState
     return _historyShiftsFuture!;
   }
 
+  // Kept as a compatibility path for callers from older routes.
+  // ignore: unused_element
   Future<void> _showHistoryShiftSheet() async {
     List<SapShift> shifts;
     try {
@@ -507,6 +500,8 @@ class _S06SupervisorOverviewScreenState
     );
   }
 
+  // Kept as a compatibility path for callers from older routes.
+  // ignore: unused_element
   Future<void> _showTeamFilterSheet() async {
     final appState = ref.read(appStateProvider);
     final session = appState.currentSession;
@@ -599,6 +594,8 @@ class _S06SupervisorOverviewScreenState
     );
   }
 
+  // Kept as a compatibility path for callers from older routes.
+  // ignore: unused_element
   Future<void> _pickSingleDate() async {
     final now = DateTime.now();
     final today = _dateOnly(now);
@@ -634,6 +631,8 @@ class _S06SupervisorOverviewScreenState
     });
   }
 
+  // Kept as a compatibility path for callers from older routes.
+  // ignore: unused_element
   Future<void> _showDaySelectionSheet() async {
     await showModalBottomSheet<void>(
       context: context,
@@ -782,6 +781,8 @@ class _S06SupervisorOverviewScreenState
     );
   }
 
+  // Kept as a compatibility path for callers from older routes.
+  // ignore: unused_element
   Future<void> _pickDateRange() async {
     final now = DateTime.now();
     final today = _dateOnly(now);
@@ -949,7 +950,7 @@ class _S06SupervisorOverviewScreenState
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
                                 Text(
-                                  supervisorName,
+                                  'Tổng quan',
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(
@@ -961,7 +962,7 @@ class _S06SupervisorOverviewScreenState
                                 ),
                                 const SizedBox(height: 2),
                                 Text(
-                                  'Supervisor · ${emp?.teamName.isNotEmpty == true ? emp!.teamName : 'Phạm vi được phân quyền'}',
+                                  '$supervisorName · ${emp?.teamName.isNotEmpty == true ? emp!.teamName : 'Phạm vi được phân quyền'}',
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(
@@ -1017,81 +1018,14 @@ class _S06SupervisorOverviewScreenState
                         workContext: appState.activeWorkContext,
                         shift: appState.activeShift,
                         businessDate: appState.activeBusinessDate,
+                        compact: true,
                         onEdit: () =>
                             context.push('/supervisor-setup', extra: true),
                       ),
                       const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          // 1. Lọc theo tổ sản xuất
-                          _buildFilterChip(
-                            '$teamFilterLabel ▾',
-                            icon: Icons.groups_outlined,
-                            isSelected: true,
-                            onTap: _showTeamFilterSheet,
-                          ),
-
-                          _buildFilterChip(
-                            '$_historyShiftLabel ▾',
-                            icon: Icons.schedule_outlined,
-                            isSelected: _historyShiftId != null,
-                            onTap: _showHistoryShiftSheet,
-                          ),
-
-                          // 2. Chip Hôm nay (hoặc 1 ngày cụ thể)
-                          _buildFilterChip(
-                            _dayChipLabel,
-                            icon: Icons.calendar_today_outlined,
-                            isSelected: _historyRange == HistoryRange.day,
-                            onTap: _showDaySelectionSheet,
-                          ),
-
-                          // 3. Chip Tuần này
-                          _buildFilterChip(
-                            'Tuần này',
-                            isSelected: _historyRange == HistoryRange.week,
-                            onTap: () {
-                              setState(() {
-                                _historyRange = HistoryRange.week;
-                                _replaceHistoryStream();
-                              });
-                            },
-                          ),
-
-                          // 4. Chip Tháng này
-                          _buildFilterChip(
-                            'Tháng này',
-                            isSelected: _historyRange == HistoryRange.month,
-                            onTap: () {
-                              setState(() {
-                                _historyRange = HistoryRange.month;
-                                _replaceHistoryStream();
-                              });
-                            },
-                          ),
-
-                          // 5. Chip Khoảng ngày (Custom Date Range)
-                          _buildFilterChip(
-                            _customRangeChipLabel,
-                            icon: Icons.date_range_outlined,
-                            isSelected: _historyRange == HistoryRange.custom,
-                            onTap: _pickDateRange,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Phạm vi SAP: ${_scopeSummary(emp)}',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          height: 1.35,
-                          color: CaslaColors.muted,
-                          fontWeight: FontWeight.w600,
-                        ),
+                      _buildOverviewFilterBar(
+                        teamLabel: teamFilterLabel,
+                        onTap: _showOverviewFiltersSheet,
                       ),
                       const SizedBox(height: 12),
                     ],
@@ -1180,6 +1114,15 @@ class _S06SupervisorOverviewScreenState
                           scopedResult?.workers ?? const <WorkHistorySummary>[];
                       final sapEntries =
                           scopedResult?.entries ?? const <WorkHistoryEntry>[];
+                      final uoms = sapWorkers
+                          .map((worker) => worker.unitOfMeasure.trim())
+                          .where((unit) => unit.isNotEmpty)
+                          .toSet();
+                      final overviewUom = uoms.length == 1
+                          ? uoms.single
+                          : uoms.length > 1
+                          ? 'nhiều ĐVT'
+                          : null;
 
                       // Process Local data
                       final rawAssignments =
@@ -1330,60 +1273,12 @@ class _S06SupervisorOverviewScreenState
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  // KPI Grid Cards
-                                  LayoutBuilder(
-                                    builder: (context, constraints) => Wrap(
-                                      spacing: 10,
-                                      runSpacing: 10,
-                                      children:
-                                          <Widget>[
-                                                KpiCard(
-                                                  label: 'Tổng giao hiệu lực',
-                                                  value: formatQuantity(
-                                                    totalEffective,
-                                                  ),
-                                                  isAccent: true,
-                                                ),
-                                                KpiCard(
-                                                  label: 'Tổng hoàn thành',
-                                                  value: formatQuantity(
-                                                    totalCompleted,
-                                                  ),
-                                                ),
-                                                KpiCard(
-                                                  label: 'Đã được giao',
-                                                  value: '$assignedWorkerCount',
-                                                  uom: 'NV',
-                                                ),
-                                                KpiCard(
-                                                  label: 'Phân công OPEN',
-                                                  value: '$openCount',
-                                                ),
-                                              ]
-                                              .map(
-                                                (card) => SizedBox(
-                                                  width:
-                                                      constraints.maxWidth <
-                                                              320 ||
-                                                          MediaQuery.textScalerOf(
-                                                                context,
-                                                              ).scale(14) >
-                                                              21
-                                                      ? constraints.maxWidth
-                                                      : (constraints.maxWidth -
-                                                                10) /
-                                                            2,
-                                                  child: ConstrainedBox(
-                                                    constraints:
-                                                        const BoxConstraints(
-                                                          minHeight: 110,
-                                                        ),
-                                                    child: card,
-                                                  ),
-                                                ),
-                                              )
-                                              .toList(),
-                                    ),
+                                  _buildOverviewKpiPanel(
+                                    totalEffective: totalEffective,
+                                    totalCompleted: totalCompleted,
+                                    assignedWorkerCount: assignedWorkerCount,
+                                    openCount: openCount,
+                                    uom: overviewUom,
                                   ),
 
                                   const SizedBox(height: 16),
@@ -1639,6 +1534,618 @@ class _S06SupervisorOverviewScreenState
     );
   }
 
+  Widget _buildOverviewFilterBar({
+    required String teamLabel,
+    required VoidCallback onTap,
+  }) {
+    final range = switch (_historyRange) {
+      HistoryRange.day =>
+        '${_formatDisplayDate(_selectedDate)} · ${DateFormat('dd/MM/yyyy').format(_selectedDate)}',
+      HistoryRange.week =>
+        'Tuần này · ${DateFormat('dd/MM').format(_rangeFrom)}–${DateFormat('dd/MM').format(_rangeTo)}',
+      HistoryRange.month =>
+        'Tháng này · ${DateFormat('MM/yyyy').format(_rangeFrom)}',
+      HistoryRange.custom => _customRangeChipLabel.replaceAll(' ▾', ''),
+    };
+    final rangeDetail = [teamLabel, _historyShiftLabel].join(' · ');
+
+    return Semantics(
+      button: true,
+      label: 'Lọc dữ liệu tra cứu. $range. $rangeDetail',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 52),
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.tune_rounded,
+                  color: CaslaColors.muted,
+                  size: 20,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        range,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: CaslaColors.primaryNavy,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 1),
+                      Text(
+                        rangeDetail,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: CaslaColors.muted,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Text(
+                  'Lọc',
+                  style: TextStyle(
+                    color: CaslaColors.primaryNavy,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(width: 2),
+                const Icon(
+                  Icons.keyboard_arrow_down_rounded,
+                  color: CaslaColors.muted,
+                  size: 20,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showOverviewFiltersSheet() async {
+    final session = ref.read(appStateProvider).currentSession;
+    final teams = await _loadTeamFilterOptions();
+    List<SapShift> shifts;
+    try {
+      shifts = await _loadHistoryShifts();
+    } catch (_) {
+      shifts = const [];
+    }
+    if (!mounted) return;
+
+    var draftTeamId = _selectedTeamId;
+    var draftTeamLabel = _selectedTeamLabel;
+    Set<String>? draftTeamScopeIds = _selectedTeamScopeIds;
+    var draftShiftId = _historyShiftId;
+    var draftShiftLabel = _historyShiftLabel;
+    var draftRange = _historyRange;
+    var draftSelectedDate = _selectedDate;
+    var draftDateFrom = _customDateFrom;
+    var draftDateTo = _customDateTo;
+
+    Future<void> pickDraftRange(StateSetter setModalState) async {
+      final today = _dateOnly(DateTime.now());
+      final currentFrom =
+          draftDateFrom ?? today.subtract(const Duration(days: 6));
+      final currentTo = draftDateTo ?? today;
+      final picked = await showDateRangePicker(
+        context: context,
+        initialDateRange: DateTimeRange(
+          start: currentFrom.isAfter(currentTo) ? currentTo : currentFrom,
+          end: currentTo,
+        ),
+        firstDate: DateTime(today.year - 2, 1, 1),
+        lastDate: today,
+        helpText: 'CHỌN KHOẢNG NGÀY',
+        fieldStartLabelText: 'Từ ngày',
+        fieldEndLabelText: 'Đến ngày',
+        cancelText: 'HỦY',
+        confirmText: 'ÁP DỤNG',
+        builder: (context, child) => Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: CaslaColors.primaryNavy,
+              onPrimary: Colors.white,
+              surface: CaslaColors.surface,
+              onSurface: CaslaColors.navy900,
+            ),
+          ),
+          child: child!,
+        ),
+      );
+      if (picked == null) return;
+      final from = _dateOnly(picked.start);
+      final to = _dateOnly(picked.end);
+      if (to.difference(from).inDays > 31) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Khoảng thời gian tối đa là 31 ngày'),
+              backgroundColor: CaslaColors.danger,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+        return;
+      }
+      setModalState(() {
+        draftRange = HistoryRange.custom;
+        draftDateFrom = from;
+        draftDateTo = to;
+        draftSelectedDate = from;
+      });
+    }
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, setModalState) {
+          final customLabel =
+              draftRange == HistoryRange.custom &&
+                  draftDateFrom != null &&
+                  draftDateTo != null
+              ? '${DateFormat('dd/MM').format(draftDateFrom!)} – ${DateFormat('dd/MM').format(draftDateTo!)}'
+              : 'Ngày khác / Từ ngày – Đến ngày';
+          final selectedTeamValue = draftTeamId == 'ALL'
+              ? 'ALL'
+              : teams.any((team) => team.id == draftTeamId)
+              ? draftTeamId
+              : 'ALL';
+
+          return SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+              child: Container(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.sizeOf(context).height * 0.86,
+                ),
+                decoration: const BoxDecoration(
+                  color: CaslaColors.surface,
+                  borderRadius: BorderRadius.all(Radius.circular(22)),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+                  child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 34,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: CaslaColors.line,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'Lọc dữ liệu',
+                            style: TextStyle(
+                              color: CaslaColors.primaryNavy,
+                              fontSize: 20,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'Đóng bộ lọc',
+                          onPressed: () => Navigator.pop(sheetContext),
+                          icon: const Icon(Icons.close),
+                        ),
+                      ],
+                    ),
+                    const Text(
+                      'Chỉ thay đổi dữ liệu tra cứu. Không đổi ca đang làm của bạn.',
+                      style: TextStyle(
+                        color: CaslaColors.muted,
+                        fontSize: 12.5,
+                        height: 1.4,
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    const Text(
+                      'Thời gian',
+                      style: TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        _buildDraftPeriodButton(
+                          label: 'Hôm nay',
+                          selected:
+                              draftRange == HistoryRange.day &&
+                              _dateOnly(draftSelectedDate) ==
+                                  _dateOnly(DateTime.now()),
+                          onTap: () => setModalState(() {
+                            draftRange = HistoryRange.day;
+                            draftSelectedDate = _dateOnly(DateTime.now());
+                          }),
+                        ),
+                        const SizedBox(width: 6),
+                        _buildDraftPeriodButton(
+                          label: 'Tuần này',
+                          selected: draftRange == HistoryRange.week,
+                          onTap: () => setModalState(
+                            () => draftRange = HistoryRange.week,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        _buildDraftPeriodButton(
+                          label: 'Tháng này',
+                          selected: draftRange == HistoryRange.month,
+                          onTap: () => setModalState(
+                            () => draftRange = HistoryRange.month,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size.fromHeight(48),
+                        alignment: Alignment.centerLeft,
+                        side: const BorderSide(color: CaslaColors.line),
+                        foregroundColor: CaslaColors.primaryNavy,
+                      ),
+                      onPressed: () => pickDraftRange(setModalState),
+                      icon: const Icon(Icons.date_range_outlined, size: 18),
+                      label: Text(
+                        customLabel,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: () async {
+                          final today = _dateOnly(DateTime.now());
+                          final picked = await showDatePicker(
+                            context: context,
+                            initialDate: draftSelectedDate,
+                            firstDate: DateTime(today.year - 2, 1, 1),
+                            lastDate: today,
+                            helpText: 'CHỌN NGÀY',
+                            cancelText: 'HỦY',
+                            confirmText: 'CHỌN',
+                          );
+                          if (picked == null) return;
+                          setModalState(() {
+                            draftRange = HistoryRange.day;
+                            draftSelectedDate = _dateOnly(picked);
+                          });
+                        },
+                        icon: const Icon(Icons.event_outlined, size: 17),
+                        label: const Text('Chọn một ngày khác, ví dụ Hôm qua'),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    DropdownButtonFormField<String>(
+                      initialValue: selectedTeamValue,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Tổ sản xuất',
+                        prefixIcon: Icon(Icons.groups_outlined),
+                      ),
+                      items: [
+                        DropdownMenuItem(
+                          value: 'ALL',
+                          child: Text(_allTeamsLabel(session)),
+                        ),
+                        for (final team in teams)
+                          DropdownMenuItem(
+                            value: team.id,
+                            child: Text(
+                              team.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                      ],
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setModalState(() {
+                          draftTeamId = value;
+                          if (value == 'ALL') {
+                            draftTeamLabel = _allTeamsLabel(session);
+                            draftTeamScopeIds = null;
+                          } else {
+                            final team = teams.firstWhere(
+                              (item) => item.id == value,
+                            );
+                            draftTeamLabel = team.name;
+                            draftTeamScopeIds = team.scopeIds;
+                          }
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      initialValue: draftShiftId ?? 'ALL',
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Ca tra cứu',
+                        prefixIcon: Icon(Icons.schedule_outlined),
+                      ),
+                      items: [
+                        const DropdownMenuItem(
+                          value: 'ALL',
+                          child: Text('Tất cả ca'),
+                        ),
+                        for (final shift in shifts)
+                          DropdownMenuItem(
+                            value: shift.shiftId,
+                            child: Text(
+                              '${shift.shiftName.isEmpty ? shift.shiftId : shift.shiftName} · ${shift.timeLabel}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                      ],
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setModalState(() {
+                          draftShiftId = value == 'ALL' ? null : value;
+                          final shift = shifts
+                              .where((item) => item.shiftId == value)
+                              .firstOrNull;
+                          draftShiftLabel = shift == null
+                              ? 'Tất cả ca'
+                              : (shift.shiftName.isEmpty
+                                    ? shift.shiftId
+                                    : shift.shiftName);
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 18),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => setModalState(() {
+                              draftTeamId = 'ALL';
+                              draftTeamLabel = _allTeamsLabel(session);
+                              draftTeamScopeIds = null;
+                              draftShiftId = null;
+                              draftShiftLabel = 'Tất cả ca';
+                              draftRange = HistoryRange.day;
+                              draftSelectedDate = _dateOnly(DateTime.now());
+                              draftDateFrom = null;
+                              draftDateTo = null;
+                            }),
+                            child: const Text('Đặt lại'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          flex: 2,
+                          child: FilledButton(
+                            style: FilledButton.styleFrom(
+                              backgroundColor: CaslaColors.primaryNavy,
+                              minimumSize: const Size.fromHeight(48),
+                            ),
+                            onPressed: () {
+                              setState(() {
+                                _selectedTeamId = draftTeamId;
+                                _selectedTeamLabel = draftTeamLabel;
+                                _selectedTeamScopeIds = draftTeamScopeIds;
+                                _historyShiftId = draftShiftId;
+                                _historyShiftLabel = draftShiftLabel;
+                                _historyRange = draftRange;
+                                _selectedDate = draftSelectedDate;
+                                _customDateFrom = draftDateFrom;
+                                _customDateTo = draftDateTo;
+                                _replaceHistoryStream();
+                              });
+                              Navigator.pop(sheetContext);
+                            },
+                            child: const Text('Áp dụng bộ lọc'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildDraftPeriodButton({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return Expanded(
+      child: Material(
+        color: selected ? CaslaColors.surface : CaslaColors.muted100,
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 48),
+            alignment: Alignment.center,
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: selected ? CaslaColors.line : Colors.transparent,
+              ),
+            ),
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: CaslaColors.primaryNavy,
+                fontSize: 12,
+                fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOverviewKpiPanel({
+    required double totalEffective,
+    required double totalCompleted,
+    required int assignedWorkerCount,
+    required int openCount,
+    required String? uom,
+  }) {
+    Widget metric(String label, String value) {
+      return Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              label,
+              style: const TextStyle(
+                color: CaslaColors.muted,
+                fontSize: 11.5,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 3),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Flexible(
+                  child: Text(
+                    value,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: CaslaColors.primaryNavy,
+                      fontFamily: 'Manrope',
+                      fontSize: 25,
+                      fontWeight: FontWeight.w800,
+                      height: 1.1,
+                    ),
+                  ),
+                ),
+                if (uom != null) ...[
+                  const SizedBox(width: 3),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 2),
+                    child: Text(
+                      uom,
+                      style: const TextStyle(
+                        color: CaslaColors.muted,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: CaslaColors.surface,
+        border: Border.all(color: CaslaColors.line),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 13, 14, 11),
+            child: Row(
+              children: [
+                metric('Giao hiệu lực', formatQuantity(totalEffective)),
+                const SizedBox(width: 14),
+                Container(width: 1, height: 46, color: CaslaColors.line),
+                const SizedBox(width: 14),
+                metric('Đã hoàn thành', formatQuantity(totalCompleted)),
+              ],
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+            color: CaslaColors.background,
+            child: Row(
+              children: [
+                Expanded(
+                  child: _buildKpiFooterItem(
+                    '$assignedWorkerCount',
+                    'công nhân được giao',
+                  ),
+                ),
+                Expanded(
+                  child: _buildKpiFooterItem('$openCount', 'phân công mở'),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildKpiFooterItem(String value, String label) {
+    return RichText(
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      text: TextSpan(
+        style: const TextStyle(
+          color: CaslaColors.muted,
+          fontSize: 11.5,
+          fontWeight: FontWeight.w600,
+        ),
+        children: [
+          TextSpan(
+            text: value,
+            style: const TextStyle(
+              color: CaslaColors.primaryNavy,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          TextSpan(text: '  $label'),
+        ],
+      ),
+    );
+  }
+
+  // Kept as a compatibility path for callers from older routes.
+  // ignore: unused_element
   Widget _buildFilterChip(
     String label, {
     bool isSelected = false,

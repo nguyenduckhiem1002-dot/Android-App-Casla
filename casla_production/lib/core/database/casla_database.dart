@@ -583,6 +583,7 @@ class CaslaDatabase {
   Future<Map<String, dynamic>> acceptWorkerQr({
     required String code,
     String name = '',
+    String department = '',
     DateTime? validFrom,
     DateTime? validTo,
   }) async {
@@ -592,6 +593,7 @@ class CaslaDatabase {
         'id': 'qr-worker:$code',
         'ma_nv': code,
         'ten': name.isEmpty ? code : name,
+        'bo_phan': department.trim(),
         'trang_thai': 'ACTIVE',
         'vai_tro': 'CONG_NHAN',
         'quyen_han': '[]',
@@ -601,6 +603,7 @@ class CaslaDatabase {
         'employees',
         {
           if (name.isNotEmpty) 'ten': name,
+          if (department.trim().isNotEmpty) 'bo_phan': department.trim(),
           'valid_from': validFrom == null ? null : _dateOnly(validFrom),
           'valid_to': validTo == null ? null : _dateOnly(validTo),
         },
@@ -1638,6 +1641,39 @@ class CaslaDatabase {
   }
 
   // ─── Recall Record Queries ────────────────────────────────────────
+  Stream<List<Map<String, dynamic>>> watchRecallHistory(
+    String employeeId, {
+    required String fromBusinessDate,
+    required String toBusinessDate,
+    String? shiftId,
+  }) {
+    return _watch(_recallController, () async {
+      final db = await _database;
+      final shift = shiftId?.trim() ?? '';
+      return _rows(
+        await db.rawQuery(
+          '''
+        SELECT r.*, a.to_id AS work_context_id,
+               o.plant, o.work_center, o.production_order, o.operation
+        FROM recall_records r
+        JOIN assignments a ON a.id = r.phan_cong_id
+        LEFT JOIN orders o ON o.id = a.don_hang_id
+        WHERE a.nhan_vien_id = ? AND r.business_date >= ?
+          AND r.business_date <= ?
+          ${shift.isEmpty ? '' : 'AND r.shift_id = ?'}
+        ORDER BY r.occurred_at_utc DESC, r.id DESC
+      ''',
+          [
+            employeeId,
+            fromBusinessDate,
+            toBusinessDate,
+            if (shift.isNotEmpty) shift,
+          ],
+        ),
+      );
+    });
+  }
+
   Future<void> insertRecallRecord(Map<String, dynamic> record) async {
     final db = await _database;
     await db.insert('recall_records', record);

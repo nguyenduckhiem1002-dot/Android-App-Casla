@@ -81,6 +81,7 @@ class _S07CreateAssignmentWizardScreenState
                   .acceptWorkerQr(
                     code: res.maNv,
                     name: res.name,
+                    department: res.department,
                     validFrom: res.validFrom,
                     validTo: res.validTo,
                   );

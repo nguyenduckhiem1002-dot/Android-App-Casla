@@ -27,6 +27,27 @@ final routerProvider = Provider<GoRouter>((ref) {
   // router itself must not be rebuilt when AppState notifies — `watch` here would
   // construct a brand-new GoRouter on every login/logout.
   final appState = ref.read(appStateProvider);
+  // A shift edit notifies the app to refresh operational data, but does not
+  // change route guards once setup is already complete. Reparsing a pushed
+  // setup route on that notification can replace it before its save callback
+  // pops it. Only refresh routing when authentication or setup eligibility
+  // actually changes; ordinary data notifications still reach the screens.
+  final routingState = ValueNotifier((
+    session: appState.currentSession,
+    needsSetup: appState.needsSupervisorSetup,
+  ));
+  void refreshRoutingState() {
+    routingState.value = (
+      session: appState.currentSession,
+      needsSetup: appState.needsSupervisorSetup,
+    );
+  }
+
+  appState.addListener(refreshRoutingState);
+  ref.onDispose(() {
+    appState.removeListener(refreshRoutingState);
+    routingState.dispose();
+  });
 
   return GoRouter(
     initialLocation: '/login',
@@ -41,7 +62,7 @@ final routerProvider = Provider<GoRouter>((ref) {
           ? '/supervisor'
           : '/login',
     ),
-    refreshListenable: appState,
+    refreshListenable: routingState,
     redirect: (context, state) {
       final isLoggedIn = appState.isLoggedIn;
       final isGoingToLogin = state.matchedLocation == '/login';

@@ -60,15 +60,15 @@ void main() {
     );
     await tester.pump();
 
-    for (final label in [
-      'Hôm nay ▾',
-      'Tuần này',
-      'Tháng này',
-      'Khoảng ngày ▾',
-    ]) {
-      expect(find.text(label).hitTestable(), findsOneWidget);
-    }
-    await tester.tap(find.text('Khoảng ngày ▾'));
+    expect(find.text('Lọc').hitTestable(), findsOneWidget);
+    await tester.tap(find.text('Lọc').hitTestable());
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('Lọc dữ liệu'), findsOneWidget);
+    expect(find.text('Hôm nay'), findsAtLeastNWidgets(1));
+    expect(find.text('Tuần này'), findsOneWidget);
+    expect(find.text('Tháng này'), findsOneWidget);
+    await tester.tap(find.textContaining('Ngày khác / Từ ngày'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
     expect(find.byType(DateRangePickerDialog), findsOneWidget);
@@ -95,7 +95,11 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
     expect(find.byType(DateRangePickerDialog), findsNothing);
-    expect(find.text('01/$month - 07/$month ▾').hitTestable(), findsOneWidget);
+    expect(find.text('Áp dụng bộ lọc').hitTestable(), findsOneWidget);
+    await tester.tap(find.text('Áp dụng bộ lọc').hitTestable());
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('01/$month - 07/$month').hitTestable(), findsOneWidget);
     expect(tester.takeException(), isNull);
 
     await tester.pumpWidget(const SizedBox.shrink());
