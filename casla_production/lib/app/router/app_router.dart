@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../app/theme/casla_spacing.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -228,7 +230,7 @@ class _RouteRecoveryScreen extends StatelessWidget {
                     height: 72,
                     decoration: BoxDecoration(
                       color: CaslaColors.muted100,
-                      borderRadius: BorderRadius.circular(20),
+                      borderRadius: BorderRadius.circular(CaslaRadius.lg),
                     ),
                     child: const Icon(
                       Icons.explore_off_outlined,
@@ -241,8 +243,7 @@ class _RouteRecoveryScreen extends StatelessWidget {
                     title,
                     textAlign: TextAlign.center,
                     style: const TextStyle(
-                      fontFamily: 'Manrope',
-                      fontSize: 20,
+                      fontSize: CaslaType.title,
                       fontWeight: FontWeight.w800,
                       color: CaslaColors.primaryNavy,
                     ),

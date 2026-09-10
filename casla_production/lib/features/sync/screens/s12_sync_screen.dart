@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+
+import '../../../app/theme/casla_spacing.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 import '../../../app/theme/casla_colors.dart';
@@ -37,6 +39,8 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
   int _failedCount = 0;
   int _totalCount = 0;
   Object? _feedError;
+  bool _isReleasingBackoff = false;
+  bool _isBulkVerifying = false;
 
   SyncFeedFilter get _feedFilter => switch (_selectedTabIndex) {
     1 => SyncFeedFilter.pending,
@@ -131,29 +135,33 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
       item['status'] == 'NEEDS_VERIFICATION' ||
       item['last_error_code'] == 'WORKER_AUTH_FAILED';
 
-  Future<void> _verify(Map<String, dynamic> item) async {
+  /// Returns true when a password was entered and the chain was sent.
+  ///
+  /// [silent] suppresses the per-item snackbar so a bulk run reports once at
+  /// the end rather than flashing a message per worker.
+  Future<bool> _verify(Map<String, dynamic> item, {bool silent = false}) async {
     final appState = ref.read(appStateProvider);
     final id = item['id'] as String;
     final generation = appState.sessionGeneration;
-    if (_syncingIds.contains(id)) return;
+    if (_syncingIds.contains(id)) return false;
     setState(() => _syncingIds.add(id));
     try {
       final workerName = await _workerNameForItem(item);
-      if (!mounted) return;
+      if (!mounted) return false;
 
       final password = await showWorkerVerificationDialog(
         context,
         workerName: workerName,
         actionLabel: 'xác minh và gửi các giao dịch đang chờ lên SAP',
       );
-      if (!mounted || password == null) return;
-      if (!appState.isSessionGenerationCurrent(generation)) return;
+      if (!mounted || password == null) return false;
+      if (!appState.isSessionGenerationCurrent(generation)) return false;
 
       final report = await appState.verifiedSync.syncVerifiedWorkerChain(
         anchorQueueItemId: id,
         workerPassword: password,
       );
-      if (!mounted) return;
+      if (!mounted) return false;
 
       final color = switch (report.outcome) {
         VerifiedSyncOutcome.synced => CaslaColors.success,
@@ -162,22 +170,121 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
         VerifiedSyncOutcome.blocked ||
         VerifiedSyncOutcome.notFound => CaslaColors.gold700,
       };
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(report.message), backgroundColor: color),
-      );
+      if (!silent) _snack(report.message, color);
+      return report.outcome == VerifiedSyncOutcome.synced;
     } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Không thể xử lý lúc này. Giao dịch vẫn được lưu an toàn.',
-          ),
-          backgroundColor: CaslaColors.gold700,
-        ),
+      if (!mounted) return false;
+      _snack(
+        'Không thể xử lý lúc này. Giao dịch vẫn được lưu an toàn.',
+        CaslaColors.gold700,
       );
+      return false;
     } finally {
       if (mounted) setState(() => _syncingIds.remove(id));
     }
+  }
+
+  /// Sends everything retryable now instead of waiting out the backoff.
+  Future<void> _retryNow() async {
+    if (_isReleasingBackoff) return;
+    setState(() => _isReleasingBackoff = true);
+    final appState = ref.read(appStateProvider);
+    try {
+      final released = await appState.db.requeueForImmediateRetry(
+        actorId: _actorId,
+        teamIds: _teamIds,
+      );
+      final report = await appState.syncEngine.runOnce();
+      if (!mounted) return;
+      _snack(
+        released == 0
+            ? 'Không có giao dịch nào đang chờ gửi lại.'
+            : 'Đã yêu cầu gửi lại $released giao dịch. '
+                  '${report.pushed > 0 ? 'SAP đã nhận ${report.pushed}.' : 'Đang thử lại...'}',
+        released == 0 ? CaslaColors.primaryNavy : CaslaColors.success,
+      );
+    } catch (_) {
+      if (!mounted) return;
+      _snack(
+        'Chưa gửi lại được. Giao dịch vẫn được lưu an toàn trên thiết bị.',
+        CaslaColors.gold700,
+      );
+    } finally {
+      if (mounted) setState(() => _isReleasingBackoff = false);
+    }
+  }
+
+  /// Walks the workers who have items waiting on a password, asking each once.
+  ///
+  /// [VerifiedSyncCoordinator.syncVerifiedWorkerChain] already drains one
+  /// worker's whole chain per password, so the cost of clearing the queue is
+  /// one prompt per worker rather than one per transaction. Closing a shift
+  /// with twenty rows used to mean twenty prompts.
+  Future<void> _verifyAll() async {
+    if (_isBulkVerifying) return;
+    setState(() => _isBulkVerifying = true);
+    try {
+      final pending = _feedItems.where(_isVerifiable).toList();
+      final handledWorkers = <String>{};
+      var completed = 0;
+
+      for (final item in pending) {
+        if (!mounted) return;
+        final workerId = await _workerIdForItem(item);
+        if (workerId == null || !handledWorkers.add(workerId)) continue;
+        final done = await _verify(item, silent: true);
+        if (!done) break;
+        completed += 1;
+      }
+
+      if (!mounted) return;
+      _snack(
+        completed == 0
+            ? 'Chưa xác minh được giao dịch nào.'
+            : 'Đã xác minh và gửi cho $completed công nhân.',
+        completed == 0 ? CaslaColors.gold700 : CaslaColors.success,
+      );
+    } finally {
+      if (mounted) setState(() => _isBulkVerifying = false);
+    }
+  }
+
+  void _snack(String message, Color color) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(message), backgroundColor: color));
+  }
+
+  /// How long until the engine picks this row up again, for rows that are
+  /// simply waiting rather than stuck.
+  String? _nextRetryLabel(Map<String, dynamic> item) {
+    final raw = item['next_retry_at_utc'];
+    if (raw is! int) return null;
+    final due = DateTime.fromMillisecondsSinceEpoch(raw);
+    final remaining = due.difference(DateTime.now());
+    if (remaining.isNegative) return 'Sẽ gửi lại ngay khi có kết nối';
+    if (remaining.inMinutes < 1) return 'Tự gửi lại sau vài giây';
+    return 'Tự gửi lại sau ${remaining.inMinutes} phút';
+  }
+
+  Future<String?> _workerIdForItem(Map<String, dynamic> item) async {
+    final db = ref.read(appStateProvider).db;
+    final source = await db.getSyncSourceRow(
+      item['entity_type'] as String,
+      item['entity_id'] as String,
+    );
+    if (source == null) return null;
+    Map<String, dynamic>? assignment;
+    if (item['entity_type'] == 'ASSIGNMENT') {
+      assignment = source;
+    } else {
+      final assignmentId = source['phan_cong_id'] as String?;
+      if (assignmentId != null) {
+        assignment = await db.getAssignmentById(assignmentId);
+      }
+    }
+    return assignment?['nhan_vien_id'] as String?;
   }
 
   Future<String> _workerNameForItem(Map<String, dynamic> item) async {
@@ -203,13 +310,23 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
   }
 
   String _secondaryText(Map<String, dynamic> item, {required bool isPending}) {
-    final error = item['last_error_message']?.toString().trim();
-    if (error != null && error.isNotEmpty) return error;
     final device = item['device_id']?.toString().trim();
-    if (isPending) {
-      return '${device?.isNotEmpty == true ? '$device · ' : ''}Đã lưu an toàn · sẽ tự động gửi khi có kết nối';
+    final prefix = device?.isNotEmpty == true ? '$device · ' : '';
+    final error = item['last_error_message']?.toString().trim();
+
+    // A failed row is not a dead end: the engine keeps retrying on a backoff.
+    // Saying so, with the actual schedule, is the difference between "broken"
+    // and "waiting".
+    if (error != null && error.isNotEmpty) {
+      final retry = _nextRetryLabel(item);
+      return retry == null ? error : '$error · $retry';
     }
-    return '${device?.isNotEmpty == true ? '$device · ' : ''}Đã lưu an toàn';
+    if (isPending) {
+      return '$prefix'
+          'Đã lưu an toàn · '
+          '${_nextRetryLabel(item) ?? 'sẽ tự động gửi khi có kết nối'}';
+    }
+    return '$prefix' 'Đã lưu an toàn';
   }
 
   Future<void> _showFailureDetails(Map<String, dynamic> item) async {
@@ -232,7 +349,9 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(CaslaRadius.lg),
+        ),
       ),
       builder: (sheetContext) => SafeArea(
         child: SingleChildScrollView(
@@ -243,21 +362,26 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
               const Text(
                 'Chi tiết lỗi đồng bộ',
                 style: TextStyle(
-                  fontFamily: 'Manrope',
                   fontWeight: FontWeight.w800,
-                  fontSize: 18,
+                  fontSize: CaslaType.title,
                   color: CaslaColors.primaryNavy,
                 ),
               ),
               const SizedBox(height: 6),
               Text(
                 summary,
-                style: const TextStyle(color: CaslaColors.muted, fontSize: 13),
+                style: const TextStyle(
+                  color: CaslaColors.muted,
+                  fontSize: CaslaType.body,
+                ),
               ),
               const SizedBox(height: 18),
               const Text(
                 'Mã lỗi',
-                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: CaslaType.caption,
+                ),
               ),
               const SizedBox(height: 5),
               SelectableText(
@@ -271,19 +395,22 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
               const SizedBox(height: 14),
               const Text(
                 'SAP phản hồi',
-                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: CaslaType.caption,
+                ),
               ),
               const SizedBox(height: 5),
               SelectableText(
                 message,
-                style: const TextStyle(height: 1.45, fontSize: 13.5),
+                style: const TextStyle(height: 1.45, fontSize: CaslaType.body),
               ),
               const SizedBox(height: 16),
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
                   color: CaslaColors.muted100,
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: BorderRadius.circular(CaslaRadius.sm),
                 ),
                 child: const Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -293,7 +420,10 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
                     Expanded(
                       child: Text(
                         'Lỗi này cần kiểm tra dữ liệu hoặc cấu hình SAP. Giao dịch vẫn được giữ trên thiết bị.',
-                        style: TextStyle(fontSize: 12.5, height: 1.4),
+                        style: TextStyle(
+                          fontSize: CaslaType.caption,
+                          height: 1.4,
+                        ),
                       ),
                     ),
                   ],
@@ -341,17 +471,15 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
             Text(
               'Đồng bộ',
               style: TextStyle(
-                fontFamily: 'Manrope',
                 fontWeight: FontWeight.w800,
-                fontSize: 19,
+                fontSize: CaslaType.title,
               ),
             ),
             SizedBox(height: 2),
             Text(
               'Theo dõi và xử lý giao dịch chưa lên SAP',
               style: TextStyle(
-                fontFamily: 'Inter',
-                fontSize: 12.5,
+                fontSize: CaslaType.caption,
                 fontWeight: FontWeight.w500,
                 color: CaslaColors.identityMeta,
               ),
@@ -383,30 +511,43 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
           // Summary Boxes
           Row(
             children: [
-              _buildSummaryBox('$_pendingCount', 'ĐANG CHỜ'),
-              const SizedBox(width: 8),
+              _buildSummaryBox('$_pendingCount', 'ĐANG CHỜ', tabIndex: 1),
+              const SizedBox(width: CaslaSpacing.xs),
               _buildSummaryBox(
                 '$_verificationCount',
                 'CẦN XÁC MINH',
                 color: CaslaColors.gold700,
+                tabIndex: 2,
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: CaslaSpacing.xs),
               _buildSummaryBox(
                 '$_failedCount',
                 'LỖI',
                 color: CaslaColors.danger,
+                tabIndex: 3,
               ),
             ],
           ),
 
-          const SizedBox(height: 14),
+          const SizedBox(height: CaslaSpacing.sm),
+
+          _SyncActionBar(
+            hasRetryable: _pendingCount + _failedCount > 0,
+            verificationCount: _verificationCount,
+            isRetrying: _isReleasingBackoff,
+            isVerifying: _isBulkVerifying,
+            onRetryNow: _retryNow,
+            onVerifyAll: _verifyAll,
+          ),
+
+          const SizedBox(height: CaslaSpacing.sm),
 
           // Tabs Row
           Container(
             padding: const EdgeInsets.all(4),
             decoration: BoxDecoration(
               color: CaslaColors.muted100,
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(CaslaRadius.sm),
             ),
             child: Row(
               children: [
@@ -427,12 +568,15 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
               decoration: BoxDecoration(
                 color: CaslaColors.surface,
                 border: Border.all(color: CaslaColors.line),
-                borderRadius: BorderRadius.circular(14),
+                borderRadius: BorderRadius.circular(CaslaRadius.md),
               ),
               child: const Center(
                 child: Text(
                   'Không có bản ghi nào trong mục này.',
-                  style: TextStyle(color: CaslaColors.muted, fontSize: 13),
+                  style: TextStyle(
+                    color: CaslaColors.muted,
+                    fontSize: CaslaType.body,
+                  ),
                 ),
               ),
             )
@@ -458,7 +602,7 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
                         height: 38,
                         decoration: BoxDecoration(
                           color: CaslaColors.muted100,
-                          borderRadius: BorderRadius.circular(10),
+                          borderRadius: BorderRadius.circular(CaslaRadius.sm),
                         ),
                         child: Icon(
                           isVerifiable
@@ -487,7 +631,7 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
                               item['payload_summary'] ?? 'Bản ghi',
                               style: const TextStyle(
                                 fontWeight: FontWeight.w700,
-                                fontSize: 13,
+                                fontSize: CaslaType.body,
                                 color: CaslaColors.primaryNavy,
                               ),
                             ),
@@ -496,7 +640,7 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
                               _secondaryText(item, isPending: isPending),
                               style: TextStyle(
                                 fontFamily: 'monospace',
-                                fontSize: 11,
+                                fontSize: CaslaType.caption,
                                 color: isVerifiable
                                     ? CaslaColors.gold700
                                     : isFailed
@@ -527,7 +671,7 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
                                 )
                               : const Text(
                                   'Xác minh & gửi',
-                                  style: TextStyle(fontSize: 11),
+                                  style: TextStyle(fontSize: CaslaType.caption),
                                 ),
                         )
                       else if (isFailed)
@@ -541,7 +685,7 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
                           ),
                           child: const Text(
                             'Chi tiết',
-                            style: TextStyle(fontSize: 11),
+                            style: TextStyle(fontSize: CaslaType.caption),
                           ),
                         )
                       else
@@ -572,37 +716,64 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
     );
   }
 
-  Widget _buildSummaryBox(String count, String label, {Color? color}) {
+  /// A count tile that also filters the list below it.
+  ///
+  /// These sat directly above a tab bar filtering on the same three states and
+  /// did nothing when tapped, which is the first thing anyone tries.
+  Widget _buildSummaryBox(
+    String count,
+    String label, {
+    required int tabIndex,
+    Color? color,
+  }) {
+    final isSelected = _selectedTabIndex == tabIndex;
+
     return Expanded(
-      child: Container(
-        padding: const EdgeInsets.all(9),
-        decoration: BoxDecoration(
-          color: CaslaColors.surface,
-          border: Border.all(color: CaslaColors.line),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Column(
-          children: [
-            Text(
-              count,
-              style: TextStyle(
-                fontFamily: 'Manrope',
-                fontWeight: FontWeight.w800,
-                fontSize: 18,
-                color: color ?? CaslaColors.primaryNavy,
+      child: Semantics(
+        button: true,
+        selected: isSelected,
+        label: '$label, $count giao dịch',
+        child: InkWell(
+          onTap: () => setState(() => _selectedTabIndex = tabIndex),
+          borderRadius: BorderRadius.circular(CaslaRadius.sm),
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 64),
+            padding: const EdgeInsets.all(CaslaSpacing.xs),
+            decoration: BoxDecoration(
+              color: CaslaColors.surface,
+              border: Border.all(
+                color: isSelected
+                    ? (color ?? CaslaColors.primaryNavy)
+                    : CaslaColors.line,
+                width: isSelected ? 1.8 : 1,
               ),
+              borderRadius: BorderRadius.circular(CaslaRadius.sm),
             ),
-            const SizedBox(height: 2),
-            Text(
-              label,
-              style: const TextStyle(
-                fontSize: 9.5,
-                fontWeight: FontWeight.w700,
-                color: CaslaColors.muted,
-                letterSpacing: 0.3,
-              ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  count,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: CaslaType.title,
+                    color: color ?? CaslaColors.primaryNavy,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: CaslaType.caption,
+                    fontWeight: FontWeight.w700,
+                    color: CaslaColors.muted,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -621,12 +792,12 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
             onTap: () => setState(() {
               _selectedTabIndex = index;
             }),
-            borderRadius: BorderRadius.circular(7),
+            borderRadius: BorderRadius.circular(CaslaRadius.sm),
             child: Container(
               alignment: Alignment.center,
               decoration: BoxDecoration(
                 color: isSelected ? CaslaColors.surface : Colors.transparent,
-                borderRadius: BorderRadius.circular(7),
+                borderRadius: BorderRadius.circular(CaslaRadius.sm),
                 boxShadow: isSelected
                     ? [
                         BoxShadow(
@@ -639,7 +810,7 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
               child: Text(
                 label,
                 style: TextStyle(
-                  fontSize: 11.5,
+                  fontSize: CaslaType.caption,
                   fontWeight: FontWeight.w700,
                   color: isSelected
                       ? CaslaColors.primaryNavy
@@ -650,6 +821,80 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Manual controls for the two things a supervisor closing a shift wants:
+/// push everything now, and clear the password-blocked backlog in one pass.
+class _SyncActionBar extends StatelessWidget {
+  final bool hasRetryable;
+  final int verificationCount;
+  final bool isRetrying;
+  final bool isVerifying;
+  final Future<void> Function() onRetryNow;
+  final Future<void> Function() onVerifyAll;
+
+  const _SyncActionBar({
+    required this.hasRetryable,
+    required this.verificationCount,
+    required this.isRetrying,
+    required this.isVerifying,
+    required this.onRetryNow,
+    required this.onVerifyAll,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (!hasRetryable && verificationCount == 0) return const SizedBox.shrink();
+    final busy = isRetrying || isVerifying;
+
+    return Row(
+      children: [
+        if (hasRetryable)
+          Expanded(
+            child: SizedBox(
+              height: 48,
+              child: OutlinedButton.icon(
+                onPressed: busy ? null : () => onRetryNow(),
+                icon: isRetrying
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.sync, size: 18),
+                label: const Text('Gửi lại ngay'),
+              ),
+            ),
+          ),
+        if (hasRetryable && verificationCount > 0)
+          const SizedBox(width: CaslaSpacing.xs),
+        if (verificationCount > 0)
+          Expanded(
+            child: SizedBox(
+              height: 48,
+              child: FilledButton.icon(
+                onPressed: busy ? null : () => onVerifyAll(),
+                style: FilledButton.styleFrom(
+                  backgroundColor: CaslaColors.primaryNavy,
+                  foregroundColor: Colors.white,
+                ),
+                icon: isVerifying
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.lock_open_outlined, size: 18),
+                label: const Text('Xác minh tất cả'),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

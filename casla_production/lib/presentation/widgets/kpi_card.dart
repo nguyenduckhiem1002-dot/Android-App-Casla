@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../app/theme/casla_spacing.dart';
 import '../../app/theme/casla_colors.dart';
 
 class KpiCard extends StatelessWidget {
@@ -24,7 +26,7 @@ class KpiCard extends StatelessWidget {
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
           color: CaslaColors.primaryNavy,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(CaslaRadius.lg),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -34,7 +36,7 @@ class KpiCard extends StatelessWidget {
             Text(
               label,
               style: const TextStyle(
-                fontSize: 13,
+                fontSize: CaslaType.body,
                 color: CaslaColors.contextChipText,
                 fontWeight: FontWeight.w600,
                 letterSpacing: 0.2,
@@ -47,9 +49,8 @@ class KpiCard extends StatelessWidget {
                 Text(
                   value,
                   style: const TextStyle(
-                    fontFamily: 'Manrope',
                     fontWeight: FontWeight.w800,
-                    fontSize: 26,
+                    fontSize: CaslaType.display,
                     color: Colors.white,
                     height: 1.0,
                   ),
@@ -59,7 +60,7 @@ class KpiCard extends StatelessWidget {
                   Text(
                     uom!,
                     style: const TextStyle(
-                      fontSize: 11.5,
+                      fontSize: CaslaType.caption,
                       color: CaslaColors.accentLabelDark,
                       fontWeight: FontWeight.w600,
                     ),
@@ -77,7 +78,7 @@ class KpiCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: CaslaColors.surface,
         border: Border.all(color: CaslaColors.line),
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(CaslaRadius.lg),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -87,7 +88,7 @@ class KpiCard extends StatelessWidget {
           Text(
             label,
             style: const TextStyle(
-              fontSize: 13,
+              fontSize: CaslaType.body,
               color: CaslaColors.muted,
               fontWeight: FontWeight.w600,
               letterSpacing: 0.2,
@@ -100,9 +101,8 @@ class KpiCard extends StatelessWidget {
               Text(
                 value,
                 style: TextStyle(
-                  fontFamily: 'Manrope',
                   fontWeight: FontWeight.w800,
-                  fontSize: 26,
+                  fontSize: CaslaType.display,
                   color: valueColor ?? CaslaColors.primaryNavy,
                   height: 1.0,
                 ),
@@ -112,7 +112,7 @@ class KpiCard extends StatelessWidget {
                 Text(
                   uom!,
                   style: const TextStyle(
-                    fontSize: 11,
+                    fontSize: CaslaType.caption,
                     color: CaslaColors.muted,
                     fontWeight: FontWeight.w600,
                   ),

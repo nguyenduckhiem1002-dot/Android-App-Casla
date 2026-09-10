@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../app/theme/casla_spacing.dart';
+
 import '../../app/theme/casla_colors.dart';
 
 Future<String?> showWorkerVerificationDialog(
@@ -77,7 +79,10 @@ class _WorkerVerificationDialogState extends State<_WorkerVerificationDialog> {
           const SizedBox(height: 8),
           const Text(
             'Mật khẩu chỉ dùng cho lần gửi này và không được lưu trên thiết bị.',
-            style: TextStyle(fontSize: 12, color: CaslaColors.muted),
+            style: TextStyle(
+              fontSize: CaslaType.caption,
+              color: CaslaColors.muted,
+            ),
           ),
           const SizedBox(height: 16),
           TextField(

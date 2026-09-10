@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../app/theme/casla_spacing.dart';
 import '../../app/theme/casla_colors.dart';
 
 class RingProgressCard extends StatelessWidget {
@@ -24,7 +26,7 @@ class RingProgressCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: CaslaColors.surface,
         border: Border.all(color: CaslaColors.line),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(CaslaRadius.md),
       ),
       child: Row(
         children: [
@@ -41,18 +43,17 @@ class RingProgressCard extends StatelessWidget {
                   child: CircularProgressIndicator(
                     value: (percentage).clamp(0.0, 1.0),
                     strokeWidth: 8,
-                    backgroundColor: CaslaColors.muted100,
+                    backgroundColor: CaslaColors.progressTrack,
                     valueColor: const AlwaysStoppedAnimation<Color>(
-                      CaslaColors.accentGold,
+                      CaslaColors.progressFill,
                     ),
                   ),
                 ),
                 Text(
                   '$pctInt%',
                   style: const TextStyle(
-                    fontFamily: 'Manrope',
                     fontWeight: FontWeight.w800,
-                    fontSize: 15,
+                    fontSize: CaslaType.subtitle,
                     color: CaslaColors.primaryNavy,
                   ),
                 ),
@@ -69,7 +70,7 @@ class RingProgressCard extends StatelessWidget {
                 const Text(
                   'Còn lại',
                   style: TextStyle(
-                    fontSize: 11,
+                    fontSize: CaslaType.caption,
                     color: CaslaColors.muted,
                     fontWeight: FontWeight.w600,
                   ),
@@ -82,9 +83,8 @@ class RingProgressCard extends StatelessWidget {
                     Text(
                       remainingValue,
                       style: const TextStyle(
-                        fontFamily: 'Manrope',
                         fontWeight: FontWeight.w800,
-                        fontSize: 22,
+                        fontSize: CaslaType.display,
                         color: CaslaColors.primaryNavy,
                       ),
                     ),
@@ -92,7 +92,7 @@ class RingProgressCard extends StatelessWidget {
                     Text(
                       uom,
                       style: const TextStyle(
-                        fontSize: 11,
+                        fontSize: CaslaType.caption,
                         color: CaslaColors.muted,
                         fontWeight: FontWeight.w600,
                       ),
@@ -103,7 +103,7 @@ class RingProgressCard extends StatelessWidget {
                 Text(
                   detailText,
                   style: const TextStyle(
-                    fontSize: 12,
+                    fontSize: CaslaType.caption,
                     color: CaslaColors.muted,
                     height: 1.4,
                   ),

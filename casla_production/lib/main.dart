@@ -4,6 +4,7 @@
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app/theme/casla_theme.dart';
@@ -61,6 +62,16 @@ class CaslaApp extends ConsumerWidget {
       theme: CaslaTheme.light,
       routerConfig: router,
       debugShowCheckedModeBanner: false,
+      // The app ships Vietnamese only. Pinning the locale keeps the framework
+      // dialogs — date pickers, text selection menus, dialog buttons — in the
+      // same language as everything the screens draw themselves.
+      locale: const Locale('vi'),
+      supportedLocales: const [Locale('vi'), Locale('en')],
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
     );
   }
 }

@@ -297,7 +297,7 @@ class AppState extends ChangeNotifier {
         businessDate.month,
         businessDate.day,
       );
-       _setupExpiresAt = effectiveExpiresAt;
+      _setupExpiresAt = effectiveExpiresAt;
       _scheduleSetupExpiry();
       notifyListeners();
     } catch (_) {

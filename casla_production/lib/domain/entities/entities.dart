@@ -220,11 +220,25 @@ class UserSession {
 
   bool hasPermission(Permission permission) => permissions.contains(permission);
 
-  String get initials {
-    final parts = fullName.split(' ');
-    if (parts.length >= 2) {
-      return '${parts[parts.length - 2][0]}${parts.last[0]}';
-    }
-    return fullName.isNotEmpty ? fullName[0] : 'CG';
+  /// Avatar initials.
+  ///
+  /// SAP CHAR fields arrive space-padded, so `fullName` routinely ends in
+  /// whitespace. Splitting that on ' ' yields a trailing empty segment, and
+  /// indexing `[0]` into it threw a RangeError — on the overview header and
+  /// the account card, which every supervisor sees on login.
+  String get initials => initialsFor(fullName);
+
+  /// Shared so the header, the account card and anything else agree, instead
+  /// of each re-deriving initials with its own copy of the same bug.
+  static String initialsFor(String name, {String fallback = 'CG'}) {
+    final parts = name
+        .split(' ')
+        .map((part) => part.trim())
+        .where((part) => part.isNotEmpty)
+        .toList();
+
+    if (parts.isEmpty) return fallback;
+    if (parts.length == 1) return parts.single[0].toUpperCase();
+    return '${parts[parts.length - 2][0]}${parts.last[0]}'.toUpperCase();
   }
 }

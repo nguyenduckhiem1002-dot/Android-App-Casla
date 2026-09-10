@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
+
+import '../../../app/theme/casla_spacing.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../app/theme/casla_colors.dart';
+import '../../../domain/entities/entities.dart';
 import '../../../domain/entities/enums.dart';
 import '../../../core/utils/device_info.dart';
 import '../../../main.dart';
 import '../widgets/change_password_dialog.dart';
+import '../widgets/scanner_settings_card.dart';
 
 class S13AccountScreen extends ConsumerWidget {
   const S13AccountScreen({super.key});
@@ -37,9 +41,8 @@ class S13AccountScreen extends ConsumerWidget {
         title: const Text(
           'Tài khoản SAP',
           style: TextStyle(
-            fontFamily: 'Manrope',
             fontWeight: FontWeight.w800,
-            fontSize: 19,
+            fontSize: CaslaType.title,
           ),
         ),
       ),
@@ -57,7 +60,7 @@ class S13AccountScreen extends ConsumerWidget {
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
-                borderRadius: BorderRadius.circular(22),
+                borderRadius: BorderRadius.circular(CaslaRadius.lg),
               ),
               child: Column(
                 children: [
@@ -68,17 +71,14 @@ class S13AccountScreen extends ConsumerWidget {
                       gradient: const LinearGradient(
                         colors: [CaslaColors.accentGold, CaslaColors.gold700],
                       ),
-                      borderRadius: BorderRadius.circular(16),
+                      borderRadius: BorderRadius.circular(CaslaRadius.lg),
                     ),
                     alignment: Alignment.center,
                     child: Text(
-                      userName.isNotEmpty
-                          ? userName.split(' ').last[0].toUpperCase()
-                          : 'B',
+                      UserSession.initialsFor(userName, fallback: 'B'),
                       style: const TextStyle(
-                        fontFamily: 'Manrope',
                         fontWeight: FontWeight.w800,
-                        fontSize: 22,
+                        fontSize: CaslaType.display,
                         color: CaslaColors.navy900,
                       ),
                     ),
@@ -90,9 +90,8 @@ class S13AccountScreen extends ConsumerWidget {
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.center,
                     style: const TextStyle(
-                      fontFamily: 'Manrope',
                       fontWeight: FontWeight.w800,
-                      fontSize: 18,
+                      fontSize: CaslaType.title,
                       color: Colors.white,
                     ),
                   ),
@@ -101,7 +100,7 @@ class S13AccountScreen extends ConsumerWidget {
                     'Tài khoản: $userCode',
                     style: const TextStyle(
                       fontFamily: 'monospace',
-                      fontSize: 12,
+                      fontSize: CaslaType.caption,
                       color: CaslaColors.identityMeta,
                     ),
                   ),
@@ -110,7 +109,10 @@ class S13AccountScreen extends ConsumerWidget {
                     userEmail,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12, color: Colors.white70),
+                    style: const TextStyle(
+                      fontSize: CaslaType.caption,
+                      color: Colors.white70,
+                    ),
                   ),
                   const SizedBox(height: 10),
                   Container(
@@ -120,12 +122,12 @@ class S13AccountScreen extends ConsumerWidget {
                     ),
                     decoration: BoxDecoration(
                       color: Colors.white.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(20),
+                      borderRadius: BorderRadius.circular(CaslaRadius.pill),
                     ),
                     child: Text(
                       role,
                       style: const TextStyle(
-                        fontSize: 11,
+                        fontSize: CaslaType.caption,
                         fontWeight: FontWeight.w700,
                         color: Colors.white,
                         letterSpacing: 0.4,
@@ -144,7 +146,7 @@ class S13AccountScreen extends ConsumerWidget {
               decoration: BoxDecoration(
                 color: CaslaColors.surface,
                 border: Border.all(color: CaslaColors.line),
-                borderRadius: BorderRadius.circular(14),
+                borderRadius: BorderRadius.circular(CaslaRadius.md),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -152,9 +154,8 @@ class S13AccountScreen extends ConsumerWidget {
                   const Text(
                     'Thông tin chi tiết SAP',
                     style: TextStyle(
-                      fontFamily: 'Manrope',
                       fontWeight: FontWeight.w700,
-                      fontSize: 13,
+                      fontSize: CaslaType.body,
                       color: CaslaColors.primaryNavy,
                     ),
                   ),
@@ -175,9 +176,8 @@ class S13AccountScreen extends ConsumerWidget {
                   const Text(
                     'Quyền hạn tài khoản',
                     style: TextStyle(
-                      fontFamily: 'Manrope',
                       fontWeight: FontWeight.w700,
-                      fontSize: 13,
+                      fontSize: CaslaType.body,
                       color: CaslaColors.primaryNavy,
                     ),
                   ),
@@ -185,7 +185,10 @@ class S13AccountScreen extends ConsumerWidget {
                   if (permissions.isEmpty)
                     const Text(
                       'Chưa có quyền ứng dụng nào được cấp.',
-                      style: TextStyle(color: CaslaColors.muted, fontSize: 12),
+                      style: TextStyle(
+                        color: CaslaColors.muted,
+                        fontSize: CaslaType.caption,
+                      ),
                     )
                   else
                     Wrap(
@@ -199,12 +202,14 @@ class S13AccountScreen extends ConsumerWidget {
                           ),
                           decoration: BoxDecoration(
                             color: CaslaColors.muted100,
-                            borderRadius: BorderRadius.circular(20),
+                            borderRadius: BorderRadius.circular(
+                              CaslaRadius.pill,
+                            ),
                           ),
                           child: Text(
                             p,
                             style: const TextStyle(
-                              fontSize: 10.5,
+                              fontSize: CaslaType.caption,
                               fontWeight: FontWeight.w700,
                               color: CaslaColors.primaryNavy,
                             ),
@@ -216,7 +221,11 @@ class S13AccountScreen extends ConsumerWidget {
               ),
             ),
 
-            const SizedBox(height: 20),
+            const SizedBox(height: CaslaSpacing.md),
+
+            const ScannerSettingsCard(),
+
+            const SizedBox(height: CaslaSpacing.lg),
 
             // Action Buttons
             ElevatedButton.icon(
@@ -249,7 +258,10 @@ class S13AccountScreen extends ConsumerWidget {
         children: [
           Text(
             label,
-            style: const TextStyle(fontSize: 12.5, color: CaslaColors.muted),
+            style: const TextStyle(
+              fontSize: CaslaType.caption,
+              color: CaslaColors.muted,
+            ),
           ),
           const SizedBox(width: 16),
           Expanded(
@@ -258,9 +270,8 @@ class S13AccountScreen extends ConsumerWidget {
               textAlign: TextAlign.end,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                fontFamily: 'Manrope',
                 fontWeight: FontWeight.w700,
-                fontSize: 12,
+                fontSize: CaslaType.caption,
                 color: CaslaColors.primaryNavy,
               ),
             ),

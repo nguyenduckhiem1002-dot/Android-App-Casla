@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../../app/theme/casla_spacing.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
@@ -143,7 +145,7 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
         workerPassword: workerPassword,
       );
       if (!mounted) return;
-      showMutationFeedback(
+      await showMutationFeedback(
         context,
         receipt: receipt,
         successMessage:
@@ -184,9 +186,8 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
             const Text(
               'Thu hồi phân công',
               style: TextStyle(
-                fontFamily: 'Manrope',
                 fontWeight: FontWeight.w800,
-                fontSize: 19,
+                fontSize: CaslaType.title,
               ),
             ),
             const SizedBox(height: 2),
@@ -195,8 +196,7 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                fontFamily: 'Inter',
-                fontSize: 12.5,
+                fontSize: CaslaType.caption,
                 fontWeight: FontWeight.w500,
                 color: CaslaColors.identityMeta,
               ),
@@ -250,7 +250,7 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
                         decoration: BoxDecoration(
                           color: CaslaColors.surface,
                           border: Border.all(color: CaslaColors.line),
-                          borderRadius: BorderRadius.circular(14),
+                          borderRadius: BorderRadius.circular(CaslaRadius.md),
                         ),
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -278,7 +278,7 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
                       const Text(
                         'Số lượng thu hồi *',
                         style: TextStyle(
-                          fontSize: 12,
+                          fontSize: CaslaType.caption,
                           fontWeight: FontWeight.w700,
                           color: CaslaColors.primaryNavy,
                         ),
@@ -308,7 +308,7 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
                       const Text(
                         'Lý do thu hồi *',
                         style: TextStyle(
-                          fontSize: 12,
+                          fontSize: CaslaType.caption,
                           fontWeight: FontWeight.w700,
                           color: CaslaColors.primaryNavy,
                         ),
@@ -342,7 +342,9 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
                                       : CaslaColors.line,
                                   width: 1.5,
                                 ),
-                                borderRadius: BorderRadius.circular(8),
+                                borderRadius: BorderRadius.circular(
+                                  CaslaRadius.sm,
+                                ),
                               ),
                               child: RadioListTile<RecallReason>(
                                 value: reason,
@@ -350,7 +352,7 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
                                 title: Text(
                                   reason.title,
                                   style: const TextStyle(
-                                    fontSize: 13,
+                                    fontSize: CaslaType.body,
                                     fontWeight: FontWeight.w600,
                                     color: CaslaColors.primaryNavy,
                                   ),
@@ -385,7 +387,7 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
                         decoration: BoxDecoration(
                           color: CaslaColors.dangerBg,
                           border: Border.all(color: const Color(0xFFF0C6C6)),
-                          borderRadius: BorderRadius.circular(14),
+                          borderRadius: BorderRadius.circular(CaslaRadius.md),
                         ),
                         child: Column(
                           children: [
@@ -396,7 +398,7 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
                                   'Giao hiệu lực',
                                   style: TextStyle(
                                     color: Color(0xFF7A1F1F),
-                                    fontSize: 12,
+                                    fontSize: CaslaType.caption,
                                   ),
                                 ),
                                 Text(
@@ -417,7 +419,7 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
                                   'Còn lại sau thu hồi',
                                   style: TextStyle(
                                     color: Color(0xFF7A1F1F),
-                                    fontSize: 12,
+                                    fontSize: CaslaType.caption,
                                   ),
                                 ),
                                 Text(
@@ -472,15 +474,17 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
       children: [
         Text(
           label,
-          style: const TextStyle(fontSize: 11, color: CaslaColors.muted),
+          style: const TextStyle(
+            fontSize: CaslaType.caption,
+            color: CaslaColors.muted,
+          ),
         ),
         const SizedBox(height: 2),
         Text(
           value,
           style: TextStyle(
-            fontFamily: 'Manrope',
             fontWeight: FontWeight.w800,
-            fontSize: 16,
+            fontSize: CaslaType.subtitle,
             color: color ?? CaslaColors.primaryNavy,
           ),
         ),

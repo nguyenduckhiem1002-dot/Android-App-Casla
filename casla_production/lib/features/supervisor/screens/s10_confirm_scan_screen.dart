@@ -1,15 +1,13 @@
 // Screen S10 — Scan Worker QR & Confirm Production Screen
-import 'dart:async';
-
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../app/theme/casla_colors.dart';
-import '../../../core/utils/worker_qr_parser.dart';
+import '../../../app/theme/casla_spacing.dart';
 import '../../../main.dart';
 import '../../../presentation/widgets/adaptive_barcode_scanner_view.dart';
+import '../../../presentation/widgets/worker_scan_acceptance.dart';
 
 class S10ConfirmScanScreen extends ConsumerStatefulWidget {
   const S10ConfirmScanScreen({super.key});
@@ -20,9 +18,9 @@ class S10ConfirmScanScreen extends ConsumerStatefulWidget {
 }
 
 class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
+  final TextEditingController _manualController = TextEditingController();
   bool _isProcessing = false;
   String? _errorMessage;
-  final TextEditingController _manualController = TextEditingController();
 
   @override
   void dispose() {
@@ -30,47 +28,41 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
     super.dispose();
   }
 
-  Future<void> _handleWorkerCodeScanned(String rawCode) async {
-    if (_isProcessing) return;
+  Future<bool> _handleWorkerCodeScanned(String rawCode) async {
+    if (_isProcessing) return false;
     setState(() {
       _isProcessing = true;
       _errorMessage = null;
     });
 
     try {
-      final parsed = WorkerQrParser.parse(rawCode);
-      if (!parsed.isValid) {
-        _showError(parsed.error ?? 'Mã QR công nhân không hợp lệ.');
-        return;
-      }
-      if (!parsed.isEffectiveOn(DateTime.now())) {
-        _showError('Công nhân này không còn hiệu lực trong ngày hiện tại.');
-        return;
-      }
-
-      final db = ref.read(appStateProvider).db;
-      final worker = await db.acceptWorkerQr(
-        code: parsed.maNv,
-        name: parsed.name,
-        validFrom: parsed.validFrom,
-        validTo: parsed.validTo,
+      final outcome = await acceptScannedWorker(
+        context,
+        rawCode: rawCode,
+        database: ref.read(appStateProvider).db,
       );
+      if (!mounted) return false;
 
-      if (!mounted) return;
-      unawaited(HapticFeedback.lightImpact());
-      await context.push('/supervisor/employee_detail', extra: worker);
+      switch (outcome) {
+        case WorkerScanAccepted(:final worker):
+          await context.push('/supervisor/employee_detail', extra: worker);
+          return true;
+        case WorkerScanRejected(:final message):
+          _showError(message);
+          return false;
+        case WorkerScanCancelled():
+          return false;
+      }
     } catch (_) {
       _showError('Không thể kiểm tra mã công nhân lúc này. Vui lòng thử lại.');
+      return false;
     } finally {
-      if (mounted) {
-        setState(() => _isProcessing = false);
-      }
+      if (mounted) setState(() => _isProcessing = false);
     }
   }
 
   void _showError(String message) {
     if (!mounted) return;
-    unawaited(HapticFeedback.heavyImpact());
     setState(() => _errorMessage = message);
   }
 
@@ -82,12 +74,14 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
   void _showManualInputDialog() {
     _manualController.clear();
     final formKey = GlobalKey<FormState>();
-    showModalBottomSheet(
+    showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.white,
+      backgroundColor: CaslaColors.surface,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(CaslaRadius.lg),
+        ),
       ),
       builder: (sheetContext) {
         void submit() {
@@ -99,10 +93,11 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
 
         return Padding(
           padding: EdgeInsets.only(
-            left: 20,
-            right: 20,
-            top: 20,
-            bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+            left: CaslaSpacing.lg,
+            right: CaslaSpacing.lg,
+            top: CaslaSpacing.lg,
+            bottom:
+                MediaQuery.viewInsetsOf(sheetContext).bottom + CaslaSpacing.lg,
           ),
           child: Form(
             key: formKey,
@@ -116,9 +111,8 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
                     const Text(
                       'Nhập mã công nhân',
                       style: TextStyle(
-                        fontFamily: 'Manrope',
                         fontWeight: FontWeight.w800,
-                        fontSize: 18,
+                        fontSize: CaslaType.subtitle,
                         color: CaslaColors.primaryNavy,
                       ),
                     ),
@@ -129,44 +123,32 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: CaslaSpacing.sm),
                 TextFormField(
                   controller: _manualController,
                   autofocus: true,
                   textInputAction: TextInputAction.search,
-                  decoration: InputDecoration(
+                  decoration: const InputDecoration(
                     labelText: 'Mã số nhân viên / tài khoản',
                     hintText: 'Nhập chính xác mã nhân viên',
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    prefixIcon: const Icon(Icons.badge_outlined),
+                    prefixIcon: Icon(Icons.badge_outlined),
                   ),
                   validator: (value) => value?.trim().isNotEmpty == true
                       ? null
                       : 'Vui lòng nhập mã công nhân.',
                   onFieldSubmitted: (_) => submit(),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: CaslaSpacing.md),
                 SizedBox(
                   width: double.infinity,
                   height: 54,
                   child: ElevatedButton(
                     style: ElevatedButton.styleFrom(
                       backgroundColor: CaslaColors.primaryNavy,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
+                      foregroundColor: Colors.white,
                     ),
                     onPressed: submit,
-                    child: const Text(
-                      'Tìm và mở phân công',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white,
-                      ),
-                    ),
+                    child: const Text('Tìm và mở phân công'),
                   ),
                 ),
               ],
@@ -189,122 +171,149 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
             onScan: _handleWorkerCodeScanned,
             onManualInput: _showManualInputDialog,
           ),
+
+          // Sits below the safe area and the back button rather than at a
+          // fixed offset, so a small screen or an enlarged font size cannot
+          // push it on top of them.
           if (_errorMessage case final message?)
             Positioned(
-              top: 92,
-              left: 16,
-              right: 16,
-              child: SafeArea(
-                bottom: false,
-                child: Semantics(
-                  liveRegion: true,
-                  label: 'Lỗi quét mã. $message',
-                  child: Material(
-                    color: CaslaColors.dangerBg,
-                    elevation: 6,
-                    borderRadius: BorderRadius.circular(14),
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(14, 12, 6, 12),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Icon(
-                            Icons.error_outline_rounded,
-                            color: CaslaColors.danger,
-                            size: 24,
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'Chưa thể mở công nhân',
-                                  style: TextStyle(
-                                    color: CaslaColors.danger,
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 14,
-                                  ),
-                                ),
-                                const SizedBox(height: 3),
-                                Text(
-                                  message,
-                                  style: const TextStyle(
-                                    color: CaslaColors.primaryNavy,
-                                    fontSize: 13,
-                                    height: 1.35,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          IconButton(
-                            tooltip: 'Đóng thông báo',
-                            onPressed: _dismissError,
-                            icon: const Icon(
-                              Icons.close,
-                              size: 20,
-                              color: CaslaColors.primaryNavy,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
+              left: CaslaSpacing.md,
+              right: CaslaSpacing.md,
+              top: MediaQuery.paddingOf(context).top + 64,
+              child: _ScanErrorCard(message: message, onDismiss: _dismissError),
             ),
-          if (_isProcessing)
-            Positioned.fill(
-              child: ColoredBox(
-                color: Colors.black54,
-                child: IgnorePointer(
-                  child: Center(
-                    child: Semantics(
-                      liveRegion: true,
-                      label: 'Đang kiểm tra mã công nhân',
-                      child: Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 28),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 22,
-                          vertical: 20,
-                        ),
-                        decoration: BoxDecoration(
-                          color: CaslaColors.navy900,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: Colors.white12),
-                        ),
-                        child: const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            SizedBox(
-                              width: 24,
-                              height: 24,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2.6,
-                                color: CaslaColors.accentGold,
-                              ),
-                            ),
-                            SizedBox(width: 14),
-                            Flexible(
-                              child: Text(
-                                'Đang kiểm tra mã công nhân...',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
+
+          if (_isProcessing) const _ProcessingOverlay(),
         ],
+      ),
+    );
+  }
+}
+
+class _ScanErrorCard extends StatelessWidget {
+  final String message;
+  final VoidCallback onDismiss;
+
+  const _ScanErrorCard({required this.message, required this.onDismiss});
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      liveRegion: true,
+      label: 'Lỗi quét mã. $message',
+      child: Material(
+        color: CaslaColors.dangerBg,
+        elevation: 6,
+        borderRadius: BorderRadius.circular(CaslaRadius.md),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+            CaslaSpacing.sm,
+            CaslaSpacing.sm,
+            CaslaSpacing.xxs,
+            CaslaSpacing.sm,
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(
+                Icons.error_outline_rounded,
+                color: CaslaColors.danger,
+                size: 24,
+              ),
+              const SizedBox(width: CaslaSpacing.xs),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Chưa thể mở công nhân',
+                      style: TextStyle(
+                        color: CaslaColors.danger,
+                        fontWeight: FontWeight.w800,
+                        fontSize: CaslaType.body,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      message,
+                      style: const TextStyle(
+                        color: CaslaColors.primaryNavy,
+                        fontSize: CaslaType.caption,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: 'Đóng thông báo',
+                onPressed: onDismiss,
+                icon: const Icon(
+                  Icons.close,
+                  size: 20,
+                  color: CaslaColors.primaryNavy,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ProcessingOverlay extends StatelessWidget {
+  const _ProcessingOverlay();
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned.fill(
+      child: ColoredBox(
+        color: Colors.black54,
+        child: IgnorePointer(
+          child: Center(
+            child: Semantics(
+              liveRegion: true,
+              label: 'Đang kiểm tra mã công nhân',
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: CaslaSpacing.xl),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: CaslaSpacing.lg,
+                  vertical: CaslaSpacing.lg,
+                ),
+                decoration: BoxDecoration(
+                  color: CaslaColors.navy900,
+                  borderRadius: BorderRadius.circular(CaslaRadius.lg),
+                  border: Border.all(color: Colors.white24),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.6,
+                        color: CaslaColors.accentGold,
+                      ),
+                    ),
+                    SizedBox(width: CaslaSpacing.sm),
+                    Flexible(
+                      child: Text(
+                        'Đang kiểm tra mã công nhân...',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: CaslaType.body,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

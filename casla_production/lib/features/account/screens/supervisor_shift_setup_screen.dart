@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../../app/theme/casla_spacing.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
@@ -238,7 +240,7 @@ class _SupervisorShiftSetupScreenState
               const Text(
                 'Sẵn sàng cho ca làm',
                 style: TextStyle(
-                  fontSize: 20,
+                  fontSize: CaslaType.title,
                   fontWeight: FontWeight.w800,
                   color: CaslaColors.primaryNavy,
                 ),
@@ -301,7 +303,7 @@ class _SupervisorShiftSetupScreenState
               const SizedBox(height: 16),
               InkWell(
                 onTap: _saving ? null : _pickDate,
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(CaslaRadius.sm),
                 child: InputDecorator(
                   decoration: const InputDecoration(labelText: 'Ngày làm việc'),
                   child: Row(
@@ -397,7 +399,7 @@ class _SetupSection extends StatelessWidget {
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
           color: CaslaColors.navy100,
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(CaslaRadius.md),
         ),
         child: Text(
           number,
@@ -415,7 +417,7 @@ class _SetupSection extends StatelessWidget {
             Text(
               title,
               style: const TextStyle(
-                fontSize: 17,
+                fontSize: CaslaType.subtitle,
                 fontWeight: FontWeight.w700,
                 color: CaslaColors.primaryNavy,
               ),
@@ -424,7 +426,7 @@ class _SetupSection extends StatelessWidget {
             Text(
               subtitle,
               style: const TextStyle(
-                fontSize: 13,
+                fontSize: CaslaType.body,
                 height: 1.4,
                 color: CaslaColors.muted,
               ),

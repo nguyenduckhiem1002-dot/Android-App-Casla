@@ -7,6 +7,8 @@
 enum FieldMetric {
   hardwareScanAccepted,
   hardwareScanDuplicate,
+  hardwareScanRejected,
+  wedgeScanAccepted,
   workHistoryCacheHit,
   workHistoryStaleHit,
   workHistoryCacheMiss,

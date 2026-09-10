@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../../app/theme/casla_spacing.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme/casla_colors.dart';
@@ -61,7 +63,7 @@ class _MandatoryPasswordChangeScreenState
                       height: 72,
                       decoration: BoxDecoration(
                         color: CaslaColors.gold100,
-                        borderRadius: BorderRadius.circular(20),
+                        borderRadius: BorderRadius.circular(CaslaRadius.lg),
                       ),
                       child: const Icon(
                         Icons.lock_reset_rounded,
@@ -74,8 +76,7 @@ class _MandatoryPasswordChangeScreenState
                       'Cần đổi mật khẩu',
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        fontFamily: 'Manrope',
-                        fontSize: 21,
+                        fontSize: CaslaType.title,
                         fontWeight: FontWeight.w800,
                         color: CaslaColors.primaryNavy,
                       ),

@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../../app/theme/casla_spacing.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
@@ -54,7 +56,9 @@ class _S08AssignmentDetailScreenState
         context: context,
         isScrollControlled: true,
         shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          borderRadius: BorderRadius.vertical(
+            top: Radius.circular(CaslaRadius.lg),
+          ),
         ),
         builder: (context) {
           return StatefulBuilder(
@@ -90,17 +94,16 @@ class _S08AssignmentDetailScreenState
                       const Text(
                         'Xác nhận hoàn thành',
                         style: TextStyle(
-                          fontFamily: 'Manrope',
                           fontWeight: FontWeight.w800,
-                          fontSize: 16,
+                          fontSize: CaslaType.subtitle,
                           color: CaslaColors.primaryNavy,
                         ),
                       ),
                       Text(
-                        'Nhập số lượng công nhân vừa hoàn thành (Tối đa: ${remainingMax.toStringAsFixed(2)} ${widget.assignment.uom})',
+                        'Nhập số lượng công nhân vừa hoàn thành (tối đa ${formatQuantity(remainingMax)} ${widget.assignment.uom})',
                         textAlign: TextAlign.center,
                         style: const TextStyle(
-                          fontSize: 12,
+                          fontSize: CaslaType.caption,
                           color: CaslaColors.muted,
                         ),
                       ),
@@ -115,9 +118,8 @@ class _S08AssignmentDetailScreenState
                           Text(
                             qtyInput.isEmpty ? '0' : qtyInput,
                             style: TextStyle(
-                              fontFamily: 'Manrope',
                               fontWeight: FontWeight.w800,
-                              fontSize: 42,
+                              fontSize: CaslaType.hero,
                               color: isOverflow
                                   ? CaslaColors.danger
                                   : CaslaColors.primaryNavy,
@@ -127,7 +129,7 @@ class _S08AssignmentDetailScreenState
                           Text(
                             widget.assignment.uom,
                             style: TextStyle(
-                              fontSize: 14,
+                              fontSize: CaslaType.body,
                               color: CaslaColors.muted,
                               fontWeight: FontWeight.w600,
                             ),
@@ -142,7 +144,7 @@ class _S08AssignmentDetailScreenState
                             'Vượt quá số lượng còn lại cho phép.',
                             style: TextStyle(
                               color: CaslaColors.danger,
-                              fontSize: 11.5,
+                              fontSize: CaslaType.caption,
                               fontWeight: FontWeight.w600,
                             ),
                           ),
@@ -152,6 +154,9 @@ class _S08AssignmentDetailScreenState
 
                       NumPad(
                         value: qtyInput,
+                        fillMaxValue: remainingMax,
+                        fillMaxLabel:
+                            'Toàn bộ còn lại · ${formatQuantity(remainingMax)} ${widget.assignment.uom}',
                         onChanged: (val) {
                           setSheetState(() {
                             qtyInput = val;
@@ -244,11 +249,11 @@ class _S08AssignmentDetailScreenState
         workerPassword: workerPassword,
       );
       if (!mounted) return;
-      showMutationFeedback(
+      await showMutationFeedback(
         context,
         receipt: receipt,
         successMessage:
-            'Đã ghi nhận +${qty.toStringAsFixed(2)} ${widget.assignment.uom}.',
+            'Đã ghi nhận +${formatQuantity(qty)} ${widget.assignment.uom}.',
       );
     } on Exception catch (e) {
       if (!mounted) return;
@@ -287,9 +292,8 @@ class _S08AssignmentDetailScreenState
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                fontFamily: 'Manrope',
                 fontWeight: FontWeight.w800,
-                fontSize: 19,
+                fontSize: CaslaType.title,
               ),
             ),
             const SizedBox(height: 2),
@@ -298,8 +302,7 @@ class _S08AssignmentDetailScreenState
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                fontFamily: 'Inter',
-                fontSize: 12.5,
+                fontSize: CaslaType.caption,
                 fontWeight: FontWeight.w500,
                 color: CaslaColors.identityMeta,
               ),
@@ -384,6 +387,7 @@ class _S08AssignmentDetailScreenState
                           RingProgressCard(
                             percentage: pct,
                             remainingValue: formatQuantity(remaining),
+                            uom: assignment.uom,
                             detailText:
                                 'Giao hiệu lực ${formatQuantity(effective)} · Hoàn thành lũy kế ${formatQuantity(completed)}',
                           ),
@@ -393,9 +397,8 @@ class _S08AssignmentDetailScreenState
                           const Text(
                             'Lịch sử giao dịch',
                             style: TextStyle(
-                              fontFamily: 'Manrope',
                               fontWeight: FontWeight.w800,
-                              fontSize: 14,
+                              fontSize: CaslaType.body,
                               color: CaslaColors.primaryNavy,
                             ),
                           ),
@@ -411,7 +414,9 @@ class _S08AssignmentDetailScreenState
                                     alpha: 0.35,
                                   ),
                                 ),
-                                borderRadius: BorderRadius.circular(14),
+                                borderRadius: BorderRadius.circular(
+                                  CaslaRadius.md,
+                                ),
                               ),
                               child: const Row(
                                 children: [
@@ -425,7 +430,7 @@ class _S08AssignmentDetailScreenState
                                       'Chưa tải được lịch sử. Số liệu phân công phía trên vẫn dùng được.',
                                       style: TextStyle(
                                         color: CaslaColors.danger,
-                                        fontSize: 12.5,
+                                        fontSize: CaslaType.caption,
                                         height: 1.4,
                                       ),
                                     ),
@@ -439,14 +444,16 @@ class _S08AssignmentDetailScreenState
                               decoration: BoxDecoration(
                                 color: CaslaColors.surface,
                                 border: Border.all(color: CaslaColors.line),
-                                borderRadius: BorderRadius.circular(14),
+                                borderRadius: BorderRadius.circular(
+                                  CaslaRadius.md,
+                                ),
                               ),
                               child: const Center(
                                 child: Text(
                                   'Chưa có giao dịch nào được ghi nhận.',
                                   style: TextStyle(
                                     color: CaslaColors.muted,
-                                    fontSize: 13,
+                                    fontSize: CaslaType.body,
                                   ),
                                 ),
                               ),
@@ -471,7 +478,9 @@ class _S08AssignmentDetailScreenState
                                   decoration: BoxDecoration(
                                     color: CaslaColors.surface,
                                     border: Border.all(color: CaslaColors.line),
-                                    borderRadius: BorderRadius.circular(12),
+                                    borderRadius: BorderRadius.circular(
+                                      CaslaRadius.md,
+                                    ),
                                   ),
                                   child: Row(
                                     children: [
@@ -493,7 +502,7 @@ class _S08AssignmentDetailScreenState
                                               'Xác nhận hoàn thành',
                                               style: TextStyle(
                                                 fontWeight: FontWeight.w700,
-                                                fontSize: 13,
+                                                fontSize: CaslaType.body,
                                                 color: CaslaColors.primaryNavy,
                                               ),
                                             ),
@@ -502,7 +511,7 @@ class _S08AssignmentDetailScreenState
                                               '$timeStr · Xác nhận bởi ${r['created_by']}',
                                               style: const TextStyle(
                                                 fontFamily: 'monospace',
-                                                fontSize: 11,
+                                                fontSize: CaslaType.caption,
                                                 color: CaslaColors.muted,
                                               ),
                                             ),
@@ -518,7 +527,7 @@ class _S08AssignmentDetailScreenState
                                             style: const TextStyle(
                                               fontFamily: 'monospace',
                                               fontWeight: FontWeight.w700,
-                                              fontSize: 14,
+                                              fontSize: CaslaType.body,
                                               color: CaslaColors.success,
                                             ),
                                           ),

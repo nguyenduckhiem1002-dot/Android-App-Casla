@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../../app/theme/casla_spacing.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
@@ -209,7 +211,9 @@ class _S06bEmployeeDailyDetailScreenState
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(CaslaRadius.lg),
+        ),
       ),
       builder: (sheetContext) => SafeArea(
         child: SingleChildScrollView(
@@ -232,8 +236,7 @@ class _S06bEmployeeDailyDetailScreenState
               const Text(
                 'Thời gian xem dữ liệu',
                 style: TextStyle(
-                  fontFamily: 'Manrope',
-                  fontSize: 18,
+                  fontSize: CaslaType.title,
                   fontWeight: FontWeight.w800,
                   color: CaslaColors.primaryNavy,
                 ),
@@ -242,7 +245,7 @@ class _S06bEmployeeDailyDetailScreenState
               Text(
                 'Đang xem: $_dateHeaderLabel',
                 style: const TextStyle(
-                  fontSize: 13,
+                  fontSize: CaslaType.body,
                   fontWeight: FontWeight.w600,
                   color: CaslaColors.muted,
                 ),
@@ -252,9 +255,9 @@ class _S06bEmployeeDailyDetailScreenState
               // CARD 1: CHỌN KHOẢNG NGÀY (NHIỀU NGÀY)
               Material(
                 color: CaslaColors.accentGold.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(14),
+                borderRadius: BorderRadius.circular(CaslaRadius.md),
                 child: InkWell(
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius: BorderRadius.circular(CaslaRadius.md),
                   onTap: () {
                     Navigator.pop(sheetContext);
                     _pickDateRange();
@@ -262,7 +265,7 @@ class _S06bEmployeeDailyDetailScreenState
                   child: Container(
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(14),
+                      borderRadius: BorderRadius.circular(CaslaRadius.md),
                       border: Border.all(
                         color: CaslaColors.accentGold.withValues(alpha: 0.6),
                         width: 1.5,
@@ -275,7 +278,7 @@ class _S06bEmployeeDailyDetailScreenState
                           height: 44,
                           decoration: BoxDecoration(
                             color: CaslaColors.accentGold,
-                            borderRadius: BorderRadius.circular(12),
+                            borderRadius: BorderRadius.circular(CaslaRadius.md),
                           ),
                           child: const Icon(
                             Icons.date_range_rounded,
@@ -293,9 +296,8 @@ class _S06bEmployeeDailyDetailScreenState
                                   const Text(
                                     'Chọn khoảng ngày',
                                     style: TextStyle(
-                                      fontFamily: 'Manrope',
                                       fontWeight: FontWeight.w800,
-                                      fontSize: 15,
+                                      fontSize: CaslaType.subtitle,
                                       color: CaslaColors.navy900,
                                     ),
                                   ),
@@ -307,13 +309,15 @@ class _S06bEmployeeDailyDetailScreenState
                                     ),
                                     decoration: BoxDecoration(
                                       color: CaslaColors.primaryNavy,
-                                      borderRadius: BorderRadius.circular(6),
+                                      borderRadius: BorderRadius.circular(
+                                        CaslaRadius.sm,
+                                      ),
                                     ),
                                     child: const Text(
                                       'Nhiều ngày',
                                       style: TextStyle(
                                         color: Colors.white,
-                                        fontSize: 10,
+                                        fontSize: CaslaType.caption,
                                         fontWeight: FontWeight.w700,
                                       ),
                                     ),
@@ -324,7 +328,7 @@ class _S06bEmployeeDailyDetailScreenState
                               const Text(
                                 'Chọn từ ngày đến ngày (tối đa 31 ngày)',
                                 style: TextStyle(
-                                  fontSize: 12,
+                                  fontSize: CaslaType.caption,
                                   color: CaslaColors.muted,
                                 ),
                               ),
@@ -346,9 +350,9 @@ class _S06bEmployeeDailyDetailScreenState
               // CARD 2: CHỌN 1 NGÀY CỤ THỂ
               Material(
                 color: CaslaColors.surface,
-                borderRadius: BorderRadius.circular(14),
+                borderRadius: BorderRadius.circular(CaslaRadius.md),
                 child: InkWell(
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius: BorderRadius.circular(CaslaRadius.md),
                   onTap: () {
                     Navigator.pop(sheetContext);
                     _pickSingleDate();
@@ -356,7 +360,7 @@ class _S06bEmployeeDailyDetailScreenState
                   child: Container(
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(14),
+                      borderRadius: BorderRadius.circular(CaslaRadius.md),
                       border: Border.all(color: CaslaColors.line, width: 1.2),
                     ),
                     child: Row(
@@ -368,7 +372,7 @@ class _S06bEmployeeDailyDetailScreenState
                             color: CaslaColors.primaryNavy.withValues(
                               alpha: 0.08,
                             ),
-                            borderRadius: BorderRadius.circular(12),
+                            borderRadius: BorderRadius.circular(CaslaRadius.md),
                           ),
                           child: const Icon(
                             Icons.calendar_today_rounded,
@@ -384,9 +388,8 @@ class _S06bEmployeeDailyDetailScreenState
                               Text(
                                 'Chọn 1 ngày cụ thể',
                                 style: TextStyle(
-                                  fontFamily: 'Manrope',
                                   fontWeight: FontWeight.w800,
-                                  fontSize: 15,
+                                  fontSize: CaslaType.subtitle,
                                   color: CaslaColors.primaryNavy,
                                 ),
                               ),
@@ -394,7 +397,7 @@ class _S06bEmployeeDailyDetailScreenState
                               Text(
                                 'Xem dữ liệu chi tiết của 1 ngày bất kỳ',
                                 style: TextStyle(
-                                  fontSize: 12,
+                                  fontSize: CaslaType.caption,
                                   color: CaslaColors.muted,
                                 ),
                               ),
@@ -416,7 +419,7 @@ class _S06bEmployeeDailyDetailScreenState
               const Text(
                 'MỐC CHỌN NHANH',
                 style: TextStyle(
-                  fontSize: 11.5,
+                  fontSize: CaslaType.caption,
                   fontWeight: FontWeight.w800,
                   letterSpacing: 0.5,
                   color: CaslaColors.muted,
@@ -525,13 +528,13 @@ class _S06bEmployeeDailyDetailScreenState
     required VoidCallback onTap,
   }) {
     return InkWell(
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(CaslaRadius.md),
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
           color: isSelected ? CaslaColors.primaryNavy : CaslaColors.surface,
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(CaslaRadius.md),
           border: Border.all(
             color: isSelected ? CaslaColors.primaryNavy : CaslaColors.line,
             width: 1.2,
@@ -544,7 +547,7 @@ class _S06bEmployeeDailyDetailScreenState
             Text(
               label,
               style: TextStyle(
-                fontSize: 13,
+                fontSize: CaslaType.body,
                 fontWeight: FontWeight.w700,
                 color: isSelected ? Colors.white : CaslaColors.primaryNavy,
               ),
@@ -553,7 +556,7 @@ class _S06bEmployeeDailyDetailScreenState
             Text(
               sublabel,
               style: TextStyle(
-                fontSize: 11,
+                fontSize: CaslaType.caption,
                 color: isSelected
                     ? Colors.white.withValues(alpha: 0.75)
                     : CaslaColors.muted,
@@ -590,9 +593,8 @@ class _S06bEmployeeDailyDetailScreenState
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                fontFamily: 'Manrope',
                 fontWeight: FontWeight.w800,
-                fontSize: 19,
+                fontSize: CaslaType.title,
               ),
             ),
             const SizedBox(height: 2),
@@ -601,8 +603,7 @@ class _S06bEmployeeDailyDetailScreenState
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                fontFamily: 'Inter',
-                fontSize: 12.5,
+                fontSize: CaslaType.caption,
                 fontWeight: FontWeight.w500,
                 color: CaslaColors.identityMeta,
               ),
@@ -631,9 +632,8 @@ class _S06bEmployeeDailyDetailScreenState
                     Text(
                       _dateHeaderLabel,
                       style: const TextStyle(
-                        fontFamily: 'Manrope',
                         fontWeight: FontWeight.w700,
-                        fontSize: 14,
+                        fontSize: CaslaType.body,
                         color: CaslaColors.primaryNavy,
                       ),
                     ),
@@ -650,7 +650,7 @@ class _S06bEmployeeDailyDetailScreenState
                       width: 1.3,
                     ),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18),
+                      borderRadius: BorderRadius.circular(CaslaRadius.lg),
                     ),
                     padding: const EdgeInsets.symmetric(horizontal: 12),
                   ),
@@ -858,7 +858,9 @@ class _S06bEmployeeDailyDetailScreenState
                                 padding: const EdgeInsets.all(16),
                                 decoration: BoxDecoration(
                                   color: CaslaColors.surface,
-                                  borderRadius: BorderRadius.circular(14),
+                                  borderRadius: BorderRadius.circular(
+                                    CaslaRadius.md,
+                                  ),
                                   border: Border.all(color: CaslaColors.line),
                                 ),
                                 child: Column(
@@ -898,14 +900,16 @@ class _S06bEmployeeDailyDetailScreenState
                                     ),
                                     const SizedBox(height: 14),
                                     ClipRRect(
-                                      borderRadius: BorderRadius.circular(6),
+                                      borderRadius: BorderRadius.circular(
+                                        CaslaRadius.sm,
+                                      ),
                                       child: LinearProgressIndicator(
                                         value: completionRate,
                                         minHeight: 8,
-                                        backgroundColor: CaslaColors.muted100,
+                                        backgroundColor: CaslaColors.progressTrack,
                                         valueColor:
                                             const AlwaysStoppedAnimation<Color>(
-                                              CaslaColors.accentGold,
+                                              CaslaColors.progressFill,
                                             ),
                                       ),
                                     ),
@@ -917,14 +921,14 @@ class _S06bEmployeeDailyDetailScreenState
                                         const Text(
                                           'Tiến độ hoàn thành',
                                           style: TextStyle(
-                                            fontSize: 11.5,
+                                            fontSize: CaslaType.caption,
                                             color: CaslaColors.muted,
                                           ),
                                         ),
                                         Text(
                                           '${(completionRate * 100).toStringAsFixed(0)}%',
                                           style: const TextStyle(
-                                            fontSize: 12,
+                                            fontSize: CaslaType.caption,
                                             fontWeight: FontWeight.w700,
                                             fontFamily: 'monospace',
                                             color: CaslaColors.primaryNavy,
@@ -946,16 +950,15 @@ class _S06bEmployeeDailyDetailScreenState
                                         ? 'Phân công trong ngày'
                                         : 'Phân công theo kỳ',
                                     style: const TextStyle(
-                                      fontFamily: 'Manrope',
                                       fontWeight: FontWeight.w800,
-                                      fontSize: 14,
+                                      fontSize: CaslaType.body,
                                       color: CaslaColors.primaryNavy,
                                     ),
                                   ),
                                   Text(
                                     '(${filteredAssignments.length + sapInitialAssigns.length})',
                                     style: const TextStyle(
-                                      fontSize: 12,
+                                      fontSize: CaslaType.caption,
                                       color: CaslaColors.muted,
                                       fontFamily: 'monospace',
                                     ),
@@ -970,7 +973,9 @@ class _S06bEmployeeDailyDetailScreenState
                                   decoration: BoxDecoration(
                                     color: CaslaColors.surface,
                                     border: Border.all(color: CaslaColors.line),
-                                    borderRadius: BorderRadius.circular(14),
+                                    borderRadius: BorderRadius.circular(
+                                      CaslaRadius.md,
+                                    ),
                                   ),
                                   child: Center(
                                     child: Text(
@@ -979,7 +984,7 @@ class _S06bEmployeeDailyDetailScreenState
                                           : 'Không có phân công nào trong khoảng thời gian này.',
                                       style: const TextStyle(
                                         color: CaslaColors.muted,
-                                        fontSize: 13,
+                                        fontSize: CaslaType.body,
                                       ),
                                     ),
                                   ),
@@ -995,7 +1000,9 @@ class _S06bEmployeeDailyDetailScreenState
                                       border: Border.all(
                                         color: CaslaColors.line,
                                       ),
-                                      borderRadius: BorderRadius.circular(14),
+                                      borderRadius: BorderRadius.circular(
+                                        CaslaRadius.md,
+                                      ),
                                     ),
                                     child: Column(
                                       crossAxisAlignment:
@@ -1009,7 +1016,7 @@ class _S06bEmployeeDailyDetailScreenState
                                               '${e.productionOrder} · CĐ: ${e.operation}',
                                               style: const TextStyle(
                                                 fontFamily: 'monospace',
-                                                fontSize: 12,
+                                                fontSize: CaslaType.caption,
                                                 fontWeight: FontWeight.w700,
                                                 color: CaslaColors.primaryNavy,
                                               ),
@@ -1036,9 +1043,8 @@ class _S06bEmployeeDailyDetailScreenState
                                             Text(
                                               'Giao: ${formatQuantity(e.quantity)} ${e.unitOfMeasure}',
                                               style: const TextStyle(
-                                                fontFamily: 'Manrope',
                                                 fontWeight: FontWeight.w700,
-                                                fontSize: 14,
+                                                fontSize: CaslaType.body,
                                                 color: CaslaColors.primaryNavy,
                                               ),
                                             ),
@@ -1048,7 +1054,7 @@ class _S06bEmployeeDailyDetailScreenState
                                               ).format(e.executionDate),
                                               style: const TextStyle(
                                                 fontFamily: 'monospace',
-                                                fontSize: 11,
+                                                fontSize: CaslaType.caption,
                                                 color: CaslaColors.muted,
                                               ),
                                             ),
@@ -1062,7 +1068,9 @@ class _S06bEmployeeDailyDetailScreenState
                                 for (final asg in filteredAssignments)
                                   Material(
                                     color: CaslaColors.surface,
-                                    borderRadius: BorderRadius.circular(14),
+                                    borderRadius: BorderRadius.circular(
+                                      CaslaRadius.md,
+                                    ),
                                     child: InkWell(
                                       onTap: () {
                                         context.push(
@@ -1070,7 +1078,9 @@ class _S06bEmployeeDailyDetailScreenState
                                           extra: asg,
                                         );
                                       },
-                                      borderRadius: BorderRadius.circular(14),
+                                      borderRadius: BorderRadius.circular(
+                                        CaslaRadius.md,
+                                      ),
                                       child: Container(
                                         margin: const EdgeInsets.only(
                                           bottom: 10,
@@ -1097,7 +1107,7 @@ class _S06bEmployeeDailyDetailScreenState
                                                   asg.orderCode,
                                                   style: const TextStyle(
                                                     fontFamily: 'monospace',
-                                                    fontSize: 11.5,
+                                                    fontSize: CaslaType.caption,
                                                     fontWeight: FontWeight.w600,
                                                     color: CaslaColors.muted,
                                                   ),
@@ -1116,9 +1126,8 @@ class _S06bEmployeeDailyDetailScreenState
                                                 Text(
                                                   'Giao: ${formatQuantity(asg.effectiveAssigned)} ${asg.uom}',
                                                   style: const TextStyle(
-                                                    fontFamily: 'Manrope',
                                                     fontWeight: FontWeight.w700,
-                                                    fontSize: 14,
+                                                    fontSize: CaslaType.body,
                                                     color:
                                                         CaslaColors.primaryNavy,
                                                   ),
@@ -1146,16 +1155,15 @@ class _S06bEmployeeDailyDetailScreenState
                                   const Text(
                                     'Lịch sử xác nhận hoàn thành',
                                     style: TextStyle(
-                                      fontFamily: 'Manrope',
                                       fontWeight: FontWeight.w800,
-                                      fontSize: 14,
+                                      fontSize: CaslaType.body,
                                       color: CaslaColors.primaryNavy,
                                     ),
                                   ),
                                   Text(
                                     '(${productionRecords.length + sapConfirms.length})',
                                     style: const TextStyle(
-                                      fontSize: 12,
+                                      fontSize: CaslaType.caption,
                                       color: CaslaColors.muted,
                                       fontFamily: 'monospace',
                                     ),
@@ -1174,7 +1182,9 @@ class _S06bEmployeeDailyDetailScreenState
                                         alpha: 0.35,
                                       ),
                                     ),
-                                    borderRadius: BorderRadius.circular(14),
+                                    borderRadius: BorderRadius.circular(
+                                      CaslaRadius.md,
+                                    ),
                                   ),
                                   child: const Row(
                                     children: [
@@ -1188,7 +1198,7 @@ class _S06bEmployeeDailyDetailScreenState
                                           'Chưa tải được lịch sử sản lượng. Danh sách phân công phía trên vẫn dùng được.',
                                           style: TextStyle(
                                             color: CaslaColors.danger,
-                                            fontSize: 12.5,
+                                            fontSize: CaslaType.caption,
                                             height: 1.4,
                                           ),
                                         ),
@@ -1202,14 +1212,16 @@ class _S06bEmployeeDailyDetailScreenState
                                   decoration: BoxDecoration(
                                     color: CaslaColors.surface,
                                     border: Border.all(color: CaslaColors.line),
-                                    borderRadius: BorderRadius.circular(14),
+                                    borderRadius: BorderRadius.circular(
+                                      CaslaRadius.md,
+                                    ),
                                   ),
                                   child: const Center(
                                     child: Text(
                                       'Chưa có lượt xác nhận sản lượng nào.',
                                       style: TextStyle(
                                         color: CaslaColors.muted,
-                                        fontSize: 13,
+                                        fontSize: CaslaType.body,
                                       ),
                                     ),
                                   ),
@@ -1225,7 +1237,9 @@ class _S06bEmployeeDailyDetailScreenState
                                       border: Border.all(
                                         color: CaslaColors.line,
                                       ),
-                                      borderRadius: BorderRadius.circular(12),
+                                      borderRadius: BorderRadius.circular(
+                                        CaslaRadius.md,
+                                      ),
                                     ),
                                     child: Row(
                                       mainAxisAlignment:
@@ -1242,7 +1256,7 @@ class _S06bEmployeeDailyDetailScreenState
                                                 overflow: TextOverflow.ellipsis,
                                                 style: const TextStyle(
                                                   fontWeight: FontWeight.w700,
-                                                  fontSize: 13,
+                                                  fontSize: CaslaType.body,
                                                   color:
                                                       CaslaColors.primaryNavy,
                                                 ),
@@ -1253,7 +1267,7 @@ class _S06bEmployeeDailyDetailScreenState
                                                 overflow: TextOverflow.ellipsis,
                                                 style: const TextStyle(
                                                   fontFamily: 'monospace',
-                                                  fontSize: 11,
+                                                  fontSize: CaslaType.caption,
                                                   color: CaslaColors.muted,
                                                 ),
                                               ),
@@ -1266,7 +1280,7 @@ class _S06bEmployeeDailyDetailScreenState
                                           style: const TextStyle(
                                             fontFamily: 'monospace',
                                             fontWeight: FontWeight.w700,
-                                            fontSize: 14,
+                                            fontSize: CaslaType.body,
                                             color: CaslaColors.success,
                                           ),
                                         ),
@@ -1284,7 +1298,9 @@ class _S06bEmployeeDailyDetailScreenState
                                       border: Border.all(
                                         color: CaslaColors.line,
                                       ),
-                                      borderRadius: BorderRadius.circular(12),
+                                      borderRadius: BorderRadius.circular(
+                                        CaslaRadius.md,
+                                      ),
                                     ),
                                     child: Row(
                                       mainAxisAlignment:
@@ -1301,7 +1317,7 @@ class _S06bEmployeeDailyDetailScreenState
                                                 overflow: TextOverflow.ellipsis,
                                                 style: const TextStyle(
                                                   fontWeight: FontWeight.w700,
-                                                  fontSize: 13,
+                                                  fontSize: CaslaType.body,
                                                   color:
                                                       CaslaColors.primaryNavy,
                                                 ),
@@ -1312,7 +1328,7 @@ class _S06bEmployeeDailyDetailScreenState
                                                 overflow: TextOverflow.ellipsis,
                                                 style: const TextStyle(
                                                   fontFamily: 'monospace',
-                                                  fontSize: 11,
+                                                  fontSize: CaslaType.caption,
                                                   color: CaslaColors.muted,
                                                 ),
                                               ),
@@ -1325,7 +1341,7 @@ class _S06bEmployeeDailyDetailScreenState
                                           style: const TextStyle(
                                             fontFamily: 'monospace',
                                             fontWeight: FontWeight.w700,
-                                            fontSize: 14,
+                                            fontSize: CaslaType.body,
                                             color: CaslaColors.success,
                                           ),
                                         ),
@@ -1359,7 +1375,7 @@ class _S06bEmployeeDailyDetailScreenState
         Text(
           label,
           style: const TextStyle(
-            fontSize: 12,
+            fontSize: CaslaType.caption,
             color: CaslaColors.muted,
             fontWeight: FontWeight.w500,
           ),
@@ -1374,7 +1390,7 @@ class _S06bEmployeeDailyDetailScreenState
               value,
               style: TextStyle(
                 fontFamily: 'monospace',
-                fontSize: 18,
+                fontSize: CaslaType.title,
                 fontWeight: FontWeight.w800,
                 color: color,
               ),
@@ -1383,7 +1399,7 @@ class _S06bEmployeeDailyDetailScreenState
             Text(
               uom,
               style: const TextStyle(
-                fontSize: 11,
+                fontSize: CaslaType.caption,
                 color: CaslaColors.muted,
                 fontWeight: FontWeight.w500,
               ),

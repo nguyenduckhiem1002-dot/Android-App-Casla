@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../app/theme/casla_spacing.dart';
 import '../../app/theme/casla_colors.dart';
 
 class StatusChip extends StatelessWidget {
@@ -58,7 +60,7 @@ class StatusChip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
         color: bg,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(CaslaRadius.pill),
         border: Border.all(color: fg.withValues(alpha: 0.22), width: 1),
       ),
       child: Row(
@@ -73,7 +75,7 @@ class StatusChip extends StatelessWidget {
           Text(
             displayText,
             style: TextStyle(
-              fontSize: 11.5,
+              fontSize: CaslaType.caption,
               fontWeight: FontWeight.w700,
               color: fg,
               letterSpacing: 0.4,

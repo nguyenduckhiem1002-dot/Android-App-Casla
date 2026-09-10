@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../../app/theme/casla_spacing.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
@@ -9,11 +11,15 @@ import '../../../domain/entities/entities.dart';
 import '../../../domain/entities/enums.dart';
 import '../../../domain/entities/work_history.dart';
 import '../../../domain/policies/history_work_context.dart';
+import '../../../core/scanner/scan_intent.dart';
 import '../../../core/utils/quantity_formatter.dart';
 import '../../../main.dart';
 import '../../../presentation/widgets/kpi_card.dart';
 import '../../../presentation/widgets/status_chip.dart';
 import '../../../presentation/widgets/active_shift_context_card.dart';
+import '../../../presentation/widgets/barcode_scan_listener.dart';
+import '../../../presentation/widgets/scan_status_strip.dart';
+import '../../../presentation/widgets/worker_scan_acceptance.dart';
 import '../../../presentation/widgets/casla_empty_state.dart';
 import '../../../presentation/widgets/casla_skeleton.dart';
 
@@ -83,6 +89,7 @@ class _S06SupervisorOverviewScreenState
   Future<List<SapShift>>? _historyShiftsFuture;
   String _historyShiftsKey = '';
   bool _historyDataReady = false;
+  bool _isScanNavigating = false;
   WorkHistoryResult? _lastHistoryResult;
 
   @override
@@ -155,6 +162,58 @@ class _S06SupervisorOverviewScreenState
       toBusinessDate: DateFormat('yyyy-MM-dd').format(_rangeTo),
       shiftId: _historyShiftId,
     );
+  }
+
+  /// Opens a worker straight from a trigger pull.
+  ///
+  /// The overview is where a supervisor spends the shift, and reaching a
+  /// worker's day used to mean tapping the header QR button to push a
+  /// dedicated scanner route first. With a laser that intermediate screen buys
+  /// nothing: the reader is already listening here.
+  Future<bool> _handleScan(String code) async {
+    if (_isScanNavigating) return false;
+    final scanned = ScanClassifier.classify(code);
+
+    if (scanned.kind != ScannedCodeKind.worker) {
+      _showScanMessage(
+        scanned.kind == ScannedCodeKind.operation
+            ? 'Đây là mã công đoạn. Hãy mở tab Phân công để giao việc.'
+            : scanned.error,
+      );
+      return false;
+    }
+
+    _isScanNavigating = true;
+    try {
+      final outcome = await acceptScannedWorker(
+        context,
+        rawCode: code,
+        database: ref.read(appStateProvider).db,
+      );
+      if (!mounted) return false;
+
+      switch (outcome) {
+        case WorkerScanAccepted(:final worker):
+          await context.push('/supervisor/employee_detail', extra: worker);
+          return true;
+        case WorkerScanRejected(:final message):
+          _showScanMessage(message);
+          return false;
+        case WorkerScanCancelled():
+          return false;
+      }
+    } finally {
+      _isScanNavigating = false;
+    }
+  }
+
+  void _showScanMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(content: Text(message), backgroundColor: CaslaColors.danger),
+      );
   }
 
   Future<void> _refresh() async {
@@ -437,7 +496,9 @@ class _S06SupervisorOverviewScreenState
     await showModalBottomSheet<void>(
       context: context,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(CaslaRadius.lg),
+        ),
       ),
       builder: (sheetContext) => SafeArea(
         child: ListView(
@@ -449,7 +510,7 @@ class _S06SupervisorOverviewScreenState
               child: Text(
                 'Lọc lịch sử theo ca',
                 style: TextStyle(
-                  fontSize: 17,
+                  fontSize: CaslaType.subtitle,
                   fontWeight: FontWeight.w800,
                   color: CaslaColors.primaryNavy,
                 ),
@@ -517,7 +578,9 @@ class _S06SupervisorOverviewScreenState
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(CaslaRadius.lg),
+        ),
       ),
       builder: (sheetContext) {
         return SafeArea(
@@ -531,9 +594,8 @@ class _S06SupervisorOverviewScreenState
                   child: Text(
                     'Lọc theo tổ sản xuất',
                     style: TextStyle(
-                      fontFamily: 'Manrope',
                       fontWeight: FontWeight.w800,
-                      fontSize: 17,
+                      fontSize: CaslaType.subtitle,
                       color: CaslaColors.primaryNavy,
                     ),
                   ),
@@ -584,7 +646,7 @@ class _S06SupervisorOverviewScreenState
                             'SAP chưa trả về phạm vi tổ cho phiên này.',
                             style: TextStyle(
                               color: CaslaColors.muted,
-                              fontSize: 12.5,
+                              fontSize: CaslaType.caption,
                             ),
                           ),
                         ),
@@ -638,7 +700,9 @@ class _S06SupervisorOverviewScreenState
     await showModalBottomSheet<void>(
       context: context,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(CaslaRadius.lg),
+        ),
       ),
       builder: (sheetContext) => SafeArea(
         child: Padding(
@@ -661,8 +725,7 @@ class _S06SupervisorOverviewScreenState
               const Text(
                 'Chọn ngày xem dữ liệu',
                 style: TextStyle(
-                  fontFamily: 'Manrope',
-                  fontSize: 17,
+                  fontSize: CaslaType.subtitle,
                   fontWeight: FontWeight.w800,
                   color: CaslaColors.primaryNavy,
                 ),
@@ -674,7 +737,7 @@ class _S06SupervisorOverviewScreenState
                   height: 38,
                   decoration: BoxDecoration(
                     color: CaslaColors.primaryNavy.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(10),
+                    borderRadius: BorderRadius.circular(CaslaRadius.sm),
                   ),
                   child: const Icon(
                     Icons.today,
@@ -684,11 +747,14 @@ class _S06SupervisorOverviewScreenState
                 ),
                 title: const Text(
                   'Hôm nay',
-                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: CaslaType.body,
+                  ),
                 ),
                 subtitle: Text(
                   DateFormat('dd/MM/yyyy').format(DateTime.now()),
-                  style: const TextStyle(fontSize: 12),
+                  style: const TextStyle(fontSize: CaslaType.caption),
                 ),
                 trailing:
                     _historyRange == HistoryRange.day &&
@@ -710,7 +776,7 @@ class _S06SupervisorOverviewScreenState
                   height: 38,
                   decoration: BoxDecoration(
                     color: CaslaColors.primaryNavy.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(10),
+                    borderRadius: BorderRadius.circular(CaslaRadius.sm),
                   ),
                   child: const Icon(
                     Icons.history,
@@ -720,13 +786,16 @@ class _S06SupervisorOverviewScreenState
                 ),
                 title: const Text(
                   'Hôm qua',
-                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: CaslaType.body,
+                  ),
                 ),
                 subtitle: Text(
                   DateFormat(
                     'dd/MM/yyyy',
                   ).format(DateTime.now().subtract(const Duration(days: 1))),
-                  style: const TextStyle(fontSize: 12),
+                  style: const TextStyle(fontSize: CaslaType.caption),
                 ),
                 trailing:
                     _historyRange == HistoryRange.day &&
@@ -750,7 +819,7 @@ class _S06SupervisorOverviewScreenState
                   height: 38,
                   decoration: BoxDecoration(
                     color: CaslaColors.accentGold.withValues(alpha: 0.18),
-                    borderRadius: BorderRadius.circular(10),
+                    borderRadius: BorderRadius.circular(CaslaRadius.sm),
                   ),
                   child: const Icon(
                     Icons.calendar_month,
@@ -760,11 +829,14 @@ class _S06SupervisorOverviewScreenState
                 ),
                 title: const Text(
                   'Chọn ngày khác trên lịch...',
-                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: CaslaType.body,
+                  ),
                 ),
                 subtitle: const Text(
                   'Mở lịch để chọn 1 ngày bất kỳ',
-                  style: TextStyle(fontSize: 12),
+                  style: TextStyle(fontSize: CaslaType.caption),
                 ),
                 trailing: const Icon(
                   Icons.chevron_right,
@@ -864,778 +936,911 @@ class _S06SupervisorOverviewScreenState
         ? _allTeamsLabel(emp)
         : _selectedTeamLabel;
 
-    return Scaffold(
-      backgroundColor: CaslaColors.background,
-      appBar: PreferredSize(
-        preferredSize: Size.fromHeight(
-          26 + MediaQuery.textScalerOf(context).scale(44),
-        ),
-        child: Container(
-          color: CaslaColors.primaryNavy,
-          padding: EdgeInsets.fromLTRB(
-            18,
-            MediaQuery.paddingOf(context).top + 12,
-            18,
-            12,
+    return BarcodeScanListener(
+      onScan: _handleScan,
+      enabled: !_isSearching,
+      child: Scaffold(
+        backgroundColor: CaslaColors.background,
+        appBar: PreferredSize(
+          preferredSize: Size.fromHeight(
+            26 + MediaQuery.textScalerOf(context).scale(44),
           ),
-          child: _isSearching
-              ? Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _searchController,
-                        autofocus: true,
-                        style: const TextStyle(color: Colors.white),
-                        onChanged: (val) {
-                          setState(() {
-                            _searchQuery = val.trim().toLowerCase();
-                          });
-                        },
-                        decoration: const InputDecoration(
-                          hintText: 'Tìm theo tên hoặc mã NV...',
-                          hintStyle: TextStyle(color: Colors.white70),
-                          border: InputBorder.none,
-                          enabledBorder: InputBorder.none,
-                          focusedBorder: InputBorder.none,
-                          fillColor: Colors.transparent,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close, color: Colors.white),
-                      onPressed: () {
-                        setState(() {
-                          _isSearching = false;
-                          _searchQuery = '';
-                          _searchController.clear();
-                        });
-                      },
-                    ),
-                  ],
-                )
-              : Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Expanded(
-                      child: Row(
-                        children: [
-                          Container(
-                            width: 44,
-                            height: 44,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF26305C),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            alignment: Alignment.center,
-                            child: Text(
-                              supervisorName.isNotEmpty
-                                  ? supervisorName
-                                        .split(' ')
-                                        .last[0]
-                                        .toUpperCase()
-                                  : 'B',
-                              style: const TextStyle(
-                                fontFamily: 'Manrope',
-                                fontWeight: FontWeight.w800,
-                                fontSize: 18,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Text(
-                                  supervisorName,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontFamily: 'Manrope',
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 17,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  'Supervisor · ${emp?.teamName.isNotEmpty == true ? emp!.teamName : 'Phạm vi được phân quyền'}',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontFamily: 'Inter',
-                                    fontSize: 12.5,
-                                    fontWeight: FontWeight.w500,
-                                    color: CaslaColors.identityMeta,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Row(
-                      children: [
-                        IconButton(
-                          icon: const Icon(
-                            Icons.qr_code_scanner,
-                            color: Colors.white,
-                          ),
-                          tooltip: 'Quét thẻ/QR công nhân',
-                          onPressed: () =>
-                              context.push('/supervisor/confirm_scan'),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.search, color: Colors.white),
-                          tooltip: 'Tìm kiếm nhân viên',
-                          onPressed: () {
+          child: Container(
+            color: CaslaColors.primaryNavy,
+            padding: EdgeInsets.fromLTRB(
+              18,
+              MediaQuery.paddingOf(context).top + 12,
+              18,
+              12,
+            ),
+            child: _isSearching
+                ? Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _searchController,
+                          autofocus: true,
+                          style: const TextStyle(color: Colors.white),
+                          onChanged: (val) {
                             setState(() {
-                              _isSearching = true;
+                              _searchQuery = val.trim().toLowerCase();
                             });
                           },
+                          decoration: const InputDecoration(
+                            hintText: 'Tìm theo tên hoặc mã NV...',
+                            hintStyle: TextStyle(color: Colors.white70),
+                            border: InputBorder.none,
+                            enabledBorder: InputBorder.none,
+                            focusedBorder: InputBorder.none,
+                            fillColor: Colors.transparent,
+                          ),
                         ),
-                      ],
-                    ),
-                  ],
-                ),
-        ),
-      ),
-      body: NestedScrollView(
-        headerSliverBuilder: (context, innerBoxIsScrolled) => [
-          SliverToBoxAdapter(
-            child:
-                // FIXED TOP FILTER SECTION (always visible, never replaced by skeleton)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(18, 16, 18, 0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      ActiveShiftContextCard(
-                        workContext: appState.activeWorkContext,
-                        shift: appState.activeShift,
-                        businessDate: appState.activeBusinessDate,
-                        onEdit: () =>
-                            context.push('/supervisor-setup', extra: true),
                       ),
-                      const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.white),
+                        onPressed: () {
+                          setState(() {
+                            _isSearching = false;
+                            _searchQuery = '';
+                            _searchController.clear();
+                          });
+                        },
+                      ),
+                    ],
+                  )
+                : Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 44,
+                              height: 44,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF26305C),
+                                borderRadius: BorderRadius.circular(
+                                  CaslaRadius.md,
+                                ),
+                              ),
+                              alignment: Alignment.center,
+                              child: Text(
+                                UserSession.initialsFor(
+                                  supervisorName,
+                                  fallback: 'B',
+                                ),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: CaslaType.title,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Text(
+                                    supervisorName,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: CaslaType.subtitle,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'Supervisor · ${emp?.teamName.isNotEmpty == true ? emp!.teamName : 'Phạm vi được phân quyền'}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontSize: CaslaType.caption,
+                                      fontWeight: FontWeight.w500,
+                                      color: CaslaColors.identityMeta,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Row(
                         children: [
-                          // 1. Lọc theo tổ sản xuất
-                          _buildFilterChip(
-                            '$teamFilterLabel ▾',
-                            icon: Icons.groups_outlined,
-                            isSelected: true,
-                            onTap: _showTeamFilterSheet,
+                          IconButton(
+                            icon: const Icon(
+                              Icons.qr_code_scanner,
+                              color: Colors.white,
+                            ),
+                            tooltip: 'Quét thẻ/QR công nhân',
+                            onPressed: () =>
+                                context.push('/supervisor/confirm_scan'),
                           ),
-
-                          _buildFilterChip(
-                            '$_historyShiftLabel ▾',
-                            icon: Icons.schedule_outlined,
-                            isSelected: _historyShiftId != null,
-                            onTap: _showHistoryShiftSheet,
-                          ),
-
-                          // 2. Chip Hôm nay (hoặc 1 ngày cụ thể)
-                          _buildFilterChip(
-                            _dayChipLabel,
-                            icon: Icons.calendar_today_outlined,
-                            isSelected: _historyRange == HistoryRange.day,
-                            onTap: _showDaySelectionSheet,
-                          ),
-
-                          // 3. Chip Tuần này
-                          _buildFilterChip(
-                            'Tuần này',
-                            isSelected: _historyRange == HistoryRange.week,
-                            onTap: () {
+                          IconButton(
+                            icon: const Icon(Icons.search, color: Colors.white),
+                            tooltip: 'Tìm kiếm nhân viên',
+                            onPressed: () {
                               setState(() {
-                                _historyRange = HistoryRange.week;
-                                _replaceHistoryStream();
+                                _isSearching = true;
                               });
                             },
-                          ),
-
-                          // 4. Chip Tháng này
-                          _buildFilterChip(
-                            'Tháng này',
-                            isSelected: _historyRange == HistoryRange.month,
-                            onTap: () {
-                              setState(() {
-                                _historyRange = HistoryRange.month;
-                                _replaceHistoryStream();
-                              });
-                            },
-                          ),
-
-                          // 5. Chip Khoảng ngày (Custom Date Range)
-                          _buildFilterChip(
-                            _customRangeChipLabel,
-                            icon: Icons.date_range_outlined,
-                            isSelected: _historyRange == HistoryRange.custom,
-                            onTap: _pickDateRange,
                           ),
                         ],
                       ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Phạm vi SAP: ${_scopeSummary(emp)}',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          height: 1.35,
-                          color: CaslaColors.muted,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
                     ],
                   ),
-                ),
           ),
-        ],
-        body: RefreshIndicator(
-          onRefresh: _refresh,
-          child: StreamBuilder<WorkHistoryResult>(
-            stream: _historyStream,
-            builder: (context, historySnapshot) {
-              // A refresh error is emitted after cached data by the
-              // repository. StreamBuilder does not retain that data on the
-              // error snapshot, so keep the last successful result locally.
-              if (historySnapshot.hasData &&
-                  historySnapshot.connectionState != ConnectionState.waiting) {
-                _lastHistoryResult = historySnapshot.data;
-                _historyDataReady = true;
-              }
-              final sapResult = _historyDataReady
-                  ? historySnapshot.data ?? _lastHistoryResult
-                  : null;
-
-              return StreamBuilder<List<Assignment>>(
-                stream: _assignmentStream,
-                builder: (context, assignmentSnapshot) {
-                  return FutureBuilder<List<Map<String, dynamic>>>(
-                    future: _employeesFor(effectiveTeamIds),
-                    builder: (context, empSnapshot) {
-                      final isHistoryLoading =
-                          historySnapshot.connectionState ==
-                              ConnectionState.waiting &&
-                          sapResult == null;
-                      final isEmpLoading =
-                          empSnapshot.connectionState ==
-                              ConnectionState.waiting &&
-                          !empSnapshot.hasData;
-
-                      if (isHistoryLoading ||
-                          isEmpLoading ||
-                          assignmentSnapshot.connectionState ==
-                              ConnectionState.waiting) {
-                        return const _OverviewSkeleton();
-                      }
-
-                      if (historySnapshot.hasError && sapResult == null) {
-                        return _OverviewHistoryError(onRetry: _refresh);
-                      }
-
-                      // Process SAP data
-                      WorkHistoryResult? scopedResult = sapResult;
-                      if (sapResult != null && _selectedTeamScopeIds != null) {
-                        final selected = appState.currentSession?.workContexts
-                            .where((c) => c.workId == _selectedTeamId)
-                            .firstOrNull;
-                        try {
-                          scopedResult = historyForWorkContext(
-                            sapResult,
-                            plant: selected?.plant ?? '',
-                            workCenter: selected?.workCenter ?? '',
-                          );
-                        } on FormatException catch (error) {
-                          return ListView(
+        ),
+        body: Column(
+          children: [
+            // Confirms the trigger will do something before anyone pulls it.
+            const ScanStatusStrip(),
+            Expanded(
+              child: NestedScrollView(
+                headerSliverBuilder: (context, innerBoxIsScrolled) => [
+                  SliverToBoxAdapter(
+                    child:
+                        // FIXED TOP FILTER SECTION (always visible, never replaced by skeleton)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(18, 16, 18, 0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Padding(
-                                padding: const EdgeInsets.all(24),
-                                child: Column(
+                              ActiveShiftContextCard(
+                                workContext: appState.activeWorkContext,
+                                shift: appState.activeShift,
+                                businessDate: appState.activeBusinessDate,
+                                onEdit: () => context.push(
+                                  '/supervisor-setup',
+                                  extra: true,
+                                ),
+                              ),
+                              const SizedBox(height: CaslaSpacing.sm),
+
+                              // Two rows, because these are two different questions.
+                              //
+                              // They used to sit in one undifferentiated chip row:
+                              // scope filters beside range choices, two of which
+                              // opened a sheet and two of which applied on the spot,
+                              // all styled identically. W01 already solved the range
+                              // half with a segmented control; this is that control,
+                              // so the two screens finally agree.
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: _buildFilterChip(
+                                      '$teamFilterLabel ▾',
+                                      icon: Icons.groups_outlined,
+                                      isSelected: _selectedTeamId != 'ALL',
+                                      onTap: _showTeamFilterSheet,
+                                    ),
+                                  ),
+                                  const SizedBox(width: CaslaSpacing.xs),
+                                  Expanded(
+                                    child: _buildFilterChip(
+                                      '$_historyShiftLabel ▾',
+                                      icon: Icons.schedule_outlined,
+                                      isSelected: _historyShiftId != null,
+                                      onTap: _showHistoryShiftSheet,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: CaslaSpacing.xs),
+                              Container(
+                                padding: const EdgeInsets.all(4),
+                                decoration: BoxDecoration(
+                                  color: CaslaColors.muted100,
+                                  borderRadius: BorderRadius.circular(
+                                    CaslaRadius.sm,
+                                  ),
+                                ),
+                                child: Row(
                                   children: [
-                                    Text(error.message),
-                                    TextButton(
-                                      onPressed: () => setState(() {
-                                        _selectedTeamId = 'ALL';
-                                        _selectedTeamScopeIds = null;
-                                      }),
-                                      child: const Text('Xem tất cả tổ'),
+                                    _buildRangeTab(
+                                      _dayChipLabel,
+                                      HistoryRange.day,
+                                      onTap: _showDaySelectionSheet,
+                                    ),
+                                    _buildRangeTab(
+                                      'Tuần này',
+                                      HistoryRange.week,
+                                    ),
+                                    _buildRangeTab(
+                                      'Tháng này',
+                                      HistoryRange.month,
+                                    ),
+                                    _buildRangeTab(
+                                      _customRangeChipLabel,
+                                      HistoryRange.custom,
+                                      onTap: _pickDateRange,
                                     ),
                                   ],
                                 ),
                               ),
+                              const SizedBox(height: CaslaSpacing.xs),
+                              Text(
+                                'Phạm vi SAP: ${_scopeSummary(emp)}',
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: CaslaType.caption,
+                                  height: 1.35,
+                                  color: CaslaColors.muted,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
                             ],
-                          );
-                        }
+                          ),
+                        ),
+                  ),
+                ],
+                body: RefreshIndicator(
+                  onRefresh: _refresh,
+                  child: StreamBuilder<WorkHistoryResult>(
+                    stream: _historyStream,
+                    builder: (context, historySnapshot) {
+                      // A refresh error is emitted after cached data by the
+                      // repository. StreamBuilder does not retain that data on the
+                      // error snapshot, so keep the last successful result locally.
+                      if (historySnapshot.hasData &&
+                          historySnapshot.connectionState !=
+                              ConnectionState.waiting) {
+                        _lastHistoryResult = historySnapshot.data;
+                        _historyDataReady = true;
                       }
-                      final sapWorkers =
-                          scopedResult?.workers ?? const <WorkHistorySummary>[];
-                      final sapEntries =
-                          scopedResult?.entries ?? const <WorkHistoryEntry>[];
+                      final sapResult = _historyDataReady
+                          ? historySnapshot.data ?? _lastHistoryResult
+                          : null;
 
-                      // Process Local data
-                      final rawAssignments =
-                          assignmentSnapshot.data ?? const <Assignment>[];
-                      final localAssignments = rawAssignments.where((a) {
-                        if (_selectedTeamScopeIds != null &&
-                            !_selectedTeamScopeIds!.contains(a.teamId)) {
-                          return false;
-                        }
-                        return true;
-                      }).toList();
+                      return StreamBuilder<List<Assignment>>(
+                        stream: _assignmentStream,
+                        builder: (context, assignmentSnapshot) {
+                          return FutureBuilder<List<Map<String, dynamic>>>(
+                            future: _employeesFor(effectiveTeamIds),
+                            builder: (context, empSnapshot) {
+                              final isHistoryLoading =
+                                  historySnapshot.connectionState ==
+                                      ConnectionState.waiting &&
+                                  sapResult == null;
+                              final isEmpLoading =
+                                  empSnapshot.connectionState ==
+                                      ConnectionState.waiting &&
+                                  !empSnapshot.hasData;
 
-                      final byWorkerLocal = <String, List<Assignment>>{};
-                      for (final a in localAssignments) {
-                        (byWorkerLocal[a.workerId] ??= []).add(a);
-                      }
+                              if (isHistoryLoading ||
+                                  isEmpLoading ||
+                                  assignmentSnapshot.connectionState ==
+                                      ConnectionState.waiting) {
+                                return const _OverviewSkeleton();
+                              }
 
-                      final rawEmployees = empSnapshot.data ?? [];
+                              if (historySnapshot.hasError &&
+                                  sapResult == null) {
+                                return _OverviewHistoryError(onRetry: _refresh);
+                              }
 
-                      // BUILD UNIFIED WORKER MAP
-                      final workerMap = <String, _WorkerOverviewData>{};
-
-                      // 1. Add from SAP workers
-                      for (final sw in sapWorkers) {
-                        final localEmp = rawEmployees
-                            .cast<Map<String, dynamic>?>()
-                            .firstWhere(
-                              (e) =>
-                                  e != null &&
-                                  (e['ma_nv'] == sw.workerId ||
-                                      e['id'] == sw.workerId),
-                              orElse: () => null,
-                            );
-
-                        final matchingLocal =
-                            byWorkerLocal[sw.workerId] ??
-                            (localEmp != null
-                                ? byWorkerLocal[localEmp['id']]
-                                : null) ??
-                            const <Assignment>[];
-
-                        final matchingSapEntries = sapEntries
-                            .where((e) => e.workerId == sw.workerId)
-                            .toList();
-
-                        workerMap[sw.workerId] = _WorkerOverviewData(
-                          id: localEmp?['id'] as String? ?? sw.workerId,
-                          code: sw.workerId,
-                          name: sw.workerName.isNotEmpty
-                              ? sw.workerName
-                              : (localEmp?['ten'] ?? sw.workerId),
-                          department:
-                              localEmp?['bo_phan'] ?? 'Công nhân sản xuất',
-                          assignedQty: sw.assignedQuantity,
-                          completedQty: sw.completedQuantity,
-                          remainingQty: sw.remainingQuantity,
-                          uom: sw.unitOfMeasure.isNotEmpty
-                              ? sw.unitOfMeasure
-                              : 'ST',
-                          sapEntries: matchingSapEntries,
-                          localAssignments: matchingLocal,
-                        );
-                      }
-
-                      // 2. Add local employees who may not be in SAP workers
-                      for (final emp in rawEmployees) {
-                        final empId = emp['id'] as String? ?? '';
-                        final empCode = emp['ma_nv'] as String? ?? '';
-
-                        if (workerMap.containsKey(empCode) ||
-                            workerMap.containsKey(empId)) {
-                          continue;
-                        }
-
-                        final matchingLocal =
-                            byWorkerLocal[empId] ??
-                            byWorkerLocal[empCode] ??
-                            const <Assignment>[];
-
-                        double workerAssigned = 0.0;
-                        double completedQty = 0.0;
-                        double recalledQty = 0.0;
-                        for (final a in matchingLocal) {
-                          workerAssigned += a.assignedQuantity;
-                          completedQty += a.completedQuantity;
-                          recalledQty += a.recalledQuantity;
-                        }
-
-                        final effectiveQty = workerAssigned - recalledQty;
-                        final remainingQty = effectiveQty - completedQty;
-
-                        workerMap[empCode.isNotEmpty
-                            ? empCode
-                            : empId] = _WorkerOverviewData(
-                          id: empId,
-                          code: empCode,
-                          name: emp['ten'] ?? 'Nhân viên',
-                          department: emp['bo_phan'] ?? 'Công nhân sản xuất',
-                          assignedQty: effectiveQty,
-                          completedQty: completedQty,
-                          remainingQty: remainingQty,
-                          uom: matchingLocal.isNotEmpty
-                              ? matchingLocal.first.uom
-                              : 'cái',
-                          sapEntries: const [],
-                          localAssignments: matchingLocal,
-                        );
-                      }
-
-                      // Calculate KPIs
-                      double totalEffective = 0.0;
-                      double totalCompleted = 0.0;
-                      int assignedWorkerCount = 0;
-                      int openCount = 0;
-
-                      for (final w in workerMap.values) {
-                        totalEffective += w.assignedQty;
-                        totalCompleted += w.completedQty;
-                        if (w.assignedQty > 0) assignedWorkerCount++;
-                        if (w.remainingQty > 0) openCount++;
-                      }
-
-                      // Filter workers by search query
-                      final allWorkers = workerMap.values.toList();
-                      final filteredWorkers = allWorkers.where((w) {
-                        if (_searchQuery.isEmpty) return true;
-                        return w.name.toLowerCase().contains(_searchQuery) ||
-                            w.code.toLowerCase().contains(_searchQuery);
-                      }).toList();
-
-                      // Sort: workers with assignments first, then by name
-                      filteredWorkers.sort((a, b) {
-                        if (a.assignedQty > 0 && b.assignedQty == 0) {
-                          return -1;
-                        }
-                        if (a.assignedQty == 0 && b.assignedQty > 0) {
-                          return 1;
-                        }
-                        return a.name.compareTo(b.name);
-                      });
-
-                      return CustomScrollView(
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        slivers: [
-                          SliverToBoxAdapter(
-                            child: Padding(
-                              padding: const EdgeInsets.fromLTRB(18, 4, 18, 0),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  // KPI Grid Cards
-                                  LayoutBuilder(
-                                    builder: (context, constraints) => Wrap(
-                                      spacing: 10,
-                                      runSpacing: 10,
-                                      children:
-                                          <Widget>[
-                                                KpiCard(
-                                                  label: 'Tổng giao hiệu lực',
-                                                  value: formatQuantity(
-                                                    totalEffective,
-                                                  ),
-                                                  isAccent: true,
-                                                ),
-                                                KpiCard(
-                                                  label: 'Tổng hoàn thành',
-                                                  value: formatQuantity(
-                                                    totalCompleted,
-                                                  ),
-                                                ),
-                                                KpiCard(
-                                                  label: 'Đã được giao',
-                                                  value: '$assignedWorkerCount',
-                                                  uom: 'NV',
-                                                ),
-                                                KpiCard(
-                                                  label: 'Phân công OPEN',
-                                                  value: '$openCount',
-                                                ),
-                                              ]
-                                              .map(
-                                                (card) => SizedBox(
-                                                  width:
-                                                      constraints.maxWidth <
-                                                              320 ||
-                                                          MediaQuery.textScalerOf(
-                                                                context,
-                                                              ).scale(14) >
-                                                              21
-                                                      ? constraints.maxWidth
-                                                      : (constraints.maxWidth -
-                                                                10) /
-                                                            2,
-                                                  child: ConstrainedBox(
-                                                    constraints:
-                                                        const BoxConstraints(
-                                                          minHeight: 110,
-                                                        ),
-                                                    child: card,
-                                                  ),
-                                                ),
-                                              )
-                                              .toList(),
-                                    ),
-                                  ),
-
-                                  const SizedBox(height: 16),
-
-                                  // Section Title Row (FIXED)
-                                  Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.spaceBetween,
+                              // Process SAP data
+                              WorkHistoryResult? scopedResult = sapResult;
+                              if (sapResult != null &&
+                                  _selectedTeamScopeIds != null) {
+                                final selected = appState
+                                    .currentSession
+                                    ?.workContexts
+                                    .where((c) => c.workId == _selectedTeamId)
+                                    .firstOrNull;
+                                try {
+                                  scopedResult = historyForWorkContext(
+                                    sapResult,
+                                    plant: selected?.plant ?? '',
+                                    workCenter: selected?.workCenter ?? '',
+                                  );
+                                } on FormatException catch (error) {
+                                  return ListView(
                                     children: [
-                                      Expanded(
-                                        child: Text(
-                                          'Công nhân trong phạm vi · $_rangeLabel',
-                                          style: const TextStyle(
-                                            fontFamily: 'Manrope',
-                                            fontWeight: FontWeight.w800,
-                                            fontSize: 14,
-                                            color: CaslaColors.primaryNavy,
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        '(${filteredWorkers.length} NV)',
-                                        style: const TextStyle(
-                                          fontSize: 12,
-                                          color: CaslaColors.muted,
-                                          fontFamily: 'monospace',
+                                      Padding(
+                                        padding: const EdgeInsets.all(24),
+                                        child: Column(
+                                          children: [
+                                            Text(error.message),
+                                            TextButton(
+                                              onPressed: () => setState(() {
+                                                _selectedTeamId = 'ALL';
+                                                _selectedTeamScopeIds = null;
+                                              }),
+                                              child: const Text(
+                                                'Xem tất cả tổ',
+                                              ),
+                                            ),
+                                          ],
                                         ),
                                       ),
                                     ],
-                                  ),
-                                  const SizedBox(height: 10),
-                                ],
-                              ),
-                            ),
-                          ),
+                                  );
+                                }
+                              }
+                              final sapWorkers =
+                                  scopedResult?.workers ??
+                                  const <WorkHistorySummary>[];
+                              final sapEntries =
+                                  scopedResult?.entries ??
+                                  const <WorkHistoryEntry>[];
 
-                          // INDEPENDENTLY SCROLLABLE SECTION: Worker Cards List
-                          filteredWorkers.isEmpty
-                              ? const SliverToBoxAdapter(
-                                  child: CaslaEmptyState(
-                                    icon: Icons.people_outline_rounded,
-                                    title: 'Không có nhân viên phù hợp',
-                                    message:
-                                        'Không tìm thấy nhân viên nào phù hợp. Thử đổi ngày, tổ sản xuất hoặc từ khóa tìm kiếm.',
-                                  ),
-                                )
-                              : SliverPadding(
-                                  padding: const EdgeInsets.fromLTRB(
-                                    18,
-                                    0,
-                                    18,
-                                    80,
-                                  ),
-                                  sliver: SliverList.builder(
-                                    itemCount: filteredWorkers.length,
-                                    itemBuilder: (context, index) {
-                                      final worker = filteredWorkers[index];
-                                      final (status, statusLabel) =
-                                          _workerStatusBadge(worker);
+                              // Process Local data
+                              final rawAssignments =
+                                  assignmentSnapshot.data ??
+                                  const <Assignment>[];
+                              final localAssignments = rawAssignments.where((
+                                a,
+                              ) {
+                                if (_selectedTeamScopeIds != null &&
+                                    !_selectedTeamScopeIds!.contains(
+                                      a.teamId,
+                                    )) {
+                                  return false;
+                                }
+                                return true;
+                              }).toList();
 
-                                      return Container(
-                                        margin: const EdgeInsets.only(
-                                          bottom: 10,
-                                        ),
-                                        child: Material(
-                                          color: CaslaColors.surface,
-                                          borderRadius: BorderRadius.circular(
-                                            12,
-                                          ),
-                                          child: InkWell(
-                                            onTap: () {
-                                              context.push(
-                                                '/supervisor/employee_detail',
-                                                extra: {
-                                                  'id': worker.id,
-                                                  'ma_nv': worker.code,
-                                                  'ten': worker.name,
-                                                  'bo_phan': worker.department,
-                                                  'sap_entries':
-                                                      worker.sapEntries,
-                                                  'assigned_qty':
-                                                      worker.assignedQty,
-                                                  'completed_qty':
-                                                      worker.completedQty,
-                                                  'remaining_qty':
-                                                      worker.remainingQty,
-                                                  'uom': worker.uom,
-                                                  'date': _rangeFrom,
-                                                  'date_from': _rangeFrom,
-                                                  'date_to': _rangeTo,
-                                                  'shift_id': _historyShiftId,
-                                                  'work_context_id':
-                                                      _selectedTeamId == 'ALL'
-                                                      ? null
-                                                      : _selectedTeamId,
-                                                },
-                                              );
-                                            },
-                                            borderRadius: BorderRadius.circular(
-                                              12,
-                                            ),
-                                            child: Container(
-                                              padding: const EdgeInsets.all(14),
-                                              decoration: BoxDecoration(
-                                                border: Border.all(
-                                                  color: CaslaColors.line,
-                                                ),
-                                                borderRadius:
-                                                    BorderRadius.circular(12),
-                                              ),
-                                              child: Column(
-                                                children: [
-                                                  Row(
-                                                    mainAxisAlignment:
-                                                        MainAxisAlignment
-                                                            .spaceBetween,
-                                                    crossAxisAlignment:
-                                                        CrossAxisAlignment
-                                                            .start,
-                                                    children: [
-                                                      Expanded(
-                                                        child: Column(
-                                                          crossAxisAlignment:
-                                                              CrossAxisAlignment
-                                                                  .start,
-                                                          children: [
-                                                            Text(
-                                                              worker.name,
-                                                              maxLines: 1,
-                                                              overflow:
-                                                                  TextOverflow
-                                                                      .ellipsis,
-                                                              style: const TextStyle(
-                                                                fontFamily:
-                                                                    'Manrope',
-                                                                fontWeight:
-                                                                    FontWeight
-                                                                        .w700,
-                                                                fontSize: 14.5,
-                                                                color: CaslaColors
-                                                                    .primaryNavy,
-                                                              ),
-                                                            ),
-                                                            const SizedBox(
-                                                              height: 2,
-                                                            ),
-                                                            Text(
-                                                              '${worker.code} · ${worker.department}',
-                                                              maxLines: 1,
-                                                              overflow:
-                                                                  TextOverflow
-                                                                      .ellipsis,
-                                                              style: const TextStyle(
-                                                                fontFamily:
-                                                                    'monospace',
-                                                                fontSize: 11.5,
-                                                                color:
-                                                                    CaslaColors
-                                                                        .muted,
-                                                              ),
-                                                            ),
-                                                          ],
+                              final byWorkerLocal =
+                                  <String, List<Assignment>>{};
+                              for (final a in localAssignments) {
+                                (byWorkerLocal[a.workerId] ??= []).add(a);
+                              }
+
+                              final rawEmployees = empSnapshot.data ?? [];
+
+                              // BUILD UNIFIED WORKER MAP
+                              final workerMap = <String, _WorkerOverviewData>{};
+
+                              // 1. Add from SAP workers
+                              for (final sw in sapWorkers) {
+                                final localEmp = rawEmployees
+                                    .cast<Map<String, dynamic>?>()
+                                    .firstWhere(
+                                      (e) =>
+                                          e != null &&
+                                          (e['ma_nv'] == sw.workerId ||
+                                              e['id'] == sw.workerId),
+                                      orElse: () => null,
+                                    );
+
+                                final matchingLocal =
+                                    byWorkerLocal[sw.workerId] ??
+                                    (localEmp != null
+                                        ? byWorkerLocal[localEmp['id']]
+                                        : null) ??
+                                    const <Assignment>[];
+
+                                final matchingSapEntries = sapEntries
+                                    .where((e) => e.workerId == sw.workerId)
+                                    .toList();
+
+                                workerMap[sw.workerId] = _WorkerOverviewData(
+                                  id: localEmp?['id'] as String? ?? sw.workerId,
+                                  code: sw.workerId,
+                                  name: sw.workerName.isNotEmpty
+                                      ? sw.workerName
+                                      : (localEmp?['ten'] ?? sw.workerId),
+                                  department:
+                                      localEmp?['bo_phan'] ??
+                                      'Công nhân sản xuất',
+                                  assignedQty: sw.assignedQuantity,
+                                  completedQty: sw.completedQuantity,
+                                  remainingQty: sw.remainingQuantity,
+                                  uom: sw.unitOfMeasure.isNotEmpty
+                                      ? sw.unitOfMeasure
+                                      : 'ST',
+                                  sapEntries: matchingSapEntries,
+                                  localAssignments: matchingLocal,
+                                );
+                              }
+
+                              // 2. Add local employees who may not be in SAP workers
+                              for (final emp in rawEmployees) {
+                                final empId = emp['id'] as String? ?? '';
+                                final empCode = emp['ma_nv'] as String? ?? '';
+
+                                if (workerMap.containsKey(empCode) ||
+                                    workerMap.containsKey(empId)) {
+                                  continue;
+                                }
+
+                                final matchingLocal =
+                                    byWorkerLocal[empId] ??
+                                    byWorkerLocal[empCode] ??
+                                    const <Assignment>[];
+
+                                double workerAssigned = 0.0;
+                                double completedQty = 0.0;
+                                double recalledQty = 0.0;
+                                for (final a in matchingLocal) {
+                                  workerAssigned += a.assignedQuantity;
+                                  completedQty += a.completedQuantity;
+                                  recalledQty += a.recalledQuantity;
+                                }
+
+                                final effectiveQty =
+                                    workerAssigned - recalledQty;
+                                final remainingQty =
+                                    effectiveQty - completedQty;
+
+                                workerMap[empCode.isNotEmpty
+                                    ? empCode
+                                    : empId] = _WorkerOverviewData(
+                                  id: empId,
+                                  code: empCode,
+                                  name: emp['ten'] ?? 'Nhân viên',
+                                  department:
+                                      emp['bo_phan'] ?? 'Công nhân sản xuất',
+                                  assignedQty: effectiveQty,
+                                  completedQty: completedQty,
+                                  remainingQty: remainingQty,
+                                  uom: matchingLocal.isNotEmpty
+                                      ? matchingLocal.first.uom
+                                      : 'cái',
+                                  sapEntries: const [],
+                                  localAssignments: matchingLocal,
+                                );
+                              }
+
+                              // Calculate KPIs
+                              double totalEffective = 0.0;
+                              double totalCompleted = 0.0;
+                              int assignedWorkerCount = 0;
+                              int openCount = 0;
+
+                              for (final w in workerMap.values) {
+                                totalEffective += w.assignedQty;
+                                totalCompleted += w.completedQty;
+                                if (w.assignedQty > 0) assignedWorkerCount++;
+                                if (w.remainingQty > 0) openCount++;
+                              }
+
+                              // Filter workers by search query
+                              final allWorkers = workerMap.values.toList();
+                              final filteredWorkers = allWorkers.where((w) {
+                                if (_searchQuery.isEmpty) return true;
+                                return w.name.toLowerCase().contains(
+                                      _searchQuery,
+                                    ) ||
+                                    w.code.toLowerCase().contains(_searchQuery);
+                              }).toList();
+
+                              // Sort: workers with assignments first, then by name
+                              filteredWorkers.sort((a, b) {
+                                if (a.assignedQty > 0 && b.assignedQty == 0) {
+                                  return -1;
+                                }
+                                if (a.assignedQty == 0 && b.assignedQty > 0) {
+                                  return 1;
+                                }
+                                return a.name.compareTo(b.name);
+                              });
+
+                              return CustomScrollView(
+                                physics: const AlwaysScrollableScrollPhysics(),
+                                slivers: [
+                                  SliverToBoxAdapter(
+                                    child: Padding(
+                                      padding: const EdgeInsets.fromLTRB(
+                                        18,
+                                        4,
+                                        18,
+                                        0,
+                                      ),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          // KPI Grid Cards
+                                          LayoutBuilder(
+                                            builder: (context, constraints) => Wrap(
+                                              spacing: 10,
+                                              runSpacing: 10,
+                                              children:
+                                                  <Widget>[
+                                                        KpiCard(
+                                                          label:
+                                                              'Tổng giao hiệu lực',
+                                                          value: formatQuantity(
+                                                            totalEffective,
+                                                          ),
+                                                          isAccent: true,
                                                         ),
-                                                      ),
-                                                      const SizedBox(width: 8),
-                                                      StatusChip(
-                                                        status: status,
-                                                        label: statusLabel,
-                                                      ),
-                                                    ],
-                                                  ),
-                                                  const SizedBox(height: 12),
+                                                        KpiCard(
+                                                          label:
+                                                              'Tổng hoàn thành',
+                                                          value: formatQuantity(
+                                                            totalCompleted,
+                                                          ),
+                                                        ),
+                                                        KpiCard(
+                                                          label: 'Đã được giao',
+                                                          value:
+                                                              '$assignedWorkerCount',
+                                                          uom: 'NV',
+                                                        ),
+                                                        KpiCard(
+                                                          label:
+                                                              'Phân công OPEN',
+                                                          value: '$openCount',
+                                                        ),
+                                                      ]
+                                                      .map(
+                                                        (card) => SizedBox(
+                                                          width:
+                                                              constraints.maxWidth <
+                                                                      320 ||
+                                                                  MediaQuery.textScalerOf(
+                                                                        context,
+                                                                      ).scale(
+                                                                        14,
+                                                                      ) >
+                                                                      21
+                                                              ? constraints
+                                                                    .maxWidth
+                                                              : (constraints.maxWidth -
+                                                                        10) /
+                                                                    2,
+                                                          child: ConstrainedBox(
+                                                            constraints:
+                                                                const BoxConstraints(
+                                                                  minHeight:
+                                                                      110,
+                                                                ),
+                                                            child: card,
+                                                          ),
+                                                        ),
+                                                      )
+                                                      .toList(),
+                                            ),
+                                          ),
 
-                                                  // Progress bar
-                                                  ClipRRect(
+                                          const SizedBox(height: 16),
+
+                                          // Section Title Row (FIXED)
+                                          Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.spaceBetween,
+                                            children: [
+                                              Expanded(
+                                                child: Text(
+                                                  'Công nhân trong phạm vi · $_rangeLabel',
+                                                  style: const TextStyle(
+                                                    fontWeight: FontWeight.w800,
+                                                    fontSize: CaslaType.body,
+                                                    color:
+                                                        CaslaColors.primaryNavy,
+                                                  ),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Text(
+                                                '(${filteredWorkers.length} NV)',
+                                                style: const TextStyle(
+                                                  fontSize: CaslaType.caption,
+                                                  color: CaslaColors.muted,
+                                                  fontFamily: 'monospace',
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 10),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+
+                                  // INDEPENDENTLY SCROLLABLE SECTION: Worker Cards List
+                                  filteredWorkers.isEmpty
+                                      ? const SliverToBoxAdapter(
+                                          child: CaslaEmptyState(
+                                            icon: Icons.people_outline_rounded,
+                                            title: 'Không có nhân viên phù hợp',
+                                            message:
+                                                'Không tìm thấy nhân viên nào phù hợp. Thử đổi ngày, tổ sản xuất hoặc từ khóa tìm kiếm.',
+                                          ),
+                                        )
+                                      : SliverPadding(
+                                          padding: const EdgeInsets.fromLTRB(
+                                            18,
+                                            0,
+                                            18,
+                                            80,
+                                          ),
+                                          sliver: SliverList.builder(
+                                            itemCount: filteredWorkers.length,
+                                            itemBuilder: (context, index) {
+                                              final worker =
+                                                  filteredWorkers[index];
+                                              final (status, statusLabel) =
+                                                  _workerStatusBadge(worker);
+
+                                              return Container(
+                                                margin: const EdgeInsets.only(
+                                                  bottom: 10,
+                                                ),
+                                                child: Material(
+                                                  color: CaslaColors.surface,
+                                                  borderRadius:
+                                                      BorderRadius.circular(
+                                                        CaslaRadius.md,
+                                                      ),
+                                                  child: InkWell(
+                                                    onTap: () {
+                                                      context.push(
+                                                        '/supervisor/employee_detail',
+                                                        extra: {
+                                                          'id': worker.id,
+                                                          'ma_nv': worker.code,
+                                                          'ten': worker.name,
+                                                          'bo_phan':
+                                                              worker.department,
+                                                          'sap_entries':
+                                                              worker.sapEntries,
+                                                          'assigned_qty': worker
+                                                              .assignedQty,
+                                                          'completed_qty':
+                                                              worker
+                                                                  .completedQty,
+                                                          'remaining_qty':
+                                                              worker
+                                                                  .remainingQty,
+                                                          'uom': worker.uom,
+                                                          'date': _rangeFrom,
+                                                          'date_from':
+                                                              _rangeFrom,
+                                                          'date_to': _rangeTo,
+                                                          'shift_id':
+                                                              _historyShiftId,
+                                                          'work_context_id':
+                                                              _selectedTeamId ==
+                                                                  'ALL'
+                                                              ? null
+                                                              : _selectedTeamId,
+                                                        },
+                                                      );
+                                                    },
                                                     borderRadius:
                                                         BorderRadius.circular(
-                                                          8,
+                                                          12,
                                                         ),
-                                                    child: LinearProgressIndicator(
-                                                      value:
-                                                          worker.completionRate,
-                                                      minHeight: 7,
-                                                      backgroundColor:
-                                                          CaslaColors.muted100,
-                                                      valueColor:
-                                                          const AlwaysStoppedAnimation<
-                                                            Color
-                                                          >(
-                                                            CaslaColors
-                                                                .accentGold,
+                                                    child: Container(
+                                                      padding:
+                                                          const EdgeInsets.all(
+                                                            14,
                                                           ),
+                                                      decoration: BoxDecoration(
+                                                        border: Border.all(
+                                                          color:
+                                                              CaslaColors.line,
+                                                        ),
+                                                        borderRadius:
+                                                            BorderRadius.circular(
+                                                              CaslaRadius.md,
+                                                            ),
+                                                      ),
+                                                      child: Column(
+                                                        children: [
+                                                          Row(
+                                                            mainAxisAlignment:
+                                                                MainAxisAlignment
+                                                                    .spaceBetween,
+                                                            crossAxisAlignment:
+                                                                CrossAxisAlignment
+                                                                    .start,
+                                                            children: [
+                                                              Expanded(
+                                                                child: Column(
+                                                                  crossAxisAlignment:
+                                                                      CrossAxisAlignment
+                                                                          .start,
+                                                                  children: [
+                                                                    Text(
+                                                                      worker
+                                                                          .name,
+                                                                      maxLines:
+                                                                          1,
+                                                                      overflow:
+                                                                          TextOverflow
+                                                                              .ellipsis,
+                                                                      style: const TextStyle(
+                                                                        fontWeight:
+                                                                            FontWeight.w700,
+                                                                        fontSize:
+                                                                            CaslaType.body,
+                                                                        color: CaslaColors
+                                                                            .primaryNavy,
+                                                                      ),
+                                                                    ),
+                                                                    const SizedBox(
+                                                                      height: 2,
+                                                                    ),
+                                                                    Text(
+                                                                      '${worker.code} · ${worker.department}',
+                                                                      maxLines:
+                                                                          1,
+                                                                      overflow:
+                                                                          TextOverflow
+                                                                              .ellipsis,
+                                                                      style: const TextStyle(
+                                                                        fontFamily:
+                                                                            'monospace',
+                                                                        fontSize:
+                                                                            CaslaType.caption,
+                                                                        color: CaslaColors
+                                                                            .muted,
+                                                                      ),
+                                                                    ),
+                                                                  ],
+                                                                ),
+                                                              ),
+                                                              const SizedBox(
+                                                                width: 8,
+                                                              ),
+                                                              StatusChip(
+                                                                status: status,
+                                                                label:
+                                                                    statusLabel,
+                                                              ),
+                                                            ],
+                                                          ),
+                                                          const SizedBox(
+                                                            height: 12,
+                                                          ),
+
+                                                          // Progress bar
+                                                          ClipRRect(
+                                                            borderRadius:
+                                                                BorderRadius.circular(
+                                                                  8,
+                                                                ),
+                                                            child: LinearProgressIndicator(
+                                                              value: worker
+                                                                  .completionRate,
+                                                              minHeight: 7,
+                                                              backgroundColor:
+                                                                  CaslaColors
+                                                                      .progressTrack,
+                                                              valueColor:
+                                                                  const AlwaysStoppedAnimation<
+                                                                    Color
+                                                                  >(
+                                                                    CaslaColors
+                                                                        .progressFill,
+                                                                  ),
+                                                            ),
+                                                          ),
+                                                          const SizedBox(
+                                                            height: 10,
+                                                          ),
+
+                                                          // Stats row
+                                                          Row(
+                                                            mainAxisAlignment:
+                                                                MainAxisAlignment
+                                                                    .spaceBetween,
+                                                            children: [
+                                                              _buildStatItem(
+                                                                'Giao',
+                                                                '${formatQuantity(worker.assignedQty)} ${worker.uom}',
+                                                              ),
+                                                              _buildStatItem(
+                                                                'H.thành',
+                                                                '${formatQuantity(worker.completedQty)} ${worker.uom}',
+                                                              ),
+                                                              _buildStatItem(
+                                                                'Còn lại',
+                                                                '${formatQuantity(worker.remainingQty)} ${worker.uom}',
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ],
+                                                      ),
                                                     ),
                                                   ),
-                                                  const SizedBox(height: 10),
-
-                                                  // Stats row
-                                                  Row(
-                                                    mainAxisAlignment:
-                                                        MainAxisAlignment
-                                                            .spaceBetween,
-                                                    children: [
-                                                      _buildStatItem(
-                                                        'Giao',
-                                                        '${formatQuantity(worker.assignedQty)} ${worker.uom}',
-                                                      ),
-                                                      _buildStatItem(
-                                                        'H.thành',
-                                                        '${formatQuantity(worker.completedQty)} ${worker.uom}',
-                                                      ),
-                                                      _buildStatItem(
-                                                        'Còn lại',
-                                                        '${formatQuantity(worker.remainingQty)} ${worker.uom}',
-                                                      ),
-                                                    ],
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
+                                                ),
+                                              );
+                                            },
                                           ),
                                         ),
-                                      );
-                                    },
-                                  ),
-                                ),
-                        ],
+                                ],
+                              );
+                            },
+                          );
+                        },
                       );
                     },
-                  );
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        floatingActionButton:
+            emp?.hasPermission(Permission.assignQuantity) == true
+            ? FloatingActionButton(
+                tooltip: 'Tạo phân công',
+                onPressed: () {
+                  context.push('/supervisor/create_assignment');
                 },
-              );
-            },
+                backgroundColor: CaslaColors.accentGold,
+                foregroundColor: CaslaColors.navy900,
+                elevation: 4,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(CaslaRadius.lg),
+                ),
+                child: const Icon(Icons.add, size: 28),
+              )
+            : null,
+      ),
+    );
+  }
+
+  /// One segment of the date-range control.
+  ///
+  /// [onTap] is supplied by the two ranges that must ask which dates first;
+  /// the rest apply immediately.
+  Widget _buildRangeTab(
+    String label,
+    HistoryRange range, {
+    VoidCallback? onTap,
+  }) {
+    final selected = _historyRange == range;
+
+    return Expanded(
+      child: Semantics(
+        button: true,
+        selected: selected,
+        label: label,
+        child: SizedBox(
+          height: 48,
+          child: InkWell(
+            onTap:
+                onTap ??
+                () => setState(() {
+                  _historyRange = range;
+                  _replaceHistoryStream();
+                }),
+            borderRadius: BorderRadius.circular(CaslaRadius.sm),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              alignment: Alignment.center,
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              decoration: BoxDecoration(
+                color: selected ? CaslaColors.surface : Colors.transparent,
+                borderRadius: BorderRadius.circular(CaslaRadius.sm),
+                boxShadow: selected
+                    ? [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.06),
+                          blurRadius: 4,
+                          offset: const Offset(0, 1),
+                        ),
+                      ]
+                    : null,
+              ),
+              child: Text(
+                label,
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: CaslaType.caption,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                  color: selected ? CaslaColors.primaryNavy : CaslaColors.muted,
+                ),
+              ),
+            ),
           ),
         ),
       ),
-      floatingActionButton:
-          emp?.hasPermission(Permission.assignQuantity) == true
-          ? FloatingActionButton(
-              tooltip: 'Tạo phân công',
-              onPressed: () {
-                context.push('/supervisor/create_assignment');
-              },
-              backgroundColor: CaslaColors.accentGold,
-              foregroundColor: CaslaColors.navy900,
-              elevation: 4,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(18),
-              ),
-              child: const Icon(Icons.add, size: 28),
-            )
-          : null,
     );
   }
 
@@ -1650,10 +1855,10 @@ class _S06SupervisorOverviewScreenState
       label: label,
       child: Material(
         color: Colors.transparent,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(CaslaRadius.pill),
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(CaslaRadius.pill),
           child: ConstrainedBox(
             constraints: BoxConstraints(
               minHeight: 48,
@@ -1669,7 +1874,7 @@ class _S06SupervisorOverviewScreenState
                   color: isSelected ? CaslaColors.accentGold : CaslaColors.line,
                   width: isSelected ? 1.8 : 1.2,
                 ),
-                borderRadius: BorderRadius.circular(20),
+                borderRadius: BorderRadius.circular(CaslaRadius.pill),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
@@ -1690,7 +1895,7 @@ class _S06SupervisorOverviewScreenState
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontSize: 12.5,
+                        fontSize: CaslaType.caption,
                         fontWeight: isSelected
                             ? FontWeight.w800
                             : FontWeight.w600,
@@ -1746,7 +1951,7 @@ class _S06SupervisorOverviewScreenState
         Text(
           label,
           style: const TextStyle(
-            fontSize: 11,
+            fontSize: CaslaType.caption,
             color: CaslaColors.muted,
             fontWeight: FontWeight.w600,
           ),
@@ -1754,9 +1959,8 @@ class _S06SupervisorOverviewScreenState
         Text(
           value,
           style: const TextStyle(
-            fontFamily: 'Manrope',
             fontWeight: FontWeight.w800,
-            fontSize: 15,
+            fontSize: CaslaType.subtitle,
             color: CaslaColors.primaryNavy,
           ),
         ),
@@ -1820,7 +2024,7 @@ class _OverviewHistoryError extends StatelessWidget {
           'Chưa tải được dữ liệu SAP',
           textAlign: TextAlign.center,
           style: TextStyle(
-            fontSize: 16,
+            fontSize: CaslaType.subtitle,
             fontWeight: FontWeight.w800,
             color: CaslaColors.navy900,
           ),

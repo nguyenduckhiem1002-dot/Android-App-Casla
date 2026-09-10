@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../app/theme/casla_spacing.dart';
 import '../../app/theme/casla_colors.dart';
 
 class CaslaEmptyState extends StatelessWidget {
@@ -45,7 +47,7 @@ class CaslaEmptyState extends StatelessWidget {
               title,
               textAlign: TextAlign.center,
               style: const TextStyle(
-                fontSize: 16,
+                fontSize: CaslaType.subtitle,
                 fontWeight: FontWeight.w700,
                 color: CaslaColors.primaryNavy,
               ),
@@ -57,7 +59,7 @@ class CaslaEmptyState extends StatelessWidget {
                 message,
                 textAlign: TextAlign.center,
                 style: const TextStyle(
-                  fontSize: 13,
+                  fontSize: CaslaType.body,
                   fontWeight: FontWeight.w400,
                   color: CaslaColors.muted,
                   height: 1.4,

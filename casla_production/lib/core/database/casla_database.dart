@@ -1954,6 +1954,51 @@ class CaslaDatabase {
     });
   }
 
+  /// Puts every retryable item in scope back in line for the next engine pass,
+  /// at the supervisor's request.
+  ///
+  /// The engine already retries PENDING work on its own backoff, but that is
+  /// invisible: a supervisor closing out a shift sees a FAILED row, has no way
+  /// to know anything further will happen to it, and has no way to ask. Spec
+  /// 4.7 rules out retrying a rejected record *forever* on its own; a human
+  /// deciding to send it again is exactly the escape hatch that was missing.
+  ///
+  /// FAILED rows are returned to PENDING, because `claimDueSyncItems` only
+  /// ever picks up PENDING work — clearing the backoff alone would have looked
+  /// like it worked and changed nothing.
+  ///
+  /// NEEDS_VERIFICATION is deliberately untouched: nothing can move there
+  /// without the worker re-entering their password, so requeueing it would
+  /// only burn an attempt against SAP.
+  ///
+  /// Returns how many rows were requeued.
+  Future<int> requeueForImmediateRetry({
+    required String actorId,
+    required List<String> teamIds,
+  }) async {
+    if (!_hasUsableSyncScope(actorId, teamIds)) return 0;
+    final db = await _database;
+
+    final scoped = await _queryScopedSyncQueue(
+      db,
+      actorId: actorId,
+      teamIds: teamIds,
+      queueWhere: "q.status IN ('PENDING', 'FAILED')",
+      queueWhereArgs: const [],
+    );
+    final ids = scoped.map((row) => row['id'] as String).toList();
+    if (ids.isEmpty) return 0;
+
+    final placeholders = List.filled(ids.length, '?').join(', ');
+    final requeued = await db.rawUpdate(
+      "UPDATE sync_queue SET status = 'PENDING', next_retry_at_utc = NULL, "
+      'updated_at_utc = ? WHERE id IN ($placeholders)',
+      [DateTime.now().toUtc().millisecondsSinceEpoch, ...ids],
+    );
+    if (requeued > 0) _notifySyncQueue();
+    return requeued;
+  }
+
   Future<Map<String, dynamic>?> getSyncQueueItemById(
     String id, {
     String? actorId,

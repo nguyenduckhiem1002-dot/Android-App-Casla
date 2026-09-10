@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../../app/theme/casla_spacing.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../presentation/widgets/casla_logo.dart';
@@ -153,9 +155,8 @@ class _S02bAccountLoginScreenState
                   const Text(
                     'Đăng nhập',
                     style: TextStyle(
-                      fontFamily: 'Manrope',
                       fontWeight: FontWeight.w800,
-                      fontSize: 22,
+                      fontSize: CaslaType.display,
                       letterSpacing: -0.3,
                       color: CaslaColors.primaryNavy,
                     ),
@@ -165,7 +166,7 @@ class _S02bAccountLoginScreenState
                     'Hệ thống ghi nhận sản lượng Casla Group',
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      fontSize: 13,
+                      fontSize: CaslaType.body,
                       fontWeight: FontWeight.w400,
                       color: CaslaColors.muted,
                     ),
@@ -190,7 +191,9 @@ class _S02bAccountLoginScreenState
                                 ),
                                 decoration: BoxDecoration(
                                   color: CaslaColors.dangerBg,
-                                  borderRadius: BorderRadius.circular(8),
+                                  borderRadius: BorderRadius.circular(
+                                    CaslaRadius.sm,
+                                  ),
                                   border: Border.all(
                                     color: CaslaColors.danger.withValues(
                                       alpha: 0.25,
@@ -212,7 +215,7 @@ class _S02bAccountLoginScreenState
                                         _errorMessage!,
                                         style: const TextStyle(
                                           color: CaslaColors.danger,
-                                          fontSize: 13,
+                                          fontSize: CaslaType.body,
                                           fontWeight: FontWeight.w600,
                                           height: 1.3,
                                         ),
@@ -230,7 +233,7 @@ class _S02bAccountLoginScreenState
                             text: const TextSpan(
                               text: 'Tài khoản ',
                               style: TextStyle(
-                                fontSize: 13,
+                                fontSize: CaslaType.body,
                                 fontWeight: FontWeight.w700,
                                 color: CaslaColors.primaryNavy,
                               ),
@@ -270,7 +273,7 @@ class _S02bAccountLoginScreenState
                             text: const TextSpan(
                               text: 'Mật khẩu ',
                               style: TextStyle(
-                                fontSize: 13,
+                                fontSize: CaslaType.body,
                                 fontWeight: FontWeight.w700,
                                 color: CaslaColors.primaryNavy,
                               ),
@@ -336,7 +339,7 @@ class _S02bAccountLoginScreenState
                               title: const Text(
                                 'Ghi nhớ tài khoản',
                                 style: TextStyle(
-                                  fontSize: 13,
+                                  fontSize: CaslaType.body,
                                   fontWeight: FontWeight.w600,
                                   color: CaslaColors.primaryNavy,
                                 ),
@@ -344,7 +347,7 @@ class _S02bAccountLoginScreenState
                               subtitle: const Text(
                                 'Chỉ lưu mã tài khoản, không lưu mật khẩu.',
                                 style: TextStyle(
-                                  fontSize: 12,
+                                  fontSize: CaslaType.caption,
                                   color: CaslaColors.muted,
                                 ),
                               ),

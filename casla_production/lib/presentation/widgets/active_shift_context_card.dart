@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../app/theme/casla_spacing.dart';
+
 import '../../app/theme/casla_colors.dart';
 import '../../data/sap/sap_shift_controller.dart';
 import '../../domain/entities/entities.dart';
@@ -44,7 +46,7 @@ class ActiveShiftContextCard extends StatelessWidget {
         padding: EdgeInsets.all(compact ? 12 : 16),
         decoration: BoxDecoration(
           color: hasSelection ? CaslaColors.surface : CaslaColors.pendingBg,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(CaslaRadius.lg),
           border: Border.all(
             color: hasSelection ? CaslaColors.line : CaslaColors.gold100,
           ),
@@ -59,7 +61,7 @@ class ActiveShiftContextCard extends StatelessWidget {
                 color: hasSelection
                     ? CaslaColors.primaryNavy
                     : CaslaColors.accentGold,
-                borderRadius: BorderRadius.circular(10),
+                borderRadius: BorderRadius.circular(CaslaRadius.sm),
               ),
               child: Icon(
                 hasSelection
@@ -78,7 +80,7 @@ class ActiveShiftContextCard extends StatelessWidget {
                     hasSelection ? 'Ca đang làm' : 'Chưa chọn ca làm việc',
                     style: const TextStyle(
                       color: CaslaColors.primaryNavy,
-                      fontSize: 12,
+                      fontSize: CaslaType.caption,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
@@ -88,7 +90,7 @@ class ActiveShiftContextCard extends StatelessWidget {
                       '${selectedShift.shiftName} · ${selectedShift.timeLabel}',
                       style: const TextStyle(
                         color: CaslaColors.primaryNavy,
-                        fontSize: 14,
+                        fontSize: CaslaType.body,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
@@ -97,7 +99,7 @@ class ActiveShiftContextCard extends StatelessWidget {
                       'Nhà máy ${work.plant}\nWork Center ${work.workCenter}\n$dateLabel',
                       style: const TextStyle(
                         color: CaslaColors.muted,
-                        fontSize: 13,
+                        fontSize: CaslaType.body,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -108,7 +110,7 @@ class ActiveShiftContextCard extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: CaslaColors.gold700,
-                        fontSize: 11.5,
+                        fontSize: CaslaType.caption,
                         height: 1.3,
                       ),
                     ),

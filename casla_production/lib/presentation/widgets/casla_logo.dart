@@ -97,7 +97,6 @@ C86.7,25.9,90.3,30.5,91.4,38.1z"/>
           subtitle!,
           textAlign: TextAlign.center,
           style: TextStyle(
-            fontFamily: 'Inter',
             fontWeight: FontWeight.w500,
             fontSize: height * 0.25,
             color: textColor,

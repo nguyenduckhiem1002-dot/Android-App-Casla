@@ -1,26 +1,33 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
-import '../../app/router/app_route_observer.dart';
 import '../../app/theme/casla_colors.dart';
-import '../../core/scanner/barcode_scan_event.dart';
+import '../../app/theme/casla_spacing.dart';
 import '../../core/scanner/barcode_scanner.dart';
-import '../../core/scanner/platform_hardware_barcode_scanner.dart';
-import '../../core/scanner/scan_deduplicator.dart';
+import '../../core/scanner/scanner_preferences.dart';
 import '../../core/telemetry/field_telemetry.dart';
+import 'barcode_scan_listener.dart';
 import 'casla_logo.dart';
 import 'qr_scanner_view.dart';
 
-/// Scanner surface that prefers a dedicated PDA imager and falls back to the
-/// existing camera scanner everywhere else.
+/// Full-screen capture surface that prefers a hardware reader and falls back
+/// to the camera.
+///
+/// The reader stays armed in both presentations. Showing the camera does not
+/// disarm the wedge, so an operator who pulls the trigger on a handset the app
+/// failed to recognise still gets a scan instead of nothing.
 class AdaptiveBarcodeScannerView extends StatefulWidget {
   final String title;
   final String subtitle;
   final VoidCallback? onManualInput;
-  final FutureOr<void> Function(String code) onScan;
+
+  /// Return false when the payload was rejected, so the operator hears the
+  /// failure tone rather than the success tone.
+  final FutureOr<bool> Function(String code) onScan;
+
   final BarcodeScanner? hardwareScanner;
+  final ScannerPreferences? preferences;
   final FieldTelemetry? telemetry;
 
   const AdaptiveBarcodeScannerView({
@@ -30,6 +37,7 @@ class AdaptiveBarcodeScannerView extends StatefulWidget {
     required this.onScan,
     this.onManualInput,
     this.hardwareScanner,
+    this.preferences,
     this.telemetry,
   });
 
@@ -38,179 +46,143 @@ class AdaptiveBarcodeScannerView extends StatefulWidget {
       _AdaptiveBarcodeScannerViewState();
 }
 
-class _AdaptiveBarcodeScannerViewState extends State<AdaptiveBarcodeScannerView>
-    with RouteAware {
-  late final BarcodeScanner _hardwareScanner;
-  final ScanDeduplicator _deduplicator = ScanDeduplicator();
-
-  FieldTelemetry get _telemetry => widget.telemetry ?? FieldTelemetry.instance;
-
-  StreamSubscription<BarcodeScanEvent>? _scanSubscription;
-  ModalRoute<dynamic>? _route;
-  bool _checkingHardware = true;
-  bool _hardwareAvailable = false;
+class _AdaptiveBarcodeScannerViewState
+    extends State<AdaptiveBarcodeScannerView> {
+  late final ScannerPreferences _preferences;
+  ScannerMode _mode = ScannerMode.auto;
+  bool _modeLoaded = false;
   bool _forceCamera = false;
-  bool _isHandlingScan = false;
-  bool _isRouteVisible = true;
-  String _hardwareStatus = 'Sẵn sàng nhận mã từ đầu đọc tích hợp';
 
   @override
   void initState() {
     super.initState();
-    _hardwareScanner =
-        widget.hardwareScanner ?? const PlatformHardwareBarcodeScanner();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      unawaited(_detectHardwareScanner());
-    });
+    _preferences = widget.preferences ?? DatabaseScannerPreferences();
+    unawaited(_loadMode());
   }
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final route = ModalRoute.of(context);
-    if (route == _route) return;
-
-    if (_route != null) appRouteObserver.unsubscribe(this);
-    _route = route;
-    if (route != null) appRouteObserver.subscribe(this, route);
-  }
-
-  @override
-  void didPushNext() {
-    _isRouteVisible = false;
-  }
-
-  @override
-  void didPopNext() {
-    _isRouteVisible = true;
-    _isHandlingScan = false;
-    _deduplicator.reset();
-    if (mounted) {
-      setState(() => _hardwareStatus = 'Sẵn sàng nhận mã từ đầu đọc tích hợp');
-    }
-  }
-
-  Future<void> _detectHardwareScanner() async {
-    final available = await _hardwareScanner.isAvailable();
+  Future<void> _loadMode() async {
+    final mode = await _preferences.readMode();
     if (!mounted) return;
-
     setState(() {
-      _checkingHardware = false;
-      _hardwareAvailable = available;
+      _mode = mode;
+      _modeLoaded = true;
     });
-
-    if (available) _subscribeHardwareScanner();
   }
 
-  void _subscribeHardwareScanner() {
-    _scanSubscription?.cancel();
-    _scanSubscription = _hardwareScanner.scans.listen(
-      (event) => unawaited(_handleHardwareScan(event)),
-      onError: (_) {
-        if (!mounted) return;
-        setState(() => _hardwareAvailable = false);
-      },
-    );
-  }
+  void _useCamera() => setState(() => _forceCamera = true);
 
-  Future<void> _handleHardwareScan(BarcodeScanEvent event) async {
-    if (!_hardwareAvailable ||
-        _forceCamera ||
-        !_isRouteVisible ||
-        !mounted ||
-        !TickerMode.valuesOf(context).enabled ||
-        !(_route?.isCurrent ?? true) ||
-        _isHandlingScan) {
-      return;
-    }
-
-    final code = event.rawValue.trim();
-    if (code.isEmpty) return;
-    if (!_deduplicator.shouldAccept(code)) {
-      _telemetry.increment(FieldMetric.hardwareScanDuplicate);
-      return;
-    }
-
-    _telemetry.increment(FieldMetric.hardwareScanAccepted);
-    _isHandlingScan = true;
-    setState(() => _hardwareStatus = 'Đã nhận mã • đang kiểm tra dữ liệu');
-    unawaited(HapticFeedback.mediumImpact());
-
-    try {
-      await Future<void>.sync(() => widget.onScan(code));
-    } finally {
-      await Future<void>.delayed(const Duration(milliseconds: 600));
-      if (mounted) {
-        setState(() {
-          _isHandlingScan = false;
-          _hardwareStatus = 'Sẵn sàng cho lượt quét tiếp theo';
-        });
-      }
-    }
-  }
-
-  Future<void> _useCamera() async {
-    await _scanSubscription?.cancel();
-    _scanSubscription = null;
-    if (!mounted) return;
-    setState(() => _forceCamera = true);
-  }
-
-  @override
-  void dispose() {
-    final subscription = _scanSubscription;
-    if (subscription != null) unawaited(subscription.cancel());
-    appRouteObserver.unsubscribe(this);
-    super.dispose();
-  }
+  void _useHardware() => setState(() => _forceCamera = false);
 
   @override
   Widget build(BuildContext context) {
-    if (_checkingHardware) {
-      return const ColoredBox(
-        color: CaslaColors.navy900,
-        child: SafeArea(
-          child: Center(
-            child: Padding(
-              padding: EdgeInsets.all(28),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.document_scanner_outlined,
-                    color: CaslaColors.accentGold,
-                    size: 46,
+    return BarcodeScanListener(
+      onScan: widget.onScan,
+      scanner: widget.hardwareScanner,
+      preferences: _preferences,
+      telemetry: widget.telemetry,
+      child: Builder(
+        builder: (context) {
+          final status = BarcodeScanListener.statusOf(context);
+          if (!_modeLoaded ||
+              status == null ||
+              status.state == HardwareScanState.probing) {
+            return const _ScannerProbePanel();
+          }
+
+          final showCamera = switch (_mode) {
+            ScannerMode.camera => true,
+            ScannerMode.hardware => false,
+            ScannerMode.auto => _forceCamera || !status.isAvailable,
+          };
+
+          if (showCamera) {
+            return QrScannerView(
+              title: widget.title,
+              subtitle: widget.subtitle,
+              onManualInput: widget.onManualInput,
+              onScan: widget.onScan,
+              // Only offered when switching back could actually help.
+              onUseHardware: _mode == ScannerMode.auto && _forceCamera
+                  ? _useHardware
+                  : null,
+            );
+          }
+
+          return _HardwareReadyPanel(
+            title: widget.title,
+            subtitle: widget.subtitle,
+            status: status,
+            onManualInput: widget.onManualInput,
+            onUseCamera: _mode == ScannerMode.hardware ? null : _useCamera,
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _ScannerProbePanel extends StatelessWidget {
+  const _ScannerProbePanel();
+
+  @override
+  Widget build(BuildContext context) {
+    return const ColoredBox(
+      color: CaslaColors.navy900,
+      child: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: EdgeInsets.all(CaslaSpacing.xl),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.document_scanner_outlined,
+                  color: CaslaColors.accentGold,
+                  size: 46,
+                ),
+                SizedBox(height: CaslaSpacing.md),
+                LinearProgressIndicator(
+                  color: CaslaColors.accentGold,
+                  backgroundColor: Colors.white24,
+                ),
+                SizedBox(height: CaslaSpacing.sm),
+                Text(
+                  'Đang dò đầu đọc trên máy...',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: CaslaType.body,
+                    fontWeight: FontWeight.w600,
                   ),
-                  SizedBox(height: 16),
-                  LinearProgressIndicator(
-                    color: CaslaColors.accentGold,
-                    backgroundColor: Colors.white12,
-                  ),
-                  SizedBox(height: 14),
-                  Text(
-                    'Đang kiểm tra đầu đọc PDA...',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),
-      );
-    }
+      ),
+    );
+  }
+}
 
-    if (!_hardwareAvailable || _forceCamera) {
-      return QrScannerView(
-        title: widget.title,
-        subtitle: widget.subtitle,
-        onManualInput: widget.onManualInput,
-        onScan: widget.onScan,
-      );
-    }
+class _HardwareReadyPanel extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final BarcodeScanStatus status;
+  final VoidCallback? onManualInput;
+  final VoidCallback? onUseCamera;
+
+  const _HardwareReadyPanel({
+    required this.title,
+    required this.subtitle,
+    required this.status,
+    this.onManualInput,
+    this.onUseCamera,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final busy = status.isBusy;
+    final accent = busy ? CaslaColors.successOnDark : CaslaColors.accentGold;
 
     return ColoredBox(
       color: CaslaColors.navy900,
@@ -218,159 +190,95 @@ class _AdaptiveBarcodeScannerViewState extends State<AdaptiveBarcodeScannerView>
         children: [
           SafeArea(
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 22),
+              padding: const EdgeInsets.symmetric(horizontal: CaslaSpacing.lg),
               child: Column(
                 children: [
-                  const SizedBox(height: 18),
+                  const SizedBox(height: CaslaSpacing.md),
                   const CaslaLogoWhite(size: 64, textColor: Colors.white),
                   const Spacer(),
                   Semantics(
                     liveRegion: true,
-                    label: _hardwareStatus,
+                    label: status.message,
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 180),
                       width: 136,
                       height: 136,
                       decoration: BoxDecoration(
-                        color:
-                            (_isHandlingScan
-                                    ? CaslaColors.success
-                                    : CaslaColors.accentGold)
-                                .withValues(alpha: 0.13),
-                        borderRadius: BorderRadius.circular(30),
+                        color: accent.withValues(alpha: 0.13),
+                        borderRadius: BorderRadius.circular(CaslaRadius.lg),
                         border: Border.all(
-                          color:
-                              (_isHandlingScan
-                                      ? CaslaColors.success
-                                      : CaslaColors.accentGold)
-                                  .withValues(alpha: 0.56),
+                          color: accent.withValues(alpha: 0.56),
                           width: 1.5,
                         ),
                       ),
                       child: AnimatedSwitcher(
                         duration: const Duration(milliseconds: 160),
                         child: Icon(
-                          _isHandlingScan
+                          busy
                               ? Icons.check_circle_rounded
                               : Icons.qr_code_scanner_rounded,
-                          key: ValueKey(_isHandlingScan),
+                          key: ValueKey(busy),
                           size: 70,
-                          color: _isHandlingScan
-                              ? const Color(0xFF65C56B)
-                              : CaslaColors.accentGold,
+                          color: accent,
                         ),
                       ),
                     ),
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: CaslaSpacing.lg),
                   Text(
-                    _isHandlingScan ? 'ĐÃ NHẬN MÃ' : 'SẴN SÀNG QUÉT',
+                    busy ? 'ĐÃ NHẬN MÃ' : 'SẴN SÀNG QUÉT',
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 23,
+                      fontSize: CaslaType.display,
                       fontWeight: FontWeight.w800,
                       letterSpacing: 0.4,
                     ),
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: CaslaSpacing.xs),
                   AnimatedSwitcher(
                     duration: const Duration(milliseconds: 160),
                     child: Text(
-                      _hardwareStatus,
-                      key: ValueKey(_hardwareStatus),
+                      status.message,
+                      key: ValueKey(status.message),
                       textAlign: TextAlign.center,
                       style: const TextStyle(
-                        color: Color(0xFFB7C1E4),
-                        fontSize: 14,
+                        color: CaslaColors.onDarkSecondary,
+                        fontSize: CaslaType.body,
                         fontWeight: FontWeight.w600,
                         height: 1.4,
                       ),
                     ),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: CaslaSpacing.xs),
                   const Text(
-                    'Bóp nút trigger bên hông RS38 để quét.',
+                    'Bóp cò trên máy để quét.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      color: Color(0xFF93A0CC),
-                      fontSize: 13,
+                      color: CaslaColors.onDarkSecondary,
+                      fontSize: CaslaType.body,
                       height: 1.4,
                     ),
                   ),
-                  const SizedBox(height: 24),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 14,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.06),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Column(
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Container(
-                              width: 8,
-                              height: 8,
-                              decoration: const BoxDecoration(
-                                color: Color(0xFF65C56B),
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            const Text(
-                              'Đầu đọc PDA đang hoạt động',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          widget.title,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 17,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          widget.subtitle,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            color: Color(0xFFB7C1E4),
-                            fontSize: 13,
-                            height: 1.45,
-                          ),
-                        ),
-                      ],
-                    ),
+                  const SizedBox(height: CaslaSpacing.lg),
+                  _ScanTargetCard(
+                    title: title,
+                    subtitle: subtitle,
+                    acceptedCount: status.acceptedCount,
                   ),
                   const Spacer(),
-                  if (widget.onManualInput != null)
+                  if (onManualInput != null)
                     SizedBox(
                       width: double.infinity,
                       height: 56,
                       child: OutlinedButton.icon(
-                        onPressed: _isHandlingScan
-                            ? null
-                            : widget.onManualInput,
+                        onPressed: busy ? null : onManualInput,
                         style: OutlinedButton.styleFrom(
                           foregroundColor: Colors.white,
                           disabledForegroundColor: Colors.white38,
-                          side: const BorderSide(color: Colors.white54),
+                          side: const BorderSide(color: Colors.white70),
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
+                            borderRadius: BorderRadius.circular(CaslaRadius.md),
                           ),
                         ),
                         icon: const Icon(Icons.keyboard_alt_outlined),
@@ -380,45 +288,124 @@ class _AdaptiveBarcodeScannerViewState extends State<AdaptiveBarcodeScannerView>
                         ),
                       ),
                     ),
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 52,
-                    child: TextButton.icon(
-                      onPressed: _isHandlingScan ? null : _useCamera,
-                      icon: const Icon(Icons.camera_alt_outlined),
-                      label: const Text('Dùng camera thay thế'),
-                      style: TextButton.styleFrom(
-                        foregroundColor: CaslaColors.accentGold,
-                        disabledForegroundColor: Colors.white38,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
+                  if (onUseCamera != null) ...[
+                    const SizedBox(height: CaslaSpacing.xs),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 52,
+                      child: TextButton.icon(
+                        onPressed: busy ? null : onUseCamera,
+                        icon: const Icon(Icons.camera_alt_outlined),
+                        label: const Text('Dùng camera thay thế'),
+                        style: TextButton.styleFrom(
+                          foregroundColor: CaslaColors.accentGold,
+                          disabledForegroundColor: Colors.white38,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(CaslaRadius.md),
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 14),
+                  ],
+                  const SizedBox(height: CaslaSpacing.sm),
                 ],
               ),
             ),
           ),
           if (Navigator.canPop(context))
-            Positioned(
-              top: 12,
-              left: 12,
-              child: SafeArea(
-                child: Material(
-                  color: Colors.black38,
-                  shape: const CircleBorder(),
-                  child: IconButton(
-                    tooltip: 'Quay lại',
-                    onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.arrow_back, color: Colors.white),
-                  ),
+            const Positioned(top: 12, left: 12, child: _ScannerBackButton()),
+        ],
+      ),
+    );
+  }
+}
+
+class _ScanTargetCard extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final int acceptedCount;
+
+  const _ScanTargetCard({
+    required this.title,
+    required this.subtitle,
+    required this.acceptedCount,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(
+        horizontal: CaslaSpacing.md,
+        vertical: CaslaSpacing.sm,
+      ),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(CaslaRadius.md),
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(
+                Icons.sensors_rounded,
+                size: 16,
+                color: CaslaColors.successOnDark,
+              ),
+              const SizedBox(width: CaslaSpacing.xs),
+              Text(
+                acceptedCount > 0
+                    ? 'Đầu đọc hoạt động · đã quét $acceptedCount mã'
+                    : 'Đầu đọc đang hoạt động',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: CaslaType.body,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
+            ],
+          ),
+          const SizedBox(height: CaslaSpacing.sm),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: CaslaType.subtitle,
+              fontWeight: FontWeight.w700,
             ),
+          ),
+          const SizedBox(height: CaslaSpacing.xxs),
+          Text(
+            subtitle,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: CaslaColors.onDarkSecondary,
+              fontSize: CaslaType.body,
+              height: 1.45,
+            ),
+          ),
         ],
+      ),
+    );
+  }
+}
+
+class _ScannerBackButton extends StatelessWidget {
+  const _ScannerBackButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Material(
+        color: Colors.black38,
+        shape: const CircleBorder(),
+        child: IconButton(
+          tooltip: 'Quay lại',
+          onPressed: () => Navigator.pop(context),
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+        ),
       ),
     );
   }

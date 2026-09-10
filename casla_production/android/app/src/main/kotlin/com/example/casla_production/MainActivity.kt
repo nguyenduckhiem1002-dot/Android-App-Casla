@@ -4,11 +4,11 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 
 class MainActivity : FlutterActivity() {
-    private var scannerBridge: CipherLabScannerBridge? = null
+    private var scannerBridge: PdaScannerBridge? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        scannerBridge = CipherLabScannerBridge(
+        scannerBridge = PdaScannerBridge(
             activity = this,
             messenger = flutterEngine.dartExecutor.binaryMessenger,
         )

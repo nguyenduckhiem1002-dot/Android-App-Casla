@@ -9,6 +9,11 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # Vietnamese Material strings. Without this every showDatePicker /
+  # showDateRangePicker in the app renders "SELECT DATE", "CANCEL" and English
+  # month names inside an otherwise fully Vietnamese UI.
+  flutter_localizations:
+    sdk: flutter
 
   # State Management & DI
   flutter_riverpod: 2.6.1
@@ -34,7 +39,9 @@ dependencies:
 
   # Utilities
   uuid: 4.6.0
-  intl: 0.20.3
+  # Held at the version flutter_localizations pins from the SDK. The Flutter
+  # SDK requires intl 0.20.2 exactly, so this cannot move independently.
+  intl: 0.20.2
   # 12.4+ calls NSProcessInfo.isiOSAppOnVision, which requires a newer Xcode
   # SDK than the current GitHub runner provides.
   device_info_plus: 12.3.0

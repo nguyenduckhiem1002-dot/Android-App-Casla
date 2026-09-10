@@ -5,6 +5,8 @@
 // tự chọn hay gửi WorkerID.
 
 import 'package:flutter/material.dart';
+
+import '../../../app/theme/casla_spacing.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
@@ -224,7 +226,9 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
         return Container(
           decoration: const BoxDecoration(
             color: CaslaColors.surface,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+            borderRadius: BorderRadius.vertical(
+              top: Radius.circular(CaslaRadius.lg),
+            ),
           ),
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
           child: Column(
@@ -245,8 +249,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
               const Text(
                 'Tùy chọn thời gian',
                 style: TextStyle(
-                  fontFamily: 'Manrope',
-                  fontSize: 17,
+                  fontSize: CaslaType.subtitle,
                   fontWeight: FontWeight.w800,
                   color: CaslaColors.primaryNavy,
                 ),
@@ -254,7 +257,10 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
               const SizedBox(height: 4),
               const Text(
                 'Chọn ngày cụ thể hoặc khoảng ngày (tối đa 1 tháng)',
-                style: TextStyle(fontSize: 13, color: CaslaColors.muted),
+                style: TextStyle(
+                  fontSize: CaslaType.body,
+                  color: CaslaColors.muted,
+                ),
               ),
               const SizedBox(height: 18),
               _buildOptionTile(
@@ -291,12 +297,12 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
   }) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(CaslaRadius.md),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
           color: CaslaColors.muted100.withValues(alpha: 0.5),
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(CaslaRadius.md),
           border: Border.all(color: CaslaColors.line),
         ),
         child: Row(
@@ -317,7 +323,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
                   Text(
                     title,
                     style: const TextStyle(
-                      fontSize: 14,
+                      fontSize: CaslaType.body,
                       fontWeight: FontWeight.w700,
                       color: CaslaColors.primaryNavy,
                     ),
@@ -326,7 +332,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
                   Text(
                     subtitle,
                     style: const TextStyle(
-                      fontSize: 12,
+                      fontSize: CaslaType.caption,
                       color: CaslaColors.muted,
                     ),
                   ),
@@ -369,17 +375,15 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
             const Text(
               'Lịch sử sản lượng',
               style: TextStyle(
-                fontFamily: 'Manrope',
                 fontWeight: FontWeight.w800,
-                fontSize: 19,
+                fontSize: CaslaType.title,
               ),
             ),
             const SizedBox(height: 2),
             Text(
               session?.fullName ?? '',
               style: const TextStyle(
-                fontFamily: 'Inter',
-                fontSize: 12.5,
+                fontSize: CaslaType.caption,
                 fontWeight: FontWeight.w500,
                 color: CaslaColors.identityMeta,
               ),
@@ -449,7 +453,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
           padding: const EdgeInsets.all(4),
           decoration: BoxDecoration(
             color: CaslaColors.muted100,
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(CaslaRadius.sm),
           ),
           child: Row(
             children: [
@@ -466,7 +470,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
               color: CaslaColors.primaryNavy.withValues(alpha: 0.05),
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(CaslaRadius.sm),
               border: Border.all(
                 color: CaslaColors.primaryNavy.withValues(alpha: 0.2),
               ),
@@ -484,14 +488,14 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
                     _customDateLabel,
                     style: const TextStyle(
                       fontWeight: FontWeight.w600,
-                      fontSize: 12.5,
+                      fontSize: CaslaType.caption,
                       color: CaslaColors.primaryNavy,
                     ),
                   ),
                 ),
                 InkWell(
                   onTap: _showCustomDatePickerSheet,
-                  borderRadius: BorderRadius.circular(6),
+                  borderRadius: BorderRadius.circular(CaslaRadius.sm),
                   child: Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 8,
@@ -499,7 +503,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
                     ),
                     decoration: BoxDecoration(
                       color: CaslaColors.primaryNavy,
-                      borderRadius: BorderRadius.circular(6),
+                      borderRadius: BorderRadius.circular(CaslaRadius.sm),
                     ),
                     child: const Row(
                       mainAxisSize: MainAxisSize.min,
@@ -513,7 +517,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
                         Text(
                           'Đổi',
                           style: TextStyle(
-                            fontSize: 11.5,
+                            fontSize: CaslaType.caption,
                             fontWeight: FontWeight.w600,
                             color: Colors.white,
                           ),
@@ -541,13 +545,13 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
           height: 48,
           child: InkWell(
             onTap: () => _selectRange(range),
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(CaslaRadius.sm),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 150),
               alignment: Alignment.center,
               decoration: BoxDecoration(
                 color: selected ? CaslaColors.surface : Colors.transparent,
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(CaslaRadius.sm),
                 boxShadow: selected
                     ? [
                         BoxShadow(
@@ -562,7 +566,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
                 label,
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  fontSize: 12,
+                  fontSize: CaslaType.caption,
                   fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                   color: selected ? CaslaColors.primaryNavy : CaslaColors.muted,
                 ),
@@ -587,7 +591,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: CaslaColors.dangerBg,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(CaslaRadius.md),
         border: Border.all(color: CaslaColors.danger.withValues(alpha: 0.2)),
       ),
       child: Column(
@@ -608,7 +612,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
                 style: const TextStyle(
                   color: CaslaColors.danger,
                   fontWeight: FontWeight.w700,
-                  fontSize: 13,
+                  fontSize: CaslaType.body,
                 ),
               ),
             ],
@@ -618,7 +622,10 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
             needsReLogin
                 ? 'Vui lòng đăng nhập lại để tiếp tục.'
                 : error.toString().replaceAll('Exception: ', ''),
-            style: const TextStyle(color: CaslaColors.danger, fontSize: 12.5),
+            style: const TextStyle(
+              color: CaslaColors.danger,
+              fontSize: CaslaType.caption,
+            ),
           ),
           const SizedBox(height: 12),
           ElevatedButton(
@@ -641,7 +648,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: CaslaColors.pendingBg,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(CaslaRadius.sm),
       ),
       child: const Row(
         children: [
@@ -654,7 +661,10 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
           Expanded(
             child: Text(
               'Không thể làm mới từ SAP. Đang hiển thị dữ liệu gần nhất trên máy.',
-              style: TextStyle(color: CaslaColors.bannerText, fontSize: 12),
+              style: TextStyle(
+                color: CaslaColors.bannerText,
+                fontSize: CaslaType.caption,
+              ),
             ),
           ),
         ],
@@ -699,11 +709,14 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
               color: CaslaColors.pendingBg,
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(CaslaRadius.sm),
             ),
             child: const Text(
               'Danh sách đã bị giới hạn do quá nhiều dữ liệu trong khoảng thời gian này.',
-              style: TextStyle(color: CaslaColors.bannerText, fontSize: 11.5),
+              style: TextStyle(
+                color: CaslaColors.bannerText,
+                fontSize: CaslaType.caption,
+              ),
             ),
           ),
           padding: const EdgeInsets.fromLTRB(18, 10, 18, 0),
@@ -717,7 +730,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
           'Chi tiết giao dịch',
           style: TextStyle(
             fontWeight: FontWeight.w700,
-            fontSize: 13.5,
+            fontSize: CaslaType.body,
             color: CaslaColors.primaryNavy,
           ),
         ),
@@ -734,12 +747,15 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
             decoration: BoxDecoration(
               color: CaslaColors.surface,
               border: Border.all(color: CaslaColors.line),
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(CaslaRadius.md),
             ),
             child: const Center(
               child: Text(
                 'Không có giao dịch nào trong khoảng thời gian này.',
-                style: TextStyle(color: CaslaColors.muted, fontSize: 13),
+                style: TextStyle(
+                  color: CaslaColors.muted,
+                  fontSize: CaslaType.body,
+                ),
               ),
             ),
           ),
@@ -767,10 +783,10 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
                   borderRadius: index == 0 || isLast
                       ? BorderRadius.vertical(
                           top: index == 0
-                              ? const Radius.circular(14)
+                              ? const Radius.circular(CaslaRadius.md)
                               : Radius.zero,
                           bottom: isLast
-                              ? const Radius.circular(14)
+                              ? const Radius.circular(CaslaRadius.md)
                               : Radius.zero,
                         )
                       : null,
@@ -856,7 +872,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
         decoration: BoxDecoration(
           color: CaslaColors.surface,
           border: Border.all(color: CaslaColors.line),
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(CaslaRadius.md),
         ),
         child: Column(
           children: [
@@ -864,7 +880,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
               formatQuantity(value),
               style: TextStyle(
                 fontWeight: FontWeight.w800,
-                fontSize: 18,
+                fontSize: CaslaType.title,
                 color: color,
               ),
             ),
@@ -872,7 +888,10 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
             Text(
               '$label${uom.isNotEmpty ? ' ($uom)' : ''}',
               textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 10.5, color: CaslaColors.muted),
+              style: const TextStyle(
+                fontSize: CaslaType.caption,
+                color: CaslaColors.muted,
+              ),
             ),
           ],
         ),
@@ -894,7 +913,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
             height: 36,
             decoration: BoxDecoration(
               color: CaslaColors.muted100,
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(CaslaRadius.sm),
             ),
             child: Icon(
               _transactionTypeIcon(entry.transactionType),
@@ -911,7 +930,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
                   '$label · ${entry.productionOrder}-${entry.operation}',
                   style: const TextStyle(
                     fontWeight: FontWeight.w700,
-                    fontSize: 12.5,
+                    fontSize: CaslaType.caption,
                     color: CaslaColors.primaryNavy,
                   ),
                 ),
@@ -919,7 +938,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
                 Text(
                   DateFormat('dd/MM/yyyy').format(entry.executionDate),
                   style: const TextStyle(
-                    fontSize: 11,
+                    fontSize: CaslaType.caption,
                     color: CaslaColors.muted,
                   ),
                 ),
@@ -930,7 +949,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
             '${isNegative ? '-' : '+'}${formatQuantity(entry.quantity)} ${entry.unitOfMeasure}',
             style: TextStyle(
               fontWeight: FontWeight.w700,
-              fontSize: 13,
+              fontSize: CaslaType.body,
               color: isNegative ? CaslaColors.danger : CaslaColors.success,
             ),
           ),

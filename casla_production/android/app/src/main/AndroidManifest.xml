@@ -46,5 +46,20 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+
+        <!-- Reader services whose presence tells the app this handset has a
+             built-in imager. Android 11+ hides other packages unless they are
+             declared here, so PdaScannerBridge.installedReaderServices() would
+             otherwise always come back empty. Visibility only: the app never
+             starts, binds to, or sends anything to these packages. -->
+        <package android:name="com.cipherlab.clbarcodeservice"/>
+        <package android:name="com.symbol.datawedge"/>
+        <package android:name="com.intermec.datacollectionservice"/>
+        <package android:name="com.honeywell.decode.DecodeService"/>
+        <package android:name="com.honeywell.scanner.service"/>
+        <package android:name="com.nlscan.android.scanner"/>
+        <package android:name="com.nlscan.scanner"/>
+        <package android:name="com.android.scanner.service"/>
+        <package android:name="com.sunmi.scanner"/>
     </queries>
 </manifest>
