@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:developer' as developer;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -7,6 +6,7 @@ import 'package:flutter/widgets.dart';
 
 import 'barcode_scan_event.dart';
 import 'barcode_scanner.dart';
+import 'scan_diagnostics.dart';
 import 'wedge_scan_buffer.dart';
 
 /// Reads a PDA imager that is left in its factory "keyboard wedge" mode.
@@ -75,12 +75,14 @@ class WedgeBarcodeScanner implements BarcodeScanner {
     if (_handlerAttached) return;
     _keyboard.addHandler(handleKeyEvent);
     _handlerAttached = true;
+    ScanDiagnostics.instance.record(ScanDiagnosticEvent.wedgeAttached);
   }
 
   void _detach() {
     if (!_handlerAttached) return;
     _keyboard.removeHandler(handleKeyEvent);
     _handlerAttached = false;
+    ScanDiagnostics.instance.record(ScanDiagnosticEvent.wedgeDetached);
     _settleTimer?.cancel();
     _settleTimer = null;
     _buffer.reset();
@@ -100,6 +102,9 @@ class WedgeBarcodeScanner implements BarcodeScanner {
     if (_controller.isClosed || !_controller.hasListener) return false;
 
     if (_textInputHasFocus()) {
+      if (!_buffer.isEmpty) {
+        ScanDiagnostics.instance.record(ScanDiagnosticEvent.wedgeFieldFocused);
+      }
       _cancelSettleTimer();
       _buffer.reset();
       return false;
@@ -117,17 +122,18 @@ class WedgeBarcodeScanner implements BarcodeScanner {
     }
 
     final character = event.character;
-    developer.log(
-      'key=${event.logicalKey.keyLabel} hasChar=${character != null && character.isNotEmpty} '
-      'bufLen=${_buffer.length}',
-      name: 'CaslaScan.wedge',
-    );
-    if (character == null || character.isEmpty) return false;
+    if (character == null || character.isEmpty) {
+      ScanDiagnostics.instance.record(ScanDiagnosticEvent.wedgeNoCharacter);
+      return false;
+    }
     // Control characters carry no barcode content and would corrupt the value.
     if (character.codeUnitAt(0) < 0x20 || character.codeUnitAt(0) == 0x7f) {
       return false;
     }
 
+    if (_buffer.isEmpty) {
+      ScanDiagnostics.instance.record(ScanDiagnosticEvent.wedgeBurst);
+    }
     _buffer.append(character, now: _clock());
     _restartSettleTimer();
     return true;
@@ -149,9 +155,11 @@ class WedgeBarcodeScanner implements BarcodeScanner {
   }
 
   bool _emit(String? code) {
-    developer.log(
-      'flush -> ${code == null ? "rejected (too short/slow)" : "emit len=${code.length}"}',
-      name: 'CaslaScan.wedge',
+    ScanDiagnostics.instance.record(
+      code == null
+          ? ScanDiagnosticEvent.wedgeRejected
+          : ScanDiagnosticEvent.wedgeAccepted,
+      length: code?.length,
     );
     if (code == null || code.isEmpty) return false;
     if (_controller.isClosed) return false;

@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:developer' as developer;
 
 import 'package:flutter/material.dart';
 
@@ -9,6 +8,7 @@ import '../../core/scanner/barcode_scanner.dart';
 import '../../core/scanner/composite_barcode_scanner.dart';
 import '../../core/scanner/platform_hardware_barcode_scanner.dart';
 import '../../core/scanner/scan_deduplicator.dart';
+import '../../core/scanner/scan_diagnostics.dart';
 import '../../core/scanner/scan_feedback.dart';
 import '../../core/scanner/scanner_preferences.dart';
 import '../../core/scanner/wedge_barcode_scanner.dart';
@@ -172,6 +172,7 @@ class BarcodeScanListenerState extends State<BarcodeScanListener>
 
   @override
   void dispose() {
+    ScanDiagnostics.instance.record(ScanDiagnosticEvent.listenerStopped);
     unawaited(_subscription?.cancel());
     appRouteObserver.unsubscribe(this);
     final scanner = _scanner;
@@ -183,9 +184,10 @@ class BarcodeScanListenerState extends State<BarcodeScanListener>
   Future<void> _probeAvailability() async {
     final available = await _scanner.isAvailable();
     final seenBefore = await _preferences.wasHardwareScanSeen();
-    developer.log(
-      'probe available=$available seenBefore=$seenBefore',
-      name: 'CaslaScan',
+    ScanDiagnostics.instance.record(
+      available || seenBefore
+          ? ScanDiagnosticEvent.probeAvailable
+          : ScanDiagnosticEvent.probeUnavailable,
     );
     if (!mounted) return;
 
@@ -202,10 +204,12 @@ class BarcodeScanListenerState extends State<BarcodeScanListener>
   }
 
   void _subscribe() {
+    ScanDiagnostics.instance.record(ScanDiagnosticEvent.listenerStarted);
     _subscription?.cancel();
     _subscription = _scanner.scans.listen(
       (event) => unawaited(_handle(event)),
       onError: (Object _) {
+        ScanDiagnostics.instance.record(ScanDiagnosticEvent.channelError);
         if (!mounted) return;
         // The wedge path survives a broadcast-channel failure, so this is a
         // status downgrade rather than a shutdown.
@@ -223,14 +227,14 @@ class BarcodeScanListenerState extends State<BarcodeScanListener>
       (_route?.isCurrent ?? true);
 
   Future<void> _handle(BarcodeScanEvent event) async {
-    developer.log(
-      'event src=${event.symbology ?? event.source.name} '
-      'len=${event.rawValue.trim().length} canAccept=$_canAccept '
-      '(enabled=${widget.enabled} mounted=$mounted routeVisible=$_isRouteVisible '
-      'handling=$_isHandling ticker=${TickerMode.valuesOf(context).enabled})',
-      name: 'CaslaScan',
+    ScanDiagnostics.instance.record(
+      ScanDiagnosticEvent.eventReceived,
+      length: event.rawValue.length,
     );
-    if (!_canAccept) return;
+    if (!_canAccept) {
+      ScanDiagnostics.instance.record(ScanDiagnosticEvent.ignoredInactive);
+      return;
+    }
 
     final code = event.rawValue.trim();
     if (code.isEmpty) return;
@@ -240,6 +244,7 @@ class BarcodeScanListenerState extends State<BarcodeScanListener>
     // queued burst is judged by its real spacing rather than by delivery order.
     if (!_deduplicator.shouldAccept(code, now: event.timestamp)) {
       _telemetry.increment(FieldMetric.hardwareScanDuplicate);
+      ScanDiagnostics.instance.record(ScanDiagnosticEvent.ignoredDuplicate);
       ScanFeedback.duplicate();
       return;
     }
@@ -256,6 +261,17 @@ class BarcodeScanListenerState extends State<BarcodeScanListener>
     var accepted = false;
     try {
       accepted = await Future<bool>.sync(() => widget.onScan(code));
+      ScanDiagnostics.instance.record(
+        accepted
+            ? ScanDiagnosticEvent.callbackAccepted
+            : ScanDiagnosticEvent.callbackRejected,
+      );
+    } catch (_) {
+      ScanDiagnostics.instance.record(ScanDiagnosticEvent.callbackError);
+      // A malformed or unexpected QR must not escape an unawaited listener
+      // callback and terminate the scan flow. Keep the reader armed and let
+      // the normal rejected path provide feedback to the operator.
+      accepted = false;
     } finally {
       _isHandling = false;
       if (mounted) {

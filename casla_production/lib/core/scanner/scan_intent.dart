@@ -1,5 +1,6 @@
 import '../utils/operation_qr_parser.dart';
 import '../utils/worker_qr_parser.dart';
+import 'scan_diagnostics.dart';
 
 enum ScannedCodeKind { operation, worker, unknown }
 
@@ -50,6 +51,15 @@ class ScanClassifier {
     }
 
     final operation = OperationQrParser.parse(code);
+    final worker = WorkerQrParser.parse(code);
+    ScanDiagnostics.instance.record(
+      operation.isValid
+          ? ScanDiagnosticEvent.classifiedOperation
+          : worker.isValid
+          ? ScanDiagnosticEvent.classifiedWorker
+          : ScanDiagnosticEvent.classifiedUnknown,
+      length: code.length,
+    );
     if (operation.isValid) {
       return ScannedCode._(
         kind: ScannedCodeKind.operation,
@@ -58,7 +68,6 @@ class ScanClassifier {
       );
     }
 
-    final worker = WorkerQrParser.parse(code);
     if (worker.isValid) {
       return ScannedCode._(
         kind: ScannedCodeKind.worker,

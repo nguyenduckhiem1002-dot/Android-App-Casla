@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
 import android.util.Log
+import android.view.KeyEvent
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -41,14 +42,10 @@ class PdaScannerBridge(
          *   adb shell setprop log.tag.CaslaScan VERBOSE
          * or just read it: `adb logcat -s CaslaScan`.
          *
-         * Logs decision points and a truncated payload preview, never a full
-         * barcode. Left in on purpose: the scanner path is the one thing that
-         * cannot be reproduced off a real handset.
+         * Logs fixed decision codes and payload lengths only.
          */
         private const val TAG = "CaslaScan"
 
-        private fun preview(value: String): String =
-            if (value.length <= 24) value else value.take(24) + "…(${value.length})"
     }
 
     private val eventChannel = EventChannel(messenger, EVENT_CHANNEL)
@@ -56,17 +53,28 @@ class PdaScannerBridge(
     private var eventSink: EventChannel.EventSink? = null
     private var activityStarted = false
     private var receiverRegistered = false
+    private var keyDownEvents = 0L
+    private var multipleKeyEvents = 0L
+
+    private fun record(event: ScannerDiagnosticLog.Event, length: Int? = null) {
+        Log.i(TAG, ScannerDiagnosticLog.record(event, length))
+    }
+
+    fun noteKeyEvent(event: KeyEvent) {
+        if (!activityStarted || eventSink == null) return
+        if (event.action == KeyEvent.ACTION_DOWN) keyDownEvents++
+        if (event.action == KeyEvent.ACTION_MULTIPLE) multipleKeyEvents++
+    }
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val action = intent?.action
-            val keys = intent?.extras?.keySet()?.joinToString(",") ?: "<none>"
-            Log.i(TAG, "onReceive action=$action extras=[$keys]")
+            record(ScannerDiagnosticLog.Event.BROADCAST_RECEIVED)
 
             if (action == null) return
             val vendor = ScannerBroadcastPolicy.findVendorForAction(action)
             if (vendor == null) {
-                Log.w(TAG, "  no vendor owns action '$action' — dropped")
+                record(ScannerDiagnosticLog.Event.UNKNOWN_ACTION)
                 return
             }
 
@@ -75,36 +83,26 @@ class PdaScannerBridge(
             } else {
                 null
             }
-            Log.i(
-                TAG,
-                "  vendor=${vendor.vendor} sdk=${Build.VERSION.SDK_INT} sender=$senderPackage",
-            )
             if (!ScannerBroadcastPolicy.acceptsSender(Build.VERSION.SDK_INT, action, senderPackage)) {
-                Log.w(
-                    TAG,
-                    "  sender '$senderPackage' rejected (allowed: ${vendor.senderPackages}) — dropped",
-                )
+                record(if (senderPackage == null) ScannerDiagnosticLog.Event.SENDER_UNAVAILABLE
+                    else ScannerDiagnosticLog.Event.SENDER_REJECTED)
                 return
             }
 
             val extras = intent.extras
             if (extras == null) {
-                Log.w(TAG, "  intent had no extras — dropped")
+                record(ScannerDiagnosticLog.Event.EXTRAS_MISSING)
                 return
             }
             val sanitized = vendor.dataExtras
                 .asSequence()
                 .mapNotNull { key ->
                     val raw = extras.get(key)
-                    Log.i(TAG, "  extra '$key' = ${raw?.javaClass?.simpleName ?: "null"}")
                     ScannerBroadcastPolicy.sanitizeDecodedData(raw)
                 }
                 .firstOrNull()
             if (sanitized == null) {
-                Log.w(
-                    TAG,
-                    "  no usable value in ${vendor.dataExtras} — dropped",
-                )
+                record(ScannerDiagnosticLog.Event.PAYLOAD_REJECTED)
                 return
             }
 
@@ -115,10 +113,10 @@ class PdaScannerBridge(
 
             val sink = eventSink
             if (sink == null) {
-                Log.w(TAG, "  value '${preview(sanitized)}' ready but Dart is not listening — dropped")
+                record(ScannerDiagnosticLog.Event.NO_DART_LISTENER, sanitized.length)
                 return
             }
-            Log.i(TAG, "  -> Dart: '${preview(sanitized)}' symbology=$symbology")
+            record(ScannerDiagnosticLog.Event.FORWARDED_TO_DART, sanitized.length)
             sink.success(
                 mapOf(
                     "rawValue" to sanitized,
@@ -147,19 +145,25 @@ class PdaScannerBridge(
                 result.success(available)
             }
             "diagnostics" -> result.success(diagnostics())
+            "clearDiagnostics" -> {
+                ScannerDiagnosticLog.clear()
+                keyDownEvents = 0
+                multipleKeyEvents = 0
+                result.success(null)
+            }
             else -> result.notImplemented()
         }
     }
 
     override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
         eventSink = events
-        Log.i(TAG, "Dart started listening")
+        record(ScannerDiagnosticLog.Event.LISTEN_START)
         updateRegistration()
     }
 
     override fun onCancel(arguments: Any?) {
         eventSink = null
-        Log.i(TAG, "Dart stopped listening")
+        record(ScannerDiagnosticLog.Event.LISTEN_STOP)
         updateRegistration()
     }
 
@@ -193,6 +197,9 @@ class PdaScannerBridge(
         "installedReaderServices" to installedReaderServices().toList(),
         "broadcastActions" to ScannerBroadcastPolicy.broadcastActions,
         "receiverRegistered" to receiverRegistered,
+        "nativeKeyDownEvents" to keyDownEvents,
+        "nativeMultipleKeyEvents" to multipleKeyEvents,
+        "recentEvents" to ScannerDiagnosticLog.snapshot(),
     )
 
     private fun installedReaderServices(): Set<String> {
@@ -243,13 +250,13 @@ class PdaScannerBridge(
             activity.registerReceiver(receiver, filter)
         }
         receiverRegistered = true
-        Log.i(TAG, "receiver registered for ${ScannerBroadcastPolicy.broadcastActions}")
+        record(ScannerDiagnosticLog.Event.RECEIVER_REGISTERED)
     }
 
     private fun unregisterReceiver() {
         if (!receiverRegistered) return
         runCatching { activity.unregisterReceiver(receiver) }
         receiverRegistered = false
-        Log.i(TAG, "receiver unregistered")
+        record(ScannerDiagnosticLog.Event.RECEIVER_UNREGISTERED)
     }
 }

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../../../app/theme/casla_colors.dart';
 import '../../../app/theme/casla_spacing.dart';
 import '../../../core/scanner/platform_hardware_barcode_scanner.dart';
+import '../../../core/scanner/scan_diagnostics.dart';
 import '../../../core/scanner/scanner_preferences.dart';
 import '../../../core/telemetry/field_telemetry.dart';
 
@@ -76,6 +77,9 @@ class _ScannerSettingsCardState extends State<ScannerSettingsCard> {
   }
 
   Future<void> _copyDiagnostics() async {
+    final diagnostics = await widget.scanner.diagnostics();
+    if (!mounted) return;
+    setState(() => _diagnostics = diagnostics);
     final snapshot = _telemetry.snapshot();
     final lines = <String>[
       'Chế độ đầu đọc: ${_mode.storageValue}',
@@ -89,6 +93,14 @@ class _ScannerSettingsCardState extends State<ScannerSettingsCard> {
       'Trong đó qua bàn phím ảo: ${snapshot.count(FieldMetric.wedgeScanAccepted)}',
       'Bị từ chối: ${snapshot.count(FieldMetric.hardwareScanRejected)}',
       'Trùng lặp bỏ qua: ${snapshot.count(FieldMetric.hardwareScanDuplicate)}',
+      'Phím Android nhận khi đang nghe quét: ${_diagnostics['nativeKeyDownEvents'] ?? 'không có'}',
+      'Sự kiện ACTION_MULTIPLE: ${_diagnostics['nativeMultipleKeyEvents'] ?? 'không có'}',
+      'Receiver hiện tại: ${_diagnostics['receiverRegistered'] ?? 'không rõ'}',
+      '--- Android (timestamp UTC milliseconds) ---',
+      ...((_diagnostics['recentEvents'] as List?) ?? const [])
+          .whereType<String>(),
+      '--- Flutter ---',
+      ScanDiagnostics.instance.export(),
     ];
     await Clipboard.setData(ClipboardData(text: lines.join('\n')));
     if (!mounted) return;
@@ -97,6 +109,21 @@ class _ScannerSettingsCardState extends State<ScannerSettingsCard> {
       ..showSnackBar(
         const SnackBar(content: Text('Đã sao chép thông tin đầu đọc.')),
       );
+  }
+
+  Future<void> _clearDiagnostics() async {
+    final nativeCleared = await widget.scanner.clearDiagnostics();
+    ScanDiagnostics.instance.clear();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          nativeCleared
+              ? 'Đã xóa log quét. Quét thử rồi quay lại sao chép log.'
+              : 'Đã xóa log Flutter. Không xóa được log đầu đọc Android.',
+        ),
+      ),
+    );
   }
 
   List<String> _readerServices() {
@@ -220,8 +247,21 @@ class _ScannerSettingsCardState extends State<ScannerSettingsCard> {
               child: OutlinedButton.icon(
                 onPressed: _copyDiagnostics,
                 icon: const Icon(Icons.copy_outlined, size: 18),
-                label: const Text('Sao chép thông tin đầu đọc'),
+                label: const Text('Sao chép log quét'),
               ),
+            ),
+            const Text(
+              'Log được giữ trong phiên mở app, không chứa nội dung QR. '
+              'Quét thử rồi quay lại đây sao chép log.',
+              style: TextStyle(
+                fontSize: CaslaType.caption,
+                color: CaslaColors.muted,
+              ),
+            ),
+            TextButton.icon(
+              onPressed: _clearDiagnostics,
+              icon: const Icon(Icons.delete_outline),
+              label: const Text('Xóa log quét'),
             ),
           ],
         ],

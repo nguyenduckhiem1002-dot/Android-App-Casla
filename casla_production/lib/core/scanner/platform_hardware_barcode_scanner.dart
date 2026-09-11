@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import 'barcode_scan_event.dart';
 import 'barcode_scanner.dart';
+import 'scan_diagnostics.dart';
 
 /// Hardware scanner adapter backed by the Android native bridge.
 ///
@@ -28,13 +29,29 @@ class PlatformHardwareBarcodeScanner implements BarcodeScanner {
     try {
       return await _control.invokeMethod<bool>('isAvailable') ?? false;
     } on MissingPluginException {
+      ScanDiagnostics.instance.record(ScanDiagnosticEvent.channelError);
+      return false;
+    } on PlatformException {
+      ScanDiagnostics.instance.record(ScanDiagnosticEvent.channelError);
+      return false;
+    }
+  }
+
+  /// Clears the native decision-event buffer, so a fresh support trace only
+  /// covers the scans made after this call.
+  Future<bool> clearDiagnostics() async {
+    if (kIsWeb) return false;
+    try {
+      await _control.invokeMethod<void>('clearDiagnostics');
+      return true;
+    } on MissingPluginException {
       return false;
     } on PlatformException {
       return false;
     }
   }
 
-  /// Device and reader-service facts for the Account screen's support panel.
+  /// Device and reader-service facts plus recent privacy-safe native events.
   ///
   /// Returns an empty map on any platform without the bridge, so callers can
   /// render "không xác định" rather than handling an error.
@@ -55,5 +72,12 @@ class PlatformHardwareBarcodeScanner implements BarcodeScanner {
 
   @override
   Stream<BarcodeScanEvent> get scans =>
-      _events.receiveBroadcastStream().map(BarcodeScanEvent.fromPlatform);
+      _events.receiveBroadcastStream().map((payload) {
+        try {
+          return BarcodeScanEvent.fromPlatform(payload);
+        } on FormatException {
+          ScanDiagnostics.instance.record(ScanDiagnosticEvent.invalidEnvelope);
+          rethrow;
+        }
+      });
 }

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'barcode_scan_event.dart';
 import 'barcode_scanner.dart';
+import 'scan_diagnostics.dart';
 
 /// Listens to every capture path at once and republishes them as one stream.
 ///
@@ -52,7 +53,9 @@ class CompositeBarcodeScanner implements BarcodeScanner {
           },
           // One path failing must not take the others down with it. A PDA whose
           // reader service dies mid-shift keeps scanning through the wedge.
-          onError: (Object _) {},
+          onError: (Object _) {
+            ScanDiagnostics.instance.record(ScanDiagnosticEvent.channelError);
+          },
         ),
       );
     }

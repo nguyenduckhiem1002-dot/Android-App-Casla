@@ -40,8 +40,18 @@ Thay đổi lớn nhất: **đầu đọc luôn lắng nghe ngay trên form**. K
 - Tab Xác nhận bị gỡ scanner khi không được chọn; handler cũng kiểm tra TickerMode và route hiện hành trước khi nhận sự kiện.
 - Mật khẩu công nhân và backend authorization khi ghi SAP giữ nguyên. QR tự sửa có thể qua bước chọn nếu đúng định dạng/ngày; đây là cơ chế trust QR được yêu cầu, không phải QR có chữ ký số.
 
+## Log chẩn đoán tại hiện trường
+
+Khi PDA "không ăn laze" mà không có máy dev cắm cạnh, hiện trường tự lấy log được:
+
+- **Account → Đầu đọc mã vạch → Xóa log quét**, quét thử vài lần, rồi **Sao chép log quét**. Dán log đó cho support.
+- Log chỉ chứa **tên sự kiện cố định + độ dài số** (`FORWARDED_TO_DART length=42`, `wedgeRejected`, `classifiedUnknown length=13`...). Không bao giờ chứa nội dung QR, tên công nhân hay mật khẩu — `ScanDiagnosticLogTest`/`scan_diagnostics_test.dart` khẳng định điều đó bằng test cắm thẳng một payload "nhạy cảm" vào và assert nó không lọt vào log.
+- Bộ đệm giữ tối đa 120 sự kiện mỗi lớp (Kotlin native + Dart), vòng tròn — không phình vô hạn khi để app chạy cả ca.
+- Native còn đếm `nativeKeyDownEvents`/`nativeMultipleKeyEvents` — phím Android thực sự nhận được trong lúc có màn hình đang lắng nghe quét. Tăng mà không thấy `wedgeBurst` phía Flutter → đầu đọc có gõ nhưng Flutter không bắt (kiểm tra focus/`HardwareKeyboard`), không tăng → phím chưa tới được Activity (đầu đọc chưa bật keystroke output, hoặc trigger chưa gán).
+- Chi tiết cách đọc từng mã sự kiện: `android/SCANNER_SECURITY.md`.
+
 ## Tình trạng kiểm thử
 
-- `flutter analyze` sạch; 308 test Dart pass.
-- Test Kotlin (`ScannerBroadcastPolicyTest`) **chưa chạy được cục bộ** — máy dev không có gradle wrapper (Flutter sinh lúc build). CI chạy `:app:testProductionDebugUnitTest`.
+- `flutter analyze` sạch; 311 test Dart pass.
+- Test Kotlin (`ScannerBroadcastPolicyTest`, `ScannerDiagnosticLogTest`) **chưa chạy được cục bộ** — Gradle trên máy dev báo `Unable to establish loopback connection` (lỗi môi trường/mạng cục bộ, không phải thiếu wrapper — wrapper đã có). CI chạy `:app:testProductionDebugUnitTest`.
 - **Chưa kiểm thử trên PDA thật.** Danh sách việc cần làm trên máy thật ở `android/SCANNER_SECURITY.md`.

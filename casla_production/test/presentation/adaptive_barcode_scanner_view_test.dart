@@ -134,6 +134,36 @@ void main() {
     expect(find.text('Sẵn sàng nhận mã từ đầu đọc'), findsOneWidget);
   });
 
+  testWidgets('a failed callback leaves the next scan usable', (tester) async {
+    final scanner = _FakeScanner(available: true);
+    final telemetry = FieldTelemetry();
+    addTearDown(scanner.close);
+    var attempts = 0;
+
+    await pumpScanner(
+      tester,
+      scanner: scanner,
+      telemetry: telemetry,
+      onScan: (_) async {
+        if (++attempts == 1) throw const FormatException('Invalid scan');
+        return true;
+      },
+    );
+
+    scanner.emit('INVALID');
+    await tester.pump();
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    expect(telemetry.snapshot().count(FieldMetric.hardwareScanRejected), 1);
+    expect(find.text('SẴN SÀNG QUÉT'), findsOneWidget);
+
+    scanner.emit('MNV00123');
+    await tester.pump();
+    await tester.pump();
+    expect(attempts, 2);
+    expect(find.text('Đã nhận. Mời quét tiếp.'), findsOneWidget);
+  });
+
   testWidgets('a slow handler shows the busy state while it runs', (
     tester,
   ) async {

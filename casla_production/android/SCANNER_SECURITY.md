@@ -64,6 +64,36 @@ This is operational hardening, not a replacement for sender authentication.
 
 ## Required physical-device verification
 
+### Collecting a scanner trace (including release APKs)
+
+1. Open Account > Đầu đọc mã vạch > Xóa log quét.
+2. Open the affected scan screen and pull the trigger at the QR two or three times.
+3. Return to Account > Đầu đọc mã vạch > Sao chép log quét.
+4. Share that copied report with support before force-closing the app.
+
+Each layer retains at most 120 events in memory. Copy fetches the latest native
+snapshot, including Android key-down/ACTION_MULTIPLE counters observed while a
+scanner listener exists. These counters describe input delivery, not successful
+QR decoding. No scan text, characters, parser error strings or passwords enter
+the event buffers. The report is copied only on user action and is not uploaded.
+
+For a USB-connected PDA, native decision events can also be watched with
+`adb -s <device-serial> logcat -s CaslaScan:I`.
+
+- `BROADCAST_RECEIVED` -> `SENDER_UNAVAILABLE` / `SENDER_REJECTED`: sender policy.
+- `PAYLOAD_REJECTED`: none of the configured processed-data extras was usable.
+- `FORWARDED_TO_DART` -> `eventReceived`: native-to-Flutter delivery succeeded.
+- Android key counters rising without `wedgeBurst`: inspect keyboard delivery/focus.
+- `wedgeRejected`: input burst did not meet length/timing rules.
+- `ignoredInactive`: route/tab/dialog is preventing consumption.
+- `classifiedUnknown` / `callbackRejected`: app validation rejected the scan.
+- `channelError` / `invalidEnvelope`: platform channel or event-shape problem.
+
+An absent broadcast event does not prove the reader failed to decode: an output
+action outside the registered vendor contracts never reaches this receiver.
+`receiverRegistered=false` on Account is normal when no scan screen is listening;
+check the preceding registration events when interpreting the trace.
+
 Not yet performed. Before rollout, exercise at least:
 
 - Each PDA model in the fleet, in both broadcast mode and wedge mode: valid scan, rapid repeated trigger, sleep/resume, app foreground/background.
