@@ -1,6 +1,16 @@
 package com.example.casla_production
 
-/** Fixed labels only: diagnostics must never contain decoded QR/credential text. */
+/**
+ * Fixed labels and bounded metadata only: diagnostics must never contain
+ * decoded QR/credential text.
+ *
+ * [record]'s optional `detail` is for values that are safe to show verbatim —
+ * currently only the rejected sender's package name (device/app identity,
+ * the same category already exposed via `manufacturer`/`installedReaderServices`
+ * in `PdaScannerBridge.diagnostics()`, never scan content). It is whitelisted
+ * to characters a package name can actually contain and capped short, so even
+ * a malformed sender identity cannot smuggle arbitrary text into the log.
+ */
 internal object ScannerDiagnosticLog {
     enum class Event {
         RECEIVER_REGISTERED, RECEIVER_UNREGISTERED, LISTEN_START, LISTEN_STOP,
@@ -9,11 +19,17 @@ internal object ScannerDiagnosticLog {
     }
     private val entries = java.util.ArrayDeque<String>()
     private const val CAPACITY = 120
+    private const val MAX_DETAIL_LENGTH = 100
+    private val detailPattern = Regex("[^A-Za-z0-9._:]")
+
+    private fun sanitizeDetail(detail: String): String =
+        detail.replace(detailPattern, "?").take(MAX_DETAIL_LENGTH)
 
     @Synchronized
-    fun record(event: Event, length: Int? = null): String {
+    fun record(event: Event, length: Int? = null, detail: String? = null): String {
         val line = "${System.currentTimeMillis()} ${event.name}" +
-            (length?.let { " length=$it" } ?: "")
+            (length?.let { " length=$it" } ?: "") +
+            (detail?.let { " sender=${sanitizeDetail(it)}" } ?: "")
         if (entries.size >= CAPACITY) entries.removeFirst()
         entries.addLast(line)
         return line

@@ -75,12 +75,17 @@ Each layer retains at most 120 events in memory. Copy fetches the latest native
 snapshot, including Android key-down/ACTION_MULTIPLE counters observed while a
 scanner listener exists. These counters describe input delivery, not successful
 QR decoding. No scan text, characters, parser error strings or passwords enter
-the event buffers. The report is copied only on user action and is not uploaded.
+the event buffers. `SENDER_UNAVAILABLE`/`SENDER_REJECTED` entries additionally
+carry the rejected sender's package name (`sender=com.symbol.datawedge`) —
+device/app identity, not scan content, and the only reason to widen the vendor
+allowlist for a real device is knowing that exact value instead of guessing.
+The report is copied only on user action and is not uploaded.
 
 For a USB-connected PDA, native decision events can also be watched with
 `adb -s <device-serial> logcat -s CaslaScan:I`.
 
-- `BROADCAST_RECEIVED` -> `SENDER_UNAVAILABLE` / `SENDER_REJECTED`: sender policy.
+- `BROADCAST_RECEIVED` -> `SENDER_UNAVAILABLE` / `SENDER_REJECTED` (see the
+  `sender=` package on that line): sender policy.
 - `PAYLOAD_REJECTED`: none of the configured processed-data extras was usable.
 - `FORWARDED_TO_DART` -> `eventReceived`: native-to-Flutter delivery succeeded.
 - Android key counters rising without `wedgeBurst`: inspect keyboard delivery/focus.

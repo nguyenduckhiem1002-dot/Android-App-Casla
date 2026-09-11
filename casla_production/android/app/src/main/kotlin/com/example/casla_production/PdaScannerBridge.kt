@@ -56,8 +56,8 @@ class PdaScannerBridge(
     private var keyDownEvents = 0L
     private var multipleKeyEvents = 0L
 
-    private fun record(event: ScannerDiagnosticLog.Event, length: Int? = null) {
-        Log.i(TAG, ScannerDiagnosticLog.record(event, length))
+    private fun record(event: ScannerDiagnosticLog.Event, length: Int? = null, detail: String? = null) {
+        Log.i(TAG, ScannerDiagnosticLog.record(event, length, detail))
     }
 
     fun noteKeyEvent(event: KeyEvent) {
@@ -84,8 +84,14 @@ class PdaScannerBridge(
                 null
             }
             if (!ScannerBroadcastPolicy.acceptsSender(Build.VERSION.SDK_INT, action, senderPackage)) {
-                record(if (senderPackage == null) ScannerDiagnosticLog.Event.SENDER_UNAVAILABLE
-                    else ScannerDiagnosticLog.Event.SENDER_REJECTED)
+                // The actual sender package, not the scan payload — safe to log verbatim
+                // (sanitized/bounded in ScannerDiagnosticLog) so a real-world reject can be
+                // diagnosed from a copied trace instead of guessing at an allowlist addition.
+                record(
+                    if (senderPackage == null) ScannerDiagnosticLog.Event.SENDER_UNAVAILABLE
+                    else ScannerDiagnosticLog.Event.SENDER_REJECTED,
+                    detail = senderPackage,
+                )
                 return
             }
 
