@@ -128,14 +128,20 @@ class PdaScannerBridge(
                 )
                 return
             }
-            if (verdict == ScannerBroadcastPolicy.SenderVerdict.ACCEPTED_UNATTRIBUTED_SYSTEM ||
-                verdict == ScannerBroadcastPolicy.SenderVerdict.ACCEPTED_BY_UID
-            ) {
-                record(
+            // Every accepted path except the ordinary named-package one is a
+            // relaxation worth a distinct, visible line in the trace — so a
+            // reviewer reading a copied log sees which step actually admitted
+            // the scan, not just that it eventually got through.
+            when (verdict) {
+                ScannerBroadcastPolicy.SenderVerdict.ACCEPTED_BY_UID,
+                ScannerBroadcastPolicy.SenderVerdict.ACCEPTED_UNATTRIBUTED_SYSTEM -> record(
                     ScannerDiagnosticLog.Event.SENDER_ACCEPTED_BY_UID,
                     detail = uidPackages.joinToString(":").ifEmpty { "none" },
                     uid = senderUid,
                 )
+                ScannerBroadcastPolicy.SenderVerdict.ACCEPTED_NO_ATTRIBUTION ->
+                    record(ScannerDiagnosticLog.Event.SENDER_ACCEPTED_UNATTRIBUTED)
+                else -> Unit
             }
 
             val extras = intent.extras

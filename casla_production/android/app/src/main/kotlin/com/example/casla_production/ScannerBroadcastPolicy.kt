@@ -149,6 +149,15 @@ internal object ScannerBroadcastPolicy {
          */
         ACCEPTED_UNATTRIBUTED_SYSTEM(true),
 
+        /**
+         * API 34+, but the platform gave neither a package nor a uid — observed
+         * on a Zebra TC22 delivering DataWedge's own broadcast. There being
+         * nothing left to check is treated the same as [ACCEPTED_LEGACY]: no
+         * weaker than the pre-34 boundary this app already ships with, just
+         * arrived at on a device that happens to run API 34.
+         */
+        ACCEPTED_NO_ATTRIBUTION(true),
+
         /** Pre-API-34: the platform offers no sender identity at all. */
         ACCEPTED_LEGACY(true),
 
@@ -199,6 +208,17 @@ internal object ScannerBroadcastPolicy {
      * turned away — but a compromised system component would not be, which is
      * the same posture Android 13 and older already have. `android/SCANNER_SECURITY.md`
      * records this as residual risk rather than a solved problem.
+     *
+     * A TC22 running DataWedge went one step further still: neither
+     * `getSentFromPackage()` nor `getSentFromUid()` carried anything (`senderUid`
+     * negative here means "the platform gave nothing," not "checked and found
+     * an ordinary app"). At that point there is nothing left to verify against,
+     * so it is accepted on the same basis as [SenderVerdict.ACCEPTED_LEGACY] —
+     * this is the point where continuing to require *some* attribution on API
+     * 34+ would leave this specific hardware strictly worse off than Android
+     * 13, for a check that has nothing left to check. A *known*, non-privileged,
+     * non-vendor uid is still rejected: that is the actual spoofing case this
+     * function exists to catch.
      */
     fun verifySender(
         apiLevel: Int,
@@ -222,11 +242,12 @@ internal object ScannerBroadcastPolicy {
         if (uidPackages.any { it in vendor.senderPackages }) {
             return SenderVerdict.ACCEPTED_BY_UID
         }
-        return if (isPrivilegedUid(senderUid)) {
-            SenderVerdict.ACCEPTED_UNATTRIBUTED_SYSTEM
-        } else {
-            SenderVerdict.REJECTED_UNATTRIBUTED
-        }
+        if (isPrivilegedUid(senderUid)) return SenderVerdict.ACCEPTED_UNATTRIBUTED_SYSTEM
+        // senderUid < 0 here means Android supplied no uid either, not that a
+        // uid was checked and found unprivileged — those are different findings
+        // and must not share a verdict.
+        if (senderUid < 0) return SenderVerdict.ACCEPTED_NO_ATTRIBUTION
+        return SenderVerdict.REJECTED_UNATTRIBUTED
     }
 
     fun sanitizeDecodedData(value: Any?): String? {

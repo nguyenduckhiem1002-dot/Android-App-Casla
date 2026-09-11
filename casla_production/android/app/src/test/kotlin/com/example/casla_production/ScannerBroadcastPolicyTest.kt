@@ -112,7 +112,10 @@ class ScannerBroadcastPolicyTest {
     fun `an unattributed broadcast from an ordinary app uid is rejected`() {
         // The whole point of the uid fallback: an installed third-party app
         // cannot hold a privileged uid, so it cannot slip through by simply
-        // failing to be attributed.
+        // failing to be attributed. A *known* non-privileged uid (appUid, not
+        // -1) is what makes this REJECTED rather than ACCEPTED_NO_ATTRIBUTION —
+        // see the test below for the case where the platform hands back
+        // nothing to check at all.
         assertEquals(
             ScannerBroadcastPolicy.SenderVerdict.REJECTED_UNATTRIBUTED,
             verdict(34, zebraAction, senderPackage = null, senderUid = appUid),
@@ -140,6 +143,18 @@ class ScannerBroadcastPolicyTest {
                 senderUid = appUid,
                 uidPackages = listOf("com.symbol.datawedge"),
             ),
+        )
+    }
+
+    @Test
+    fun `a broadcast with neither package nor uid attribution is accepted on API 34`() {
+        // Observed for real on a Zebra TC22: getSentFromPackage() and
+        // getSentFromUid() both come back empty for DataWedge's own broadcast.
+        // With nothing left to check, this must not be worse than the pre-34
+        // boundary the app already ships with.
+        assertEquals(
+            ScannerBroadcastPolicy.SenderVerdict.ACCEPTED_NO_ATTRIBUTION,
+            verdict(34, zebraAction, senderPackage = null, senderUid = -1),
         )
     }
 

@@ -25,12 +25,13 @@ A scan is **input**, not authorization. It may select a worker/order candidate. 
 Controls applied before a scan reaches Flutter:
 
 1. The receiver exists only while the activity is started **and** Flutter has an active scanner listener. The wedge handler is likewise attached only while a screen is listening, and steps aside entirely when a text field holds focus.
-2. On Android 14/API 34+, sender identity is checked in three descending steps (`ScannerBroadcastPolicy.verifySender`). Whichever step answers first decides:
-   1. `BroadcastReceiver.getSentFromPackage()` names a package — it must belong to **the same vendor as the action received**. A package cannot borrow another vendor's action; a named-but-wrong package is rejected outright, with no fallback.
+2. On Android 14/API 34+, sender identity is checked in four descending steps (`ScannerBroadcastPolicy.verifySender`). Whichever step answers first decides:
+   1. `BroadcastReceiver.getSentFromPackage()` names a package — it must belong to **the same vendor as the action received**. A package cannot borrow another vendor's action; a named-but-wrong package is rejected outright, with no fallback to the steps below.
    2. No package was named — `getSentFromUid()` is resolved through `PackageManager.getPackagesForUid()`, and one of those packages must be in the same vendor's allowlist.
-   3. Still nothing — the sending uid must be **privileged** (an OS-image uid, i.e. app id below 10000). An installed third-party app cannot hold one, so a spoofer cannot get in merely by being unattributed.
+   3. A uid was named but resolved to nothing in the vendor allowlist — it must be **privileged** (an OS-image uid, i.e. app id below 10000). An installed third-party app cannot hold one, so a spoofer cannot get in merely by being unattributed.
+   4. **Neither a package nor a uid was named at all** — accepted on the action + payload rules alone, the same basis pre-34 Android already uses. Observed for real: a Zebra TC22 delivering DataWedge's own broadcast gave `getSentFromPackage()` *and* `getSentFromUid()` both empty, not just the package. Step 3's uid check has nothing to evaluate in that case, and continuing to reject would have made this specific, real hardware strictly worse off than Android 13 for a check that verifies nothing.
 
-   Steps 2 and 3 exist because the platform frequently declines to attribute these broadcasts on real hardware: a Zebra TC22 on Android 14 delivers DataWedge's output with `getSentFromPackage()` null, because DataWedge ships as a privileged system app. Requiring step 1 alone made the scanner unusable on the exact devices this app is deployed to. Step 3 is a genuine relaxation and is recorded under residual risk below.
+   Steps 2–4 exist because the platform frequently declines to attribute these broadcasts on real hardware, and requiring step 1 alone made the scanner unusable on the exact devices this app is deployed to. Steps 3 and 4 are genuine relaxations, both recorded under residual risk below. Step 4 is deliberately distinct from step 3 in the trace (`ACCEPTED_NO_ATTRIBUTION` vs `ACCEPTED_UNATTRIBUTED_SYSTEM`/`ACCEPTED_BY_UID`) — a *known*, non-privileged, non-vendor uid must still hit `REJECTED_UNATTRIBUTED`; only a platform that hands back nothing at all falls through to step 4.
 3. An action not present in `ScannerBroadcastPolicy.vendorBroadcasts` is rejected outright, on every Android version.
 4. Only the documented processed-value extras are read. The bridge deliberately does not fall back to raw/original decoder values, which would bypass the device-side configuration the site set.
 5. Barcode values must be `String`/`ByteArray`, are bounded to 4096 characters / 8192 bytes, and embedded NUL is rejected.
@@ -52,7 +53,7 @@ The pure native policy is covered by JVM unit tests in `ScannerBroadcastPolicyTe
 
 Those devices remain **legacy sender-unverified**. Input validation, foreground-only registration, listener-scoped registration and backend authorization reduce impact, but they do not prove who emitted the broadcast.
 
-On Android 14+ the same gap reappears whenever the platform declines to attribute the sender and only step 3 (privileged uid) lets the broadcast through — observed in practice on a Zebra TC22, where DataWedge's broadcast arrives with no package attribution. A third-party app still cannot reach that path, but a compromised or malicious **system-image** component could. That is the same trust boundary Android 13 and older sit behind, and it is not closed by this app.
+On Android 14+ the same gap reappears whenever the platform declines to attribute the sender and only step 3 or step 4 lets the broadcast through — observed in practice on a Zebra TC22, where DataWedge's broadcast arrives with **neither** a package **nor** a uid, landing on step 4 (`ACCEPTED_NO_ATTRIBUTION`). A third-party app still cannot reach either path (it always presents a uid, and that uid is never privileged), but a compromised or malicious **system-image** component could, and step 4 in particular verifies nothing at all — it is accepted purely because the action matches and there is no weaker check left to fail. That is the same trust boundary Android 13 and older sit behind, and it is not closed by this app.
 
 The keyboard-wedge path is sender-unverified on **every** Android version, by the nature of keyboard input.
 
@@ -92,11 +93,17 @@ For a USB-connected PDA, native decision events can also be watched with
 `adb -s <device-serial> logcat -s CaslaScan:I`.
 
 - `BROADCAST_RECEIVED` -> `SENDER_UNAVAILABLE` / `SENDER_REJECTED` (see the
-  `sender=` and `uid=` fields on that line): sender policy turned it away.
+  `sender=` and `uid=` fields on that line): sender policy turned it away. If
+  `SENDER_UNAVAILABLE` carries no `uid=` field at all, the platform gave no
+  uid either — see `SENDER_ACCEPTED_UNATTRIBUTED` below for what that becomes
+  once step 4 is reached.
 - `BROADCAST_RECEIVED` -> `SENDER_ACCEPTED_BY_UID`: the platform named no sender
   package, and the broadcast was admitted on the uid instead (step 2 or 3
-  above). Expected on a Zebra TC22; the `sender=` field shows which packages
-  that uid resolved to, or `none` when it resolved to nothing.
+  above). The `sender=` field shows which packages that uid resolved to, or
+  `none` when it resolved to nothing but the uid was still privileged.
+- `BROADCAST_RECEIVED` -> `SENDER_ACCEPTED_UNATTRIBUTED`: step 4 — the platform
+  named neither a package nor a uid. Expected on a Zebra TC22 delivering
+  DataWedge's own broadcast; nothing was verified for this scan.
 - `PAYLOAD_REJECTED`: none of the configured processed-data extras was usable.
 - `FORWARDED_TO_DART` -> `eventReceived`: native-to-Flutter delivery succeeded.
 - Android key counters rising without `wedgeBurst`: inspect keyboard delivery/focus.
