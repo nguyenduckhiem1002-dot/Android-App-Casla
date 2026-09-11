@@ -56,8 +56,13 @@ class PdaScannerBridge(
     private var keyDownEvents = 0L
     private var multipleKeyEvents = 0L
 
-    private fun record(event: ScannerDiagnosticLog.Event, length: Int? = null, detail: String? = null) {
-        Log.i(TAG, ScannerDiagnosticLog.record(event, length, detail))
+    private fun record(
+        event: ScannerDiagnosticLog.Event,
+        length: Int? = null,
+        detail: String? = null,
+        uid: Int? = null,
+    ) {
+        Log.i(TAG, ScannerDiagnosticLog.record(event, length, detail, uid))
     }
 
     fun noteKeyEvent(event: KeyEvent) {
@@ -78,21 +83,59 @@ class PdaScannerBridge(
                 return
             }
 
-            val senderPackage = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                sentFromPackage
+            // Both checks stay inline rather than behind a shared local: Lint's
+            // NewApi analysis follows a literal SDK_INT comparison, not one
+            // hidden in a variable, and getSentFrom* are API 34 only.
+            val senderPackage =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    sentFromPackage
+                } else {
+                    null
+                }
+            val senderUid =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    sentFromUid
+                } else {
+                    -1
+                }
+            // A Zebra TC22 on Android 14 delivers DataWedge's broadcast with no
+            // package attribution at all, so the uid is the only identity left to
+            // check. Resolving it needs the <queries> entries in the manifest.
+            val uidPackages = if (senderPackage == null && senderUid >= 0) {
+                runCatching {
+                    activity.packageManager.getPackagesForUid(senderUid)?.toList()
+                }.getOrNull().orEmpty()
             } else {
-                null
+                emptyList()
             }
-            if (!ScannerBroadcastPolicy.acceptsSender(Build.VERSION.SDK_INT, action, senderPackage)) {
-                // The actual sender package, not the scan payload — safe to log verbatim
-                // (sanitized/bounded in ScannerDiagnosticLog) so a real-world reject can be
-                // diagnosed from a copied trace instead of guessing at an allowlist addition.
+
+            val verdict = ScannerBroadcastPolicy.verifySender(
+                apiLevel = Build.VERSION.SDK_INT,
+                action = action,
+                senderPackage = senderPackage,
+                senderUid = senderUid,
+                uidPackages = uidPackages,
+            )
+            if (!verdict.accepted) {
+                // Sender identity, not scan payload — safe to log verbatim (sanitized and
+                // bounded in ScannerDiagnosticLog) so a real-world reject can be diagnosed
+                // from a copied trace instead of guessing at an allowlist addition.
                 record(
                     if (senderPackage == null) ScannerDiagnosticLog.Event.SENDER_UNAVAILABLE
                     else ScannerDiagnosticLog.Event.SENDER_REJECTED,
-                    detail = senderPackage,
+                    detail = senderPackage ?: uidPackages.joinToString(":").ifEmpty { "none" },
+                    uid = senderUid,
                 )
                 return
+            }
+            if (verdict == ScannerBroadcastPolicy.SenderVerdict.ACCEPTED_UNATTRIBUTED_SYSTEM ||
+                verdict == ScannerBroadcastPolicy.SenderVerdict.ACCEPTED_BY_UID
+            ) {
+                record(
+                    ScannerDiagnosticLog.Event.SENDER_ACCEPTED_BY_UID,
+                    detail = uidPackages.joinToString(":").ifEmpty { "none" },
+                    uid = senderUid,
+                )
             }
 
             val extras = intent.extras

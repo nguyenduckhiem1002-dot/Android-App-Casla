@@ -135,15 +135,98 @@ internal object ScannerBroadcastPolicy {
         return pdaVendorFragments.any { it in haystack }
     }
 
+    /** Why a broadcast was let through, or turned away. */
+    enum class SenderVerdict(val accepted: Boolean) {
+        /** `getSentFromPackage()` named a reader service that owns this action. */
+        ACCEPTED_BY_PACKAGE(true),
+
+        /** The sending uid resolves to a reader service that owns this action. */
+        ACCEPTED_BY_UID(true),
+
+        /**
+         * Unattributed, but the sender is an OS-image (privileged) uid. See the
+         * residual-risk note on [verifySender].
+         */
+        ACCEPTED_UNATTRIBUTED_SYSTEM(true),
+
+        /** Pre-API-34: the platform offers no sender identity at all. */
+        ACCEPTED_LEGACY(true),
+
+        /** No configured vendor owns this action. */
+        REJECTED_UNKNOWN_ACTION(false),
+
+        /** A package was named, and it is not this action's vendor. */
+        REJECTED_PACKAGE(false),
+
+        /** Nothing identified the sender and it is an ordinary app uid. */
+        REJECTED_UNATTRIBUTED(false),
+    }
+
+    /** Android's first non-system application uid, and the per-user uid stride. */
+    const val FIRST_APPLICATION_UID = 10000
+    private const val PER_USER_UID_RANGE = 100000
+
     /**
-     * Android below [VERIFY_SENDER_FROM_API] cannot attribute a broadcast, so
-     * the payload rules below are the only boundary. From API 34 the sender
-     * must be a reader service belonging to the same vendor as the action.
+     * True for OS-image uids (system, radio, nfc, and the privileged apps that
+     * ship in the system image) as opposed to installed third-party apps.
+     *
+     * Multi-user devices offset uids per user, so the app id has to be taken
+     * modulo the per-user range before comparing.
      */
-    fun acceptsSender(apiLevel: Int, action: String?, senderPackage: String?): Boolean {
-        val vendor = findVendorForAction(action) ?: return false
-        if (apiLevel < VERIFY_SENDER_FROM_API) return true
-        return senderPackage != null && senderPackage in vendor.senderPackages
+    fun isPrivilegedUid(uid: Int): Boolean =
+        uid >= 0 && (uid % PER_USER_UID_RANGE) < FIRST_APPLICATION_UID
+
+    /**
+     * Decides whether a broadcast on [action] really came from that vendor's
+     * reader service.
+     *
+     * Android below [VERIFY_SENDER_FROM_API] exposes no sender identity to a
+     * runtime receiver at all, so those versions are accepted on the payload
+     * rules alone — the documented legacy boundary.
+     *
+     * From API 34 the platform *may* name the sender, and when it does the
+     * package must belong to the vendor that owns the action; a package cannot
+     * borrow another vendor's action. But on real hardware it frequently does
+     * not: a Zebra TC22 on Android 14 delivers DataWedge's output broadcast
+     * with `getSentFromPackage()` null, because DataWedge ships as a privileged
+     * system app. Rejecting those made the scanner unusable on the exact
+     * devices this app is deployed to.
+     *
+     * So an unattributed broadcast falls back to the sending uid: first by
+     * resolving it to package names and matching the vendor allowlist, and
+     * failing that by requiring the uid to be privileged. An ordinary installed
+     * app cannot obtain a privileged uid, so a third-party spoofer is still
+     * turned away — but a compromised system component would not be, which is
+     * the same posture Android 13 and older already have. `android/SCANNER_SECURITY.md`
+     * records this as residual risk rather than a solved problem.
+     */
+    fun verifySender(
+        apiLevel: Int,
+        action: String?,
+        senderPackage: String?,
+        senderUid: Int = -1,
+        uidPackages: List<String> = emptyList(),
+    ): SenderVerdict {
+        val vendor = findVendorForAction(action)
+            ?: return SenderVerdict.REJECTED_UNKNOWN_ACTION
+        if (apiLevel < VERIFY_SENDER_FROM_API) return SenderVerdict.ACCEPTED_LEGACY
+
+        if (senderPackage != null) {
+            return if (senderPackage in vendor.senderPackages) {
+                SenderVerdict.ACCEPTED_BY_PACKAGE
+            } else {
+                SenderVerdict.REJECTED_PACKAGE
+            }
+        }
+
+        if (uidPackages.any { it in vendor.senderPackages }) {
+            return SenderVerdict.ACCEPTED_BY_UID
+        }
+        return if (isPrivilegedUid(senderUid)) {
+            SenderVerdict.ACCEPTED_UNATTRIBUTED_SYSTEM
+        } else {
+            SenderVerdict.REJECTED_UNATTRIBUTED
+        }
     }
 
     fun sanitizeDecodedData(value: Any?): String? {

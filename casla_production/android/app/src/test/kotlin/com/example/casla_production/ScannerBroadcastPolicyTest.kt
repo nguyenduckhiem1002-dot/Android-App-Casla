@@ -10,57 +10,146 @@ import org.junit.Test
 class ScannerBroadcastPolicyTest {
     private val cipherLabAction = "com.cipherlab.barcodebaseapi.PASS_DATA_2_APP"
     private val honeywellAction = "com.honeywell.scan.broadcast"
+    private val zebraAction = "com.example.casla_production.SCAN"
+
+    private val appUid = ScannerBroadcastPolicy.FIRST_APPLICATION_UID + 123
+    private val systemUid = 1000
+
+    private fun verdict(
+        apiLevel: Int,
+        action: String?,
+        senderPackage: String?,
+        senderUid: Int = -1,
+        uidPackages: List<String> = emptyList(),
+    ) = ScannerBroadcastPolicy.verifySender(
+        apiLevel = apiLevel,
+        action = action,
+        senderPackage = senderPackage,
+        senderUid = senderUid,
+        uidPackages = uidPackages,
+    )
 
     @Test
     fun `legacy Android accepts a known vendor action because sender identity is unavailable`() {
-        assertTrue(ScannerBroadcastPolicy.acceptsSender(33, cipherLabAction, null))
-        assertTrue(ScannerBroadcastPolicy.acceptsSender(32, cipherLabAction, "other.app"))
-        assertTrue(ScannerBroadcastPolicy.acceptsSender(33, honeywellAction, null))
+        assertTrue(verdict(33, cipherLabAction, null).accepted)
+        assertTrue(verdict(32, cipherLabAction, "other.app").accepted)
+        assertTrue(verdict(33, honeywellAction, null).accepted)
     }
 
     @Test
     fun `an unknown action is rejected on every Android version`() {
-        assertFalse(ScannerBroadcastPolicy.acceptsSender(30, "com.example.spoof.SCAN", null))
-        assertFalse(ScannerBroadcastPolicy.acceptsSender(34, "com.example.spoof.SCAN", "android"))
-        assertFalse(ScannerBroadcastPolicy.acceptsSender(34, null, "com.symbol.datawedge"))
+        assertEquals(
+            ScannerBroadcastPolicy.SenderVerdict.REJECTED_UNKNOWN_ACTION,
+            verdict(30, "com.example.spoof.SCAN", null),
+        )
+        assertEquals(
+            ScannerBroadcastPolicy.SenderVerdict.REJECTED_UNKNOWN_ACTION,
+            verdict(34, "com.example.spoof.SCAN", "android"),
+        )
+        assertEquals(
+            ScannerBroadcastPolicy.SenderVerdict.REJECTED_UNKNOWN_ACTION,
+            verdict(34, null, "com.symbol.datawedge"),
+        )
     }
 
     @Test
     fun `Android 14 and newer accepts only the reader service owning that action`() {
-        assertTrue(
-            ScannerBroadcastPolicy.acceptsSender(
-                34,
-                cipherLabAction,
-                "com.cipherlab.clbarcodeservice",
-            ),
+        assertEquals(
+            ScannerBroadcastPolicy.SenderVerdict.ACCEPTED_BY_PACKAGE,
+            verdict(34, cipherLabAction, "com.cipherlab.clbarcodeservice"),
         )
-        assertTrue(
-            ScannerBroadcastPolicy.acceptsSender(
-                35,
-                honeywellAction,
-                "com.intermec.datacollectionservice",
-            ),
+        assertEquals(
+            ScannerBroadcastPolicy.SenderVerdict.ACCEPTED_BY_PACKAGE,
+            verdict(35, honeywellAction, "com.intermec.datacollectionservice"),
         )
-        assertFalse(
-            ScannerBroadcastPolicy.acceptsSender(
-                35,
-                cipherLabAction,
-                "sw.programme.readerconfig",
-            ),
+        assertEquals(
+            ScannerBroadcastPolicy.SenderVerdict.REJECTED_PACKAGE,
+            verdict(35, cipherLabAction, "sw.programme.readerconfig"),
         )
-        assertFalse(ScannerBroadcastPolicy.acceptsSender(34, cipherLabAction, null))
-        assertFalse(ScannerBroadcastPolicy.acceptsSender(34, cipherLabAction, "com.example.spoofer"))
+        assertEquals(
+            ScannerBroadcastPolicy.SenderVerdict.REJECTED_PACKAGE,
+            verdict(34, cipherLabAction, "com.example.spoofer"),
+        )
     }
 
     @Test
     fun `a vendor package cannot borrow another vendor's action`() {
-        assertFalse(
-            ScannerBroadcastPolicy.acceptsSender(
+        assertEquals(
+            ScannerBroadcastPolicy.SenderVerdict.REJECTED_PACKAGE,
+            verdict(34, cipherLabAction, "com.symbol.datawedge"),
+        )
+    }
+
+    @Test
+    fun `an unattributed broadcast is accepted when its uid resolves to the vendor`() {
+        // A Zebra TC22 on Android 14 delivers DataWedge's output broadcast with
+        // getSentFromPackage() null. The uid is then the only identity left, and
+        // resolving it still proves the sender really is that vendor's service.
+        assertEquals(
+            ScannerBroadcastPolicy.SenderVerdict.ACCEPTED_BY_UID,
+            verdict(
                 34,
-                cipherLabAction,
-                "com.symbol.datawedge",
+                zebraAction,
+                senderPackage = null,
+                senderUid = appUid,
+                uidPackages = listOf("com.symbol.datawedge"),
             ),
         )
+    }
+
+    @Test
+    fun `an unattributed broadcast from a privileged uid is accepted`() {
+        // Reader services ship in the system image. This is the documented
+        // residual risk: it is the same posture Android 13 and older already
+        // have, not a verified sender.
+        assertEquals(
+            ScannerBroadcastPolicy.SenderVerdict.ACCEPTED_UNATTRIBUTED_SYSTEM,
+            verdict(34, zebraAction, senderPackage = null, senderUid = systemUid),
+        )
+    }
+
+    @Test
+    fun `an unattributed broadcast from an ordinary app uid is rejected`() {
+        // The whole point of the uid fallback: an installed third-party app
+        // cannot hold a privileged uid, so it cannot slip through by simply
+        // failing to be attributed.
+        assertEquals(
+            ScannerBroadcastPolicy.SenderVerdict.REJECTED_UNATTRIBUTED,
+            verdict(34, zebraAction, senderPackage = null, senderUid = appUid),
+        )
+        assertEquals(
+            ScannerBroadcastPolicy.SenderVerdict.REJECTED_UNATTRIBUTED,
+            verdict(
+                34,
+                zebraAction,
+                senderPackage = null,
+                senderUid = appUid,
+                uidPackages = listOf("com.example.spoofer"),
+            ),
+        )
+    }
+
+    @Test
+    fun `a uid that resolves to another vendor cannot borrow this action`() {
+        assertEquals(
+            ScannerBroadcastPolicy.SenderVerdict.REJECTED_UNATTRIBUTED,
+            verdict(
+                34,
+                cipherLabAction,
+                senderPackage = null,
+                senderUid = appUid,
+                uidPackages = listOf("com.symbol.datawedge"),
+            ),
+        )
+    }
+
+    @Test
+    fun `privileged uid detection survives the per-user uid offset`() {
+        assertTrue(ScannerBroadcastPolicy.isPrivilegedUid(1000))
+        assertTrue(ScannerBroadcastPolicy.isPrivilegedUid(1000 + 100000))
+        assertFalse(ScannerBroadcastPolicy.isPrivilegedUid(appUid))
+        assertFalse(ScannerBroadcastPolicy.isPrivilegedUid(appUid + 100000))
+        assertFalse(ScannerBroadcastPolicy.isPrivilegedUid(-1))
     }
 
     @Test

@@ -25,7 +25,12 @@ A scan is **input**, not authorization. It may select a worker/order candidate. 
 Controls applied before a scan reaches Flutter:
 
 1. The receiver exists only while the activity is started **and** Flutter has an active scanner listener. The wedge handler is likewise attached only while a screen is listening, and steps aside entirely when a text field holds focus.
-2. On Android 14/API 34+, `BroadcastReceiver.getSentFromPackage()` must identify a reader-service package belonging to **the same vendor as the action received**. A package cannot borrow another vendor's action. A null or unrecognised sender is rejected.
+2. On Android 14/API 34+, sender identity is checked in three descending steps (`ScannerBroadcastPolicy.verifySender`). Whichever step answers first decides:
+   1. `BroadcastReceiver.getSentFromPackage()` names a package — it must belong to **the same vendor as the action received**. A package cannot borrow another vendor's action; a named-but-wrong package is rejected outright, with no fallback.
+   2. No package was named — `getSentFromUid()` is resolved through `PackageManager.getPackagesForUid()`, and one of those packages must be in the same vendor's allowlist.
+   3. Still nothing — the sending uid must be **privileged** (an OS-image uid, i.e. app id below 10000). An installed third-party app cannot hold one, so a spoofer cannot get in merely by being unattributed.
+
+   Steps 2 and 3 exist because the platform frequently declines to attribute these broadcasts on real hardware: a Zebra TC22 on Android 14 delivers DataWedge's output with `getSentFromPackage()` null, because DataWedge ships as a privileged system app. Requiring step 1 alone made the scanner unusable on the exact devices this app is deployed to. Step 3 is a genuine relaxation and is recorded under residual risk below.
 3. An action not present in `ScannerBroadcastPolicy.vendorBroadcasts` is rejected outright, on every Android version.
 4. Only the documented processed-value extras are read. The bridge deliberately does not fall back to raw/original decoder values, which would bypass the device-side configuration the site set.
 5. Barcode values must be `String`/`ByteArray`, are bounded to 4096 characters / 8192 bytes, and embedded NUL is rejected.
@@ -46,6 +51,8 @@ The pure native policy is covered by JVM unit tests in `ScannerBroadcastPolicyTe
 `BroadcastReceiver.getSentFromPackage()` was added in API 34. On Android 13/API 33 and older, the vendor broadcast contracts do not provide an equivalent trustworthy sender identity to a runtime receiver.
 
 Those devices remain **legacy sender-unverified**. Input validation, foreground-only registration, listener-scoped registration and backend authorization reduce impact, but they do not prove who emitted the broadcast.
+
+On Android 14+ the same gap reappears whenever the platform declines to attribute the sender and only step 3 (privileged uid) lets the broadcast through — observed in practice on a Zebra TC22, where DataWedge's broadcast arrives with no package attribution. A third-party app still cannot reach that path, but a compromised or malicious **system-image** component could. That is the same trust boundary Android 13 and older sit behind, and it is not closed by this app.
 
 The keyboard-wedge path is sender-unverified on **every** Android version, by the nature of keyboard input.
 
@@ -85,7 +92,11 @@ For a USB-connected PDA, native decision events can also be watched with
 `adb -s <device-serial> logcat -s CaslaScan:I`.
 
 - `BROADCAST_RECEIVED` -> `SENDER_UNAVAILABLE` / `SENDER_REJECTED` (see the
-  `sender=` package on that line): sender policy.
+  `sender=` and `uid=` fields on that line): sender policy turned it away.
+- `BROADCAST_RECEIVED` -> `SENDER_ACCEPTED_BY_UID`: the platform named no sender
+  package, and the broadcast was admitted on the uid instead (step 2 or 3
+  above). Expected on a Zebra TC22; the `sender=` field shows which packages
+  that uid resolved to, or `none` when it resolved to nothing.
 - `PAYLOAD_REJECTED`: none of the configured processed-data extras was usable.
 - `FORWARDED_TO_DART` -> `eventReceived`: native-to-Flutter delivery succeeded.
 - Android key counters rising without `wedgeBurst`: inspect keyboard delivery/focus.

@@ -15,6 +15,7 @@ internal object ScannerDiagnosticLog {
     enum class Event {
         RECEIVER_REGISTERED, RECEIVER_UNREGISTERED, LISTEN_START, LISTEN_STOP,
         BROADCAST_RECEIVED, UNKNOWN_ACTION, SENDER_UNAVAILABLE, SENDER_REJECTED,
+        SENDER_ACCEPTED_BY_UID,
         EXTRAS_MISSING, PAYLOAD_REJECTED, NO_DART_LISTENER, FORWARDED_TO_DART,
     }
     private val entries = java.util.ArrayDeque<String>()
@@ -26,10 +27,20 @@ internal object ScannerDiagnosticLog {
         detail.replace(detailPattern, "?").take(MAX_DETAIL_LENGTH)
 
     @Synchronized
-    fun record(event: Event, length: Int? = null, detail: String? = null): String {
-        val line = "${System.currentTimeMillis()} ${event.name}" +
-            (length?.let { " length=$it" } ?: "") +
-            (detail?.let { " sender=${sanitizeDetail(it)}" } ?: "")
+    fun record(
+        event: Event,
+        length: Int? = null,
+        detail: String? = null,
+        uid: Int? = null,
+    ): String {
+        val line = buildString {
+            append(System.currentTimeMillis())
+            append(' ')
+            append(event.name)
+            if (length != null) append(" length=").append(length)
+            if (uid != null && uid >= 0) append(" uid=").append(uid)
+            if (detail != null) append(" sender=").append(sanitizeDetail(detail))
+        }
         if (entries.size >= CAPACITY) entries.removeFirst()
         entries.addLast(line)
         return line
