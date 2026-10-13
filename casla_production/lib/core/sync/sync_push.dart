@@ -143,5 +143,10 @@ String _freshVerificationMessage(SyncFailure failure) {
       failure.code == 'SYNC_RECEIPT_DUPLICATE') {
     return 'SAP chưa xác nhận được giao dịch. Hãy xác minh lại công nhân để kiểm tra và gửi tiếp.';
   }
-  return 'Chưa gửi được giao dịch lên SAP. Hãy xác minh lại công nhân để thử tiếp.';
+  if (failure.code == 'OPERATION_QUANTITY_EXCEEDED') {
+    return failure.message;
+  }
+  // Preserve the mapped SAP business explanation for all other business
+  // failures instead of replacing it with a generic verification sentence.
+  return failure.message;
 }

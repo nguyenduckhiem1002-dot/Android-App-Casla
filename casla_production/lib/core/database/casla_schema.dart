@@ -9,7 +9,7 @@
 import 'package:sqflite/sqflite.dart';
 
 /// Bump on every schema change and add the matching step to [migrate].
-const int schemaVersion = 8;
+const int schemaVersion = 18;
 
 /// Tables holding transactions that must survive a restart until SAP confirms
 /// them. The retention policy in Spec 4.7 forbids clearing these.
@@ -47,10 +47,21 @@ const List<String> _workHistoryCacheStatements = [
     worker_name TEXT NOT NULL,
     production_order TEXT NOT NULL,
     operation TEXT NOT NULL,
+    operation_name TEXT,
+    product_name TEXT,
+    product_code TEXT,
+    sales_order TEXT,
+    sales_order_item TEXT,
     plant TEXT NOT NULL,
     work_center TEXT NOT NULL,
+    work_id TEXT,
+    work_date TEXT,
+    original_transaction_uuid TEXT,
+    position_id TEXT,
+    origin_position_id TEXT,
     transaction_type TEXT NOT NULL,
     quantity REAL NOT NULL,
+    defect_quantity REAL NOT NULL DEFAULT 0,
     unit_of_measure TEXT NOT NULL,
     transaction_status TEXT NOT NULL,
     PRIMARY KEY(cache_key, sequence_no)
@@ -65,9 +76,14 @@ const List<String> _workHistoryCacheStatements = [
     worker_name TEXT NOT NULL,
     assigned_quantity REAL NOT NULL,
     completed_quantity REAL NOT NULL,
+    defect_quantity REAL NOT NULL DEFAULT 0,
     remaining_quantity REAL NOT NULL,
     unit_of_measure TEXT NOT NULL,
     transaction_count INTEGER NOT NULL,
+    work_id TEXT,
+    work_name TEXT,
+    bo_phan TEXT,
+    location TEXT,
     PRIMARY KEY(cache_key, sequence_no)
   )
   ''',
@@ -122,7 +138,10 @@ const List<String> _createStatements = [
     operation TEXT,
     plant TEXT,
     work_center TEXT,
-    operation_qr_payload TEXT
+    operation_qr_payload TEXT,
+    operation_name TEXT,
+    sales_order TEXT,
+    sales_order_item TEXT
   )
   ''',
   // getOrderByCode resolves a scan against any of these identifiers.
@@ -148,8 +167,18 @@ const List<String> _createStatements = [
     shift_id TEXT NOT NULL,
     status TEXT NOT NULL,
     note TEXT,
+    -- Position the worker operates from for this assignment (v15). Sent to
+    -- SAP as PositionID; the machine is kept for display only, the ledger
+    -- does not store it.
+    position_id TEXT,
+    machine_id TEXT,
     created_by TEXT NOT NULL,
     occurred_at_utc INTEGER NOT NULL,
+    -- Moment of entry as SAP's EntryDate / EntryTime, in Vietnam time (v18).
+    -- Frozen here because a retry must repeat them to the second. NULL on a
+    -- row queued before v18: that one keeps sending ExecutedAt in UTC.
+    entry_date TEXT,
+    entry_time TEXT,
     device_id TEXT NOT NULL,
     sync_status TEXT NOT NULL,
     idempotency_key TEXT NOT NULL UNIQUE,
@@ -167,7 +196,8 @@ const List<String> _createStatements = [
   CREATE TABLE production_records (
     id TEXT PRIMARY KEY,
     phan_cong_id TEXT NOT NULL REFERENCES assignments(id),
-    quantity REAL NOT NULL CHECK(quantity > 0),
+    quantity REAL NOT NULL CHECK(quantity >= 0),
+    defect_quantity REAL NOT NULL DEFAULT 0 CHECK(defect_quantity >= 0),
     -- Frozen per transaction — see `assignments.unit_of_measure`.
     unit_of_measure TEXT,
     note TEXT,
@@ -175,12 +205,16 @@ const List<String> _createStatements = [
     shift_id TEXT NOT NULL,
     created_by TEXT NOT NULL,
     occurred_at_utc INTEGER NOT NULL,
+    -- See `assignments.entry_date`.
+    entry_date TEXT,
+    entry_time TEXT,
     device_id TEXT NOT NULL,
     sync_status TEXT NOT NULL,
     idempotency_key TEXT NOT NULL UNIQUE,
     sap_id TEXT,
     created_at_utc INTEGER NOT NULL,
-    synced_at_utc INTEGER
+    synced_at_utc INTEGER,
+    CHECK(quantity + defect_quantity > 0)
   )
   ''',
   'CREATE INDEX idx_prod_assignment_date ON production_records(phan_cong_id, business_date, shift_id)',
@@ -198,6 +232,9 @@ const List<String> _createStatements = [
     shift_id TEXT NOT NULL,
     created_by TEXT NOT NULL,
     occurred_at_utc INTEGER NOT NULL,
+    -- See `assignments.entry_date`.
+    entry_date TEXT,
+    entry_time TEXT,
     device_id TEXT NOT NULL,
     sync_status TEXT NOT NULL,
     idempotency_key TEXT NOT NULL UNIQUE,
@@ -289,7 +326,158 @@ const Map<int, Future<void> Function(Database)> _migrations = {
   5: _upgradeV5ToV6,
   6: _upgradeV6ToV7,
   7: _upgradeV7ToV8,
+  8: _upgradeV8ToV9,
+  9: _upgradeV9ToV10,
+  10: _upgradeV10ToV11,
+  11: _upgradeV11ToV12,
+  12: _upgradeV12ToV13,
+  13: _upgradeV13ToV14,
+  14: _upgradeV14ToV15,
+  15: _upgradeV15ToV16,
+  16: _upgradeV16ToV17,
+  17: _upgradeV17ToV18,
 };
+
+/// v18 — the moment of entry as SAP's EntryDate / EntryTime (Vietnam time),
+/// frozen on each transaction. Rows already queued keep both NULL and go on
+/// sending ExecutedAt in UTC: SAP compares a retry with the first attempt to
+/// the second, so their format must not change underneath them.
+Future<void> _upgradeV17ToV18(Database db) async {
+  for (final table in const [
+    'assignments',
+    'production_records',
+    'recall_records',
+  ]) {
+    await _addColumns(db, table, const ['entry_date', 'entry_time']);
+  }
+}
+
+/// v17 — keep the position SAP reports on each history transaction, so the
+/// assignment form can tell where a worker's work for the shift was given
+/// even from an offline cache hit.
+Future<void> _upgradeV16ToV17(Database db) async {
+  await _addColumns(db, 'work_history_cache_entries', const [
+    'position_id',
+    'origin_position_id',
+  ]);
+}
+
+/// v16 — store defective output independently from good completion while
+/// counting both against the assigned balance. Quantity may now be zero for
+/// defect-only confirmations, but the combined transaction must be positive.
+Future<void> _upgradeV15ToV16(Database db) async {
+  for (final table in const [
+    'work_history_cache_entries',
+    'work_history_cache_workers',
+  ]) {
+    final columns = (await db.rawQuery(
+      'PRAGMA table_info($table)',
+    )).map((column) => column['name']).toSet();
+    if (!columns.contains('defect_quantity')) {
+      await db.execute(
+        'ALTER TABLE $table ADD COLUMN defect_quantity REAL NOT NULL DEFAULT 0',
+      );
+    }
+  }
+  await db.execute('''
+    CREATE TABLE production_records_v16 (
+      id TEXT PRIMARY KEY,
+      phan_cong_id TEXT NOT NULL REFERENCES assignments(id),
+      quantity REAL NOT NULL CHECK(quantity >= 0),
+      defect_quantity REAL NOT NULL DEFAULT 0 CHECK(defect_quantity >= 0),
+      unit_of_measure TEXT,
+      note TEXT,
+      business_date TEXT NOT NULL,
+      shift_id TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      occurred_at_utc INTEGER NOT NULL,
+      device_id TEXT NOT NULL,
+      sync_status TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      sap_id TEXT,
+      created_at_utc INTEGER NOT NULL,
+      synced_at_utc INTEGER,
+      CHECK(quantity + defect_quantity > 0)
+    )
+  ''');
+  await db.execute('''
+    INSERT INTO production_records_v16 (
+      id, phan_cong_id, quantity, defect_quantity, unit_of_measure, note,
+      business_date, shift_id, created_by, occurred_at_utc, device_id,
+      sync_status, idempotency_key, sap_id, created_at_utc, synced_at_utc
+    )
+    SELECT id, phan_cong_id, quantity, 0, unit_of_measure, note,
+      business_date, shift_id, created_by, occurred_at_utc, device_id,
+      sync_status, idempotency_key, sap_id, created_at_utc, synced_at_utc
+    FROM production_records
+  ''');
+  await db.execute('DROP TABLE production_records');
+  await db.execute(
+    'ALTER TABLE production_records_v16 RENAME TO production_records',
+  );
+  await db.execute(
+    'CREATE INDEX idx_prod_assignment_date '
+    'ON production_records(phan_cong_id, business_date, shift_id)',
+  );
+}
+
+/// v15 — the position (and its machine) an assignment was made at. SAP's
+/// submitInitialAssign takes it as PositionID; it may be a temporary seat,
+/// so it is frozen on the transaction rather than read from the board later.
+Future<void> _upgradeV14ToV15(Database db) async {
+  await _addColumns(db, 'assignments', const ['position_id', 'machine_id']);
+}
+
+/// v14 — keep SAP's WorkDate (the shift's business date, which differs from
+/// the posting time on night shifts) and each row's OriginalTransactionUUID
+/// in the history cache. Without the lineage an offline cache hit cannot
+/// group carried-over work (REASSIGN) with its top-ups for confirmation.
+Future<void> _upgradeV13ToV14(Database db) async {
+  await _addColumns(db, 'work_history_cache_entries', const [
+    'work_date',
+    'original_transaction_uuid',
+  ]);
+}
+
+/// v9 — retain the operation name carried by production QR labels.
+Future<void> _upgradeV8ToV9(Database db) async {
+  await _addColumns(db, 'orders', const ['operation_name']);
+}
+
+/// v10 — retain descriptive product/operation fields in the history cache.
+Future<void> _upgradeV9ToV10(Database db) async {
+  await _addColumns(db, 'work_history_cache_entries', const [
+    'operation_name',
+    'product_name',
+    'product_code',
+  ]);
+}
+
+/// v11 — retain SalesOrder/SalesOrderItem carried by the history response.
+Future<void> _upgradeV10ToV11(Database db) async {
+  await _addColumns(db, 'work_history_cache_entries', const [
+    'sales_order',
+    'sales_order_item',
+  ]);
+}
+
+/// v12 — retain SalesOrder/SalesOrderItem carried by operation QR labels.
+Future<void> _upgradeV11ToV12(Database db) async {
+  await _addColumns(db, 'orders', const ['sales_order', 'sales_order_item']);
+}
+
+/// v13 — retain the SAP work context returned with history transactions and
+/// worker summaries. This keeps the location at posting time available after
+/// an offline cache hit.
+Future<void> _upgradeV12ToV13(Database db) async {
+  await _addColumns(db, 'work_history_cache_entries', const ['work_id']);
+  await _addColumns(db, 'work_history_cache_workers', const [
+    'work_id',
+    'work_name',
+    'bo_phan',
+    'location',
+  ]);
+}
 
 /// v2 — SAP live keys on `orders`.
 ///

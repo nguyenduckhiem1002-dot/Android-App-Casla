@@ -16,9 +16,7 @@ void main() {
     CaslaDatabase.resetForTesting();
     db = CaslaDatabase.instance;
     await db.ready;
-    for (final item in await db.watchSyncQueue().first) {
-      await db.deleteSyncQueueItem(item['id'] as String);
-    }
+    await db.clearSyncQueueForTesting();
   });
 
   Future<Map<String, dynamic>> queueProduction({

@@ -72,7 +72,7 @@ void main() {
                 workerPassword: 'test-only-password',
               )
             : await complete(before.remaining);
-        expect(rejected.state, MutationDeliveryState.rejected);
+        expect(rejected.state, MutationDeliveryState.discarded);
         final reopened = (await assignments.getAssignmentById(before.id))!;
         expect(reopened.canRecord, isTrue);
         expect(reopened.remaining, before.remaining);
@@ -86,16 +86,17 @@ void main() {
           gateway.requests.last.idempotencyKey,
           isNot(gateway.requests.first.idempotencyKey),
         );
+        // SAP answered with an error: rolled back, never parked on Đồng bộ.
         final rejectedSource = await db.getSyncSourceRow(
           recalled ? 'RECALL' : 'PRODUCTION',
           rejected.id,
         );
-        expect(rejectedSource!['sync_status'], 'FAILED');
+        expect(rejectedSource, isNull);
         expect(
           (await db.watchSyncQueue().first).any(
             (q) => q['entity_id'] == rejected.id,
           ),
-          isTrue,
+          isFalse,
         );
         await expectLater(complete(0.001), throwsA(isA<Exception>()));
       },

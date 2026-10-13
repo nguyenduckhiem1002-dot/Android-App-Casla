@@ -20,6 +20,13 @@ class SapConfigurationException implements Exception {
   String toString() => message;
 }
 
+class SapCsrfException implements Exception {
+  const SapCsrfException();
+
+  @override
+  String toString() => 'Không thể lấy mã bảo mật SAP. Vui lòng thử lại.';
+}
+
 class SapODataClient {
   final String baseUrl;
   final SapTransportAuthMode transportAuthMode;
@@ -255,6 +262,17 @@ class SapODataClient {
 
   String _getBasicAuthCredentials() {
     return base64Encode(utf8.encode('$_basicAuthUser:$_basicAuthPassword'));
+  }
+
+  /// Requires a fresh CSRF token before sending an authentication action.
+  Future<String> requireCsrfToken() async {
+    final token = await fetchCsrfToken();
+    if (token == null ||
+        token.trim().isEmpty ||
+        token.trim().toLowerCase() == 'fetch') {
+      throw const SapCsrfException();
+    }
+    return token;
   }
 
   /// Explicitly fetches fresh CSRF Token and Session Cookies from the backend.

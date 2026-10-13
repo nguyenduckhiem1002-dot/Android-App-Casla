@@ -20,6 +20,10 @@ abstract class AssignmentRepository {
   /// empty string) to write the assignment locally only; it is marked
   /// NEEDS_VERIFICATION until a supervisor supplies the password from the
   /// sync screen.
+  ///
+  /// [positionId] is where the worker operates for this assignment, possibly
+  /// a temporary seat; it travels to SAP as PositionID. [machineId] is only
+  /// kept locally for display.
   Future<MutationReceipt> createAssignment({
     required String workerId,
     required String orderId,
@@ -30,6 +34,8 @@ abstract class AssignmentRepository {
     String? note,
     required String createdBy,
     String? workerPassword,
+    String? positionId,
+    String? machineId,
   });
 
   Stream<List<Assignment>> watchWorkerAssignments(
@@ -55,11 +61,17 @@ abstract class ProductionRepository {
   Future<MutationReceipt> recordProduction({
     required String assignmentId,
     required double quantity,
+    double defectQuantity = 0,
     required String businessDate,
     required String shiftId,
     required String createdBy,
     String? note,
     String? workerPassword,
+
+    /// When supplied, the write is accepted only if the assignment's
+    /// remaining quantity is still this value at commit time. This is used by
+    /// the "Còn lại" entry mode to prevent saving against a stale preview.
+    double? expectedRemaining,
   });
 
   Future<double> getCompletedQuantity(String assignmentId);
@@ -86,13 +98,17 @@ abstract class RecallRepository {
 /// Read-only production history — `ZUI_PP_OPALLOC.getWorkHistory`.
 ///
 /// Scope (self vs. team) is decided entirely server-side from the account's
-/// RBAC functions; this repository never sends a worker id to filter by.
+/// RBAC functions; this repository never sends a worker id to filter by. A
+/// WorkID can be supplied to constrain results to one posting location.
 abstract class WorkHistoryRepository {
   Future<WorkHistoryResult> getWorkHistory({
     required HistoryRange range,
     DateTime? dateFrom,
     DateTime? dateTo,
     String? shiftId,
+    String? workId,
+    String? productionOrder,
+    String? operation,
     bool forceRefresh = false,
   });
 
@@ -103,5 +119,8 @@ abstract class WorkHistoryRepository {
     DateTime? dateFrom,
     DateTime? dateTo,
     String? shiftId,
+    String? workId,
+    String? productionOrder,
+    String? operation,
   });
 }

@@ -6,14 +6,18 @@ import '../../domain/entities/entities.dart';
 
 /// Keeps the SAP operation context visible wherever a supervisor writes data.
 /// The value is intentionally rendered from the selected [UserWorkContext]
-/// and [SapShift] objects, so the label can never imply a Plant/Work Center
-/// pair that was not returned by SAP.
+/// and [SapShift] objects, so the label can never imply a Xưởng (Work Center)
+/// / Bộ phận pair that was not returned by SAP.
 class ActiveShiftContextCard extends StatelessWidget {
   final UserWorkContext? workContext;
   final SapShift? shift;
   final DateTime businessDate;
   final VoidCallback? onEdit;
   final bool compact;
+
+  /// Uses one compact metadata line for forms where the card should leave
+  /// room for the scanned operation details below it.
+  final bool dense;
 
   const ActiveShiftContextCard({
     super.key,
@@ -22,6 +26,7 @@ class ActiveShiftContextCard extends StatelessWidget {
     required this.businessDate,
     this.onEdit,
     this.compact = false,
+    this.dense = false,
   });
 
   @override
@@ -33,15 +38,26 @@ class ActiveShiftContextCard extends StatelessWidget {
         '${businessDate.month.toString().padLeft(2, '0')}/'
         '${businessDate.year}';
     final hasSelection = work != null && selectedShift != null;
+    final workshop = work?.workCenterLabel ?? '';
+    final workshopLabel = workshop.isEmpty ? '' : 'Xưởng: $workshop';
+    final department = work?.departmentLabel ?? '';
+    final departmentLabel = department.isEmpty ? '' : 'Bộ phận: $department';
+    final details = [
+      if (workshopLabel.isNotEmpty) workshopLabel,
+      if (departmentLabel.isNotEmpty) departmentLabel,
+    ];
 
     return Semantics(
       container: true,
       label: hasSelection
           ? 'Ca đang làm ${selectedShift.shiftName}, ngày $dateLabel, '
-                'nhà máy ${work.plant}, work center ${work.workCenter}'
+                '${details.join(', ')}'
           : 'Chưa thiết lập ca làm việc',
       child: Container(
-        padding: EdgeInsets.all(compact ? 12 : 16),
+        padding: EdgeInsets.symmetric(
+          horizontal: dense ? 12 : (compact ? 12 : 16),
+          vertical: dense ? 9 : (compact ? 12 : 16),
+        ),
         decoration: BoxDecoration(
           color: hasSelection ? CaslaColors.surface : CaslaColors.pendingBg,
           borderRadius: BorderRadius.circular(16),
@@ -53,8 +69,8 @@ class ActiveShiftContextCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Container(
-              width: 36,
-              height: 36,
+              width: dense ? 32 : 36,
+              height: dense ? 32 : 36,
               decoration: BoxDecoration(
                 color: hasSelection
                     ? CaslaColors.primaryNavy
@@ -66,23 +82,25 @@ class ActiveShiftContextCard extends StatelessWidget {
                     ? Icons.schedule_outlined
                     : Icons.warning_amber_rounded,
                 color: Colors.white,
-                size: 20,
+                size: dense ? 18 : 20,
               ),
             ),
-            const SizedBox(width: 10),
+            SizedBox(width: dense ? 8 : 10),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    hasSelection ? 'Ca đang làm' : 'Chưa chọn ca làm việc',
-                    style: const TextStyle(
+                    hasSelection
+                        ? 'Ca đang làm · $dateLabel'
+                        : 'Chưa chọn ca làm việc',
+                    style: TextStyle(
                       color: CaslaColors.primaryNavy,
-                      fontSize: 12,
+                      fontSize: dense ? 11 : 12,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
-                  const SizedBox(height: 4),
+                  SizedBox(height: dense ? 2 : 4),
                   if (hasSelection) ...[
                     Text(
                       '${selectedShift.shiftName} · ${selectedShift.timeLabel}',
@@ -92,18 +110,30 @@ class ActiveShiftContextCard extends StatelessWidget {
                         fontWeight: FontWeight.w800,
                       ),
                     ),
-                    const SizedBox(height: 3),
-                    Text(
-                      'Nhà máy ${work.plant}\nWork Center ${work.workCenter}\n$dateLabel',
-                      style: const TextStyle(
-                        color: CaslaColors.muted,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
+                    SizedBox(height: dense ? 2 : 3),
+                    if (dense)
+                      Text(
+                        details.join(' · '),
+                        maxLines: 2,
+                        overflow: TextOverflow.clip,
+                        style: const TextStyle(
+                          color: CaslaColors.muted,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      )
+                    else
+                      Text(
+                        details.join('\n'),
+                        style: const TextStyle(
+                          color: CaslaColors.muted,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                    ),
                   ] else
                     const Text(
-                      'Thiết lập Nhà máy, Work Center và ca để tiếp tục.',
+                      'Thiết lập Xưởng, Bộ phận và ca để tiếp tục.',
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -117,8 +147,8 @@ class ActiveShiftContextCard extends StatelessWidget {
             ),
             if (onEdit != null)
               SizedBox(
-                width: compact ? 64 : 78,
-                height: 48,
+                width: dense ? 56 : (compact ? 64 : 78),
+                height: dense ? 40 : 48,
                 child: TextButton(
                   onPressed: onEdit,
                   style: TextButton.styleFrom(

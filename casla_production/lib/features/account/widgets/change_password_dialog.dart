@@ -7,6 +7,7 @@ import '../../../core/utils/device_info.dart';
 import '../../../data/sap/sap_auth_controller.dart';
 import '../../../data/sap/sap_odata_client.dart';
 import '../../../main.dart';
+import '../../../core/auth/remembered_login.dart';
 
 final passwordChangeControllerProvider = Provider<SapAuthController>((ref) {
   final client = SapODataClient(baseUrl: AppConfig.sapAuthServiceUrl);
@@ -91,6 +92,9 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
     });
 
     try {
+      final appState = widget.ref.read(appStateProvider);
+      final accountId = appState.currentSession?.id;
+      final loginMemory = widget.ref.read(rememberedLoginProvider);
       final finalToken =
           widget.ref.read(appStateProvider).currentSession?.accessToken ?? '';
 
@@ -110,6 +114,18 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
         newPassword: newPwd,
         deviceId: await DeviceInfoHelper.getDeviceId(),
       );
+
+      // Update only the account that opted into remembering credentials.
+      // Failure here cannot undo a password change already accepted by SAP.
+      if (accountId != null) {
+        try {
+          await loginMemory.updatePasswordForAccount(accountId, newPwd);
+        } catch (_) {
+          try {
+            await loginMemory.forget();
+          } catch (_) {}
+        }
+      }
 
       if (!mounted) return;
       FocusScope.of(context).unfocus();

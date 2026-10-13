@@ -1,4 +1,5 @@
-import 'dart:convert';
+import 'quantity_formatter.dart';
+import 'scanned_json.dart';
 
 /// The operation/product QR is untrusted input. Keep the original payload so
 /// the selected operation can be traced locally, while exposing only the
@@ -8,8 +9,12 @@ class OperationQrResult {
   final String rawPayload;
   final String productionOrder;
   final String operation;
+  final String operationName;
   final String productCode;
   final String productName;
+  final String salesOrder;
+  final String salesOrderItem;
+  final String boPhan;
   final String workCenter;
   final String plant;
   final String workCenterDescription;
@@ -23,8 +28,12 @@ class OperationQrResult {
     required this.rawPayload,
     required this.productionOrder,
     required this.operation,
+    this.operationName = '',
     required this.productCode,
     required this.productName,
+    this.salesOrder = '',
+    this.salesOrderItem = '',
+    this.boPhan = '',
     required this.workCenter,
     required this.plant,
     required this.workCenterDescription,
@@ -43,8 +52,12 @@ class OperationQrResult {
       rawPayload: rawPayload,
       productionOrder: '',
       operation: '',
+      operationName: '',
       productCode: '',
       productName: '',
+      salesOrder: '',
+      salesOrderItem: '',
+      boPhan: '',
       workCenter: '',
       plant: '',
       workCenterDescription: '',
@@ -68,16 +81,20 @@ class OperationQrParser {
     if (rawCode.length > maxInputCharacters || rawCode.contains('\u0000')) {
       return OperationQrResult.invalid(rawCode);
     }
-    final input = rawCode.trim();
+    final input = ScannedJson.normalizeText(rawCode.trim());
     if (input.isEmpty) return OperationQrResult.invalid(rawCode);
 
-    if (input.startsWith('{') && input.endsWith('}')) {
-      try {
-        final decoded = jsonDecode(input);
-        if (decoded is Map) return _fromFields(input, decoded);
-      } on FormatException {
-        return OperationQrResult.invalid(rawCode);
-      }
+    final json = ScannedJson.decodeObject(input);
+    if (json.fields != null) return _fromFields(input, json.fields!);
+    if (json.isDamaged && _looksLikeOperationJson(input)) {
+      // A reader that stopped mid-payload (a line break sent as Enter, a
+      // stalled keyboard wedge) leaves an unclosed object. Never salvage the
+      // fields that did arrive: a partial label could drop the work center or
+      // the quantity. Ask for a clean read instead.
+      return OperationQrResult.invalid(
+        rawCode,
+        'Mã QR công đoạn bị đọc thiếu hoặc sai định dạng. Hãy quét lại.',
+      );
     }
 
     final fields = <String, String>{};
@@ -106,8 +123,12 @@ class OperationQrParser {
         rawPayload: input,
         productionOrder: parts[0].trim(),
         operation: parts[1].trim(),
+        operationName: parts.length > 4 ? parts[4].trim() : '',
         productCode: parts.length > 2 ? parts[2].trim() : '',
         productName: parts.length > 3 ? parts[3].trim() : '',
+        salesOrder: '',
+        salesOrderItem: '',
+        boPhan: '',
         workCenter: '',
         plant: '',
         workCenterDescription: '',
@@ -120,26 +141,46 @@ class OperationQrParser {
     return OperationQrResult.invalid(rawCode);
   }
 
+  /// A damaged payload that still names an operation-label key.
+  static bool _looksLikeOperationJson(String input) {
+    final keys = RegExp(
+      r'"([^"\\]{1,48})"\s*:',
+    ).allMatches(input).map((match) => _normalizeKey(match.group(1)!));
+    const operationKeys = {
+      'productionorder',
+      'manufacturingorder',
+      'lenhsx',
+      'lenhsanxuat',
+      'operation',
+      'congdoan',
+      'slcongdoan',
+      'tencongdoan',
+    };
+    return keys.any(operationKeys.contains);
+  }
+
   static OperationQrResult _fromFields(String raw, Map fields) {
     final normalized = <String, dynamic>{};
     for (final entry in fields.entries) {
       normalized[_normalizeKey(entry.key.toString())] = entry.value;
     }
 
-    final productionOrder = _firstValue(normalized, const [
+    // A label that printed these as JSON numbers lost their leading zeros;
+    // SAP keys are fixed-width (AUFNR 12, VORNR 4), so restore them.
+    final productionOrder = _sapKey(normalized, const [
       'productionorder',
       'manufacturingorder',
       'lenhsx',
       'lenhsanxuat',
       'lệnhsảnxuất',
-    ]);
-    final operation = _firstValue(normalized, const [
+    ], width: 12);
+    final operation = _sapKey(normalized, const [
       'operation',
       'operationno',
       'congdoan',
       'congdoanlenhsx',
       'côngđoạn',
-    ]);
+    ], width: 4);
     if (productionOrder.isEmpty || operation.isEmpty) {
       return OperationQrResult.invalid(raw);
     }
@@ -170,6 +211,12 @@ class OperationQrParser {
       rawPayload: raw,
       productionOrder: productionOrder,
       operation: operation,
+      operationName: _firstValue(normalized, const [
+        'operationname',
+        'operationdescription',
+        'tencongdoan',
+        'motacongdoan',
+      ]),
       productCode: _firstValue(normalized, const [
         'productcode',
         'materialcode',
@@ -181,6 +228,22 @@ class OperationQrParser {
         'productname',
         'tenhang',
         'tensp',
+      ]),
+      salesOrder: _firstValue(normalized, const [
+        'salesorder',
+        'salesorderid',
+        'so',
+      ]),
+      salesOrderItem: _firstValue(normalized, const [
+        'salesorderitem',
+        'salesorderitemid',
+        'soitem',
+      ]),
+      boPhan: _firstValue(normalized, const [
+        'bophan',
+        'department',
+        'departmentname',
+        'tenbophan',
       ]),
       workCenter: _firstValue(normalized, const [
         'workcenter',
@@ -285,6 +348,20 @@ class OperationQrParser {
     return value.replaceAll(RegExp(r'[^a-z0-9]'), '');
   }
 
+  static String _sapKey(
+    Map<String, dynamic> fields,
+    List<String> keys, {
+    required int width,
+  }) {
+    for (final key in keys) {
+      final value = fields[_normalizeKey(key)];
+      if (value is int && value >= 0) {
+        return value.toString().padLeft(width, '0');
+      }
+    }
+    return _firstValue(fields, keys);
+  }
+
   static String _firstValue(Map<String, dynamic> fields, List<String> keys) {
     for (final key in keys) {
       final value = fields[_normalizeKey(key)]?.toString().trim() ?? '';
@@ -295,14 +372,6 @@ class OperationQrParser {
 
   static double? _parseQuantity(String raw) {
     if (raw.isEmpty) return null;
-    final match = RegExp(r'-?[\d.,]+').firstMatch(raw);
-    if (match == null) return null;
-    var value = match.group(0)!;
-    if (value.contains(',') && value.contains('.')) {
-      value = value.replaceAll('.', '').replaceFirst(',', '.');
-    } else if (value.contains(',')) {
-      value = value.replaceFirst(',', '.');
-    }
-    return double.tryParse(value);
+    return parseLocalizedQuantity(raw);
   }
 }

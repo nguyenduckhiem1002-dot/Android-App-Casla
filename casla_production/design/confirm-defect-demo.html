@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Demo · Xác nhận sản lượng có số lỗi</title>
+  <style>
+    :root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color:#18294d;background:#e9edf2;--navy:#152650;--gold:#d6ad48;--line:#dfe5ed;--muted:#64728b;--danger:#bd3d43;--success:#2e7049}
+    *{box-sizing:border-box}button,input{font:inherit}button{cursor:pointer}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:22px}
+    .phone{position:relative;width:min(390px,100%);height:min(844px,calc(100vh - 44px));min-height:600px;overflow:hidden;background:#f3f5f8;border:1px solid #cbd2dd;border-radius:27px;box-shadow:0 25px 65px #20365b30}
+    .appbar{height:78px;background:var(--navy);color:#fff;padding:15px 20px}.appbar strong{display:block;font-size:18px}.appbar span{display:block;margin-top:5px;color:#cbd6e9;font-size:12px}
+    .behind{padding:18px}.behind .card{background:#fff;border:1px solid var(--line);border-radius:15px;padding:18px;color:#758099}.behind b{display:block;margin:5px 0;color:#203457}.behind p{font-size:12px;margin:0}
+    .scrim{position:absolute;inset:0;background:#101d3480}.sheet{position:absolute;left:0;right:0;bottom:0;max-height:92%;display:flex;flex-direction:column;background:#f8f9fb;border-radius:23px 23px 0 0;box-shadow:0 -10px 34px #15265025}
+    .handle{width:39px;height:4px;background:#bdc5d0;border-radius:8px;margin:10px auto 4px}.sheet-head{display:flex;align-items:center;justify-content:space-between;padding:8px 19px 14px;border-bottom:1px solid var(--line)}.sheet-head h1{font-size:18px;letter-spacing:-.025em;margin:0}.sheet-head p{font-size:11px;color:var(--muted);margin:4px 0 0}.close{width:32px;height:32px;border:0;border-radius:50%;background:#e9edf2;color:var(--navy);font-size:22px;line-height:1}
+    .sheet-body{padding:15px 16px 10px;overflow:auto}.available{display:flex;align-items:center;justify-content:space-between;padding:13px 15px;background:#eaf1fa;border-radius:12px;margin-bottom:14px}.available span{color:#52647d;font-size:12px;font-weight:650}.available strong{font-size:20px;color:var(--navy)}
+    .segmented{display:grid;grid-template-columns:1fr 1fr;background:#e8edf3;border-radius:11px;padding:4px;gap:4px}.segmented button{border:0;border-radius:8px;background:transparent;color:#596a83;font-size:12px;font-weight:750;padding:10px 5px}.segmented button.active{background:#fff;color:var(--navy);box-shadow:0 2px 7px #10254d16}
+    .field-label{display:block;margin:14px 0 6px;font-size:12px;font-weight:800}.number-wrap{display:flex;align-items:center;background:#fff;border:1.5px solid #b9c7d9;border-radius:11px;padding:0 12px}.number-wrap:focus-within{border-color:var(--navy);box-shadow:0 0 0 3px #15265018}.number-wrap input{width:100%;min-width:0;border:0;outline:0;background:transparent;text-align:right;padding:12px 5px;font-size:24px;font-weight:850;color:var(--navy);font-variant-numeric:tabular-nums}.number-wrap span{font-size:12px;font-weight:800;color:#667590}.field-help{font-size:11px;color:var(--muted);margin:6px 0 0;line-height:1.35}.progress{height:6px;background:#e1e7ed;border-radius:6px;margin:16px 0 7px;overflow:hidden}.progress span{display:block;height:100%;width:0;background:#4c9d6b;border-radius:6px}.progress-note{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:13px}
+    .toggle-card{border:1px solid var(--line);border-radius:12px;background:#fff;overflow:hidden;margin:10px 0}.toggle-card.enabled{border-color:#d6b765}.toggle-row{display:flex;align-items:center;gap:10px;min-height:55px;padding:9px 12px;cursor:pointer;background:#fff}.toggle-card.enabled .toggle-row{background:#fff9e8}.toggle-row input{width:19px;height:19px;accent-color:#99721f;margin:0}.toggle-text{flex:1}.toggle-text strong{display:block;font-size:13px}.toggle-text small{display:block;margin-top:2px;font-size:11px;color:var(--muted)}.chevron{font-size:18px;color:#7a8799}.toggle-body{padding:12px;border-top:1px solid var(--line)}.toggle-body .field-label{margin:0 0 6px}.toggle-body .number-wrap input{font-size:21px}.toggle-body[hidden]{display:none}
+    .summary{background:#edf1f5;border-radius:12px;padding:11px 13px;margin-top:13px}.summary-row{display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:5px 0}.summary-row span{color:#526079}.summary-row b{font-variant-numeric:tabular-nums}.summary-row.total{border-top:1px solid #d4dce6;margin-top:5px;padding-top:10px;font-size:13px}.summary-row.total b{color:var(--navy)}.summary-row[hidden]{display:none}
+    .error{min-height:17px;color:var(--danger);font-size:11px;font-weight:700;margin-top:7px}.sheet-foot{padding:10px 16px 18px;background:#fff;border-top:1px solid var(--line)}.submit{width:100%;border:0;border-radius:11px;background:var(--navy);color:#fff;padding:13px;font-size:14px;font-weight:800}.submit:disabled{background:#aeb9c7;cursor:not-allowed}.note{font-size:10px;text-align:center;color:var(--muted);margin:8px 0 0}
+    .toast{position:absolute;left:20px;right:20px;top:89px;background:#e7f4eb;border:1px solid #98c8a6;color:#215f38;border-radius:10px;padding:11px 13px;font-size:12px;font-weight:750;box-shadow:0 8px 18px #14284d20}.toast[hidden]{display:none}
+    @media(max-width:430px){body{padding:0;background:#f3f5f8}.phone{width:100vw;height:100dvh;min-height:0;border:0;border-radius:0;box-shadow:none}.sheet{max-height:94%}}
+  </style>
+</head>
+<body>
+  <main class="phone" aria-label="Demo màn xác nhận sản lượng">
+    <header class="appbar"><strong>Chi tiết phân công</strong><span>Lại Thị Dung · CL400098</span></header>
+    <div class="behind"><div class="card"><small>May thân · LSX 010140000032</small><b>Còn 700 ST</b><p>Xác nhận hoàn thành</p></div></div>
+    <div class="scrim" aria-hidden="true"></div>
+    <section class="sheet" aria-labelledby="sheet-title">
+      <div class="handle"></div>
+      <header class="sheet-head"><div><h1 id="sheet-title">Xác nhận sản lượng</h1><p>May thân · Lại Thị Dung</p></div><button class="close" type="button" aria-label="Đóng demo" id="closeButton">×</button></header>
+      <div class="sheet-body">
+        <div class="available"><span>Có thể xác nhận</span><strong>700 ST</strong></div>
+        <div class="segmented" role="group" aria-label="Cách nhập số lượng"><button type="button" class="active" id="modeGood">Nhập số hoàn thành</button><button type="button" id="modeRemaining">Nhập số còn lại</button></div>
+        <label class="field-label" for="mainInput" id="mainLabel">Số lượng đạt</label>
+        <div class="number-wrap"><input id="mainInput" type="number" min="0" max="700" step="1" value="200" inputmode="decimal"><span>ST</span></div>
+        <p class="field-help" id="mainHelp">Số sản phẩm đạt trong lần xác nhận này.</p>
+        <div class="progress"><span id="progressFill"></span></div><div class="progress-note"><span id="usedHint">Đã làm 200 ST</span><span id="remainingHint">Còn 500 ST</span></div>
+
+        <div class="toggle-card" id="defectCard"><label class="toggle-row" for="defectToggle"><input id="defectToggle" type="checkbox"><span class="toggle-text"><strong>Có sản phẩm lỗi</strong><small>Tích để nhập số lượng lỗi</small></span><span class="chevron" aria-hidden="true">⌄</span></label><div class="toggle-body" id="defectBody" hidden><label class="field-label" for="defectInput">Số lượng lỗi</label><div class="number-wrap"><input id="defectInput" type="number" min="0" max="700" step="1" value="0" inputmode="decimal"><span>ST</span></div><p class="field-help">Số lỗi được ghi riêng; cùng đơn vị với số đạt.</p></div></div>
+        <div class="toggle-card" id="recallCard"><label class="toggle-row" for="recallToggle"><input id="recallToggle" type="checkbox"><span class="toggle-text"><strong>Có thu hồi</strong><small>Tích để nhập số lượng thu hồi</small></span><span class="chevron" aria-hidden="true">⌄</span></label><div class="toggle-body" id="recallBody" hidden><label class="field-label" for="recallInput">Số thu hồi</label><div class="number-wrap"><input id="recallInput" type="number" min="0" max="700" step="1" value="0" inputmode="decimal"><span>ST</span></div><p class="field-help">Tự điền số còn lại. Có thể sửa số lượng cần thu hồi.</p></div></div>
+
+        <div class="summary" aria-label="Tóm tắt xác nhận"><div class="summary-row"><span>Số lượng đạt</span><b id="goodSummary">200 ST</b></div><div class="summary-row" id="defectSummaryRow" hidden><span>Số lượng lỗi</span><b id="defectSummary">0 ST</b></div><div class="summary-row total"><span>Tổng đã làm</span><b id="totalSummary">200 ST</b></div><div class="summary-row"><span>Còn lại sau xác nhận</span><b id="remainingSummary">500 ST</b></div><div class="summary-row" id="recallSummaryRow" hidden><span>Thu hồi lượt này</span><b id="recallSummary">0 ST</b></div></div>
+        <div class="error" id="errorMessage" role="status" aria-live="polite"></div>
+      </div>
+      <footer class="sheet-foot"><button class="submit" id="submitButton" type="button">Xác nhận</button><p class="note">Demo giao diện · chưa gửi dữ liệu lên SAP</p></footer>
+    </section>
+    <div class="toast" id="toast" hidden>Demo hợp lệ: Số đạt và Số lỗi sẽ được gửi riêng.</div>
+  </main>
+  <script>
+    const available=700;
+    const byId=id=>document.getElementById(id);
+    const ui={main:byId('mainInput'),goodMode:byId('modeGood'),remainingMode:byId('modeRemaining'),defectToggle:byId('defectToggle'),defectInput:byId('defectInput'),defectCard:byId('defectCard'),defectBody:byId('defectBody'),recallToggle:byId('recallToggle'),recallInput:byId('recallInput'),recallCard:byId('recallCard'),recallBody:byId('recallBody'),error:byId('errorMessage'),submit:byId('submitButton')};
+    let mode='good';let recallAutomatic=true;let toastTimer;
+    const number=value=>value.trim()===''?NaN:Number(value);
+    const fmt=value=>Number.isFinite(value)?new Intl.NumberFormat('vi-VN',{maximumFractionDigits:3}).format(value):'—';
+    function read(){const main=number(ui.main.value),defect=ui.defectToggle.checked?number(ui.defectInput.value):0;const good=mode==='good'?main:available-main-defect;const remaining=mode==='good'?available-good-defect:main;const recall=ui.recallToggle.checked?number(ui.recallInput.value):0;return{main,good,defect,remaining,recall,total:good+defect}}
+    function render(){ui.defectCard.classList.toggle('enabled',ui.defectToggle.checked);ui.defectBody.hidden=!ui.defectToggle.checked;ui.recallCard.classList.toggle('enabled',ui.recallToggle.checked);ui.recallBody.hidden=!ui.recallToggle.checked;byId('defectSummaryRow').hidden=!ui.defectToggle.checked;byId('recallSummaryRow').hidden=!ui.recallToggle.checked;ui.goodMode.classList.toggle('active',mode==='good');ui.remainingMode.classList.toggle('active',mode==='remaining');byId('mainLabel').textContent=mode==='good'?'Số lượng đạt':'Số còn lại sau xác nhận';byId('mainHelp').textContent=mode==='good'?'Số sản phẩm đạt trong lần xác nhận này.':'Số đạt sẽ tự tính sau khi trừ số còn lại và số lỗi.';
+      let data=read();if(ui.recallToggle.checked&&recallAutomatic&&Number.isFinite(data.remaining)){ui.recallInput.value=String(Math.max(0,data.remaining));data=read()}
+      let error='';if(!Number.isFinite(data.main)||data.main<0||data.main>available)error='Nhập số từ 0 đến 700 ST.';else if(!Number.isFinite(data.defect)||data.defect<0)error='Số lượng lỗi phải từ 0 trở lên.';else if(data.good<0||data.remaining<0||data.total>available)error='Số đạt + số lỗi không được vượt 700 ST.';else if(data.total<=0)error='Cần nhập ít nhất một sản phẩm đạt hoặc lỗi.';else if(ui.recallToggle.checked&&(!Number.isFinite(data.recall)||data.recall<0||data.recall>data.remaining))error='Số thu hồi không được vượt số còn lại sau xác nhận.';
+      ui.error.textContent=error;ui.submit.disabled=!!error;byId('goodSummary').textContent=fmt(data.good)+' ST';byId('defectSummary').textContent=fmt(data.defect)+' ST';byId('totalSummary').textContent=fmt(data.total)+' ST';byId('remainingSummary').textContent=fmt(data.remaining)+' ST';byId('recallSummary').textContent=fmt(data.recall)+' ST';byId('usedHint').textContent='Đã làm '+fmt(data.total)+' ST';byId('remainingHint').textContent='Còn '+fmt(data.remaining)+' ST';byId('progressFill').style.width=Math.max(0,Math.min(100,data.total/available*100))+'%';return data}
+    ui.goodMode.addEventListener('click',()=>{if(mode==='good')return;const current=read();mode='good';ui.main.value=Number.isFinite(current.good)?String(Math.max(0,current.good)):'0';render()});ui.remainingMode.addEventListener('click',()=>{if(mode==='remaining')return;const current=read();mode='remaining';ui.main.value=Number.isFinite(current.remaining)?String(Math.max(0,current.remaining)):'0';render()});
+    ui.main.addEventListener('input',render);ui.defectToggle.addEventListener('change',()=>{if(!ui.defectToggle.checked)ui.defectInput.value='0';render()});ui.defectInput.addEventListener('input',render);ui.recallToggle.addEventListener('change',()=>{recallAutomatic=true;if(!ui.recallToggle.checked)ui.recallInput.value='0';render()});ui.recallInput.addEventListener('input',()=>{recallAutomatic=false;render()});
+    ui.submit.addEventListener('click',()=>{if(ui.submit.disabled)return;const data=render();const toast=byId('toast');toast.textContent=`Demo: Quantity = ${fmt(data.good)} ST · DefectQuantity = ${fmt(data.defect)} ST${ui.recallToggle.checked?` · Thu hồi = ${fmt(data.recall)} ST`:''}`;toast.hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>toast.hidden=true,4500)});
+    byId('closeButton').addEventListener('click',()=>{const toast=byId('toast');toast.textContent='Đây là demo HTML. Chưa có dữ liệu nào được gửi.';toast.hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>toast.hidden=true,3000)});
+    render();
+  </script>
+</body>
+</html>

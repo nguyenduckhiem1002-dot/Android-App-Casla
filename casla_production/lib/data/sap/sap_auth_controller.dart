@@ -22,6 +22,18 @@ import 'sap_odata_client.dart';
 const String _kNamespace = 'com.sap.gateway.srvd_a2x.zui_mob_auth.v0001';
 const String _kEntitySet = 'MobileAuthentication';
 
+const Map<String, String> _authBusinessMessages = {
+  'AUTH_FAILED': 'Không thể xác thực yêu cầu. Vui lòng đăng nhập lại.',
+  'EMPTY_TOKEN': 'Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại.',
+  'TOKEN_INVALID_OR_EXPIRED':
+      'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.',
+  'DEVICE_MISMATCH':
+      'Token không thuộc thiết bị này. Vui lòng đăng nhập lại trên thiết bị này.',
+  'PASSWORD_CHANGE_REQUIRED': 'Tài khoản cần đổi mật khẩu trước khi tiếp tục.',
+  'USER_INACTIVE': 'Tài khoản đã bị vô hiệu hoá trên SAP.',
+  'WORKER_AUTH_FAILED': 'Mật khẩu xác nhận của công nhân không đúng.',
+};
+
 /// One `ZA_MOB_Permission` row from a login/refresh result.
 ///
 /// `FuncID` is a display hint only — the spec is explicit that every
@@ -46,11 +58,14 @@ class SapPermission {
 }
 
 /// One `ZA_MOB_WorkContext` row — a Plant + WorkCenter the account may act in.
+/// `PlantName` is optional for compatibility with older login responses.
 class SapWorkContext {
   final String workId;
   final String workName;
   final String plant;
+  final String plantName;
   final String workCenter;
+  final String workCenterName;
   final String boPhan;
   final String location;
 
@@ -58,7 +73,9 @@ class SapWorkContext {
     required this.workId,
     required this.workName,
     required this.plant,
+    this.plantName = '',
     required this.workCenter,
+    this.workCenterName = '',
     required this.boPhan,
     required this.location,
   });
@@ -67,7 +84,16 @@ class SapWorkContext {
     workId: (json['WorkID'] ?? '').toString(),
     workName: (json['WorkName'] ?? '').toString(),
     plant: (json['Plant'] ?? '').toString(),
+    plantName:
+        (json['PlantName'] ??
+                json['plantName'] ??
+                json['Plant Name'] ??
+                json['Plant_Name'] ??
+                '')
+            .toString(),
     workCenter: (json['WorkCenter'] ?? '').toString(),
+    workCenterName: (json['WorkCenterName'] ?? json['WorkCenterText'] ?? '')
+        .toString(),
     boPhan: (json['BoPhan'] ?? '').toString(),
     location: (json['Location'] ?? '').toString(),
   );
@@ -160,7 +186,7 @@ class SapAuthController {
     required String password,
     required String deviceId,
   }) async {
-    await client.fetchCsrfToken();
+    await client.requireCsrfToken();
     try {
       final response = await client.dio.post(
         _actionPath('login').toString(),
@@ -187,7 +213,7 @@ class SapAuthController {
     required String refreshToken,
     required String deviceId,
   }) async {
-    await client.fetchCsrfToken();
+    await client.requireCsrfToken();
     try {
       final response = await client.dio.post(
         _actionPath('refresh').toString(),
@@ -227,7 +253,7 @@ class SapAuthController {
     required String deviceId,
   }) async {
     try {
-      await client.fetchCsrfToken();
+      await client.requireCsrfToken();
       await client.dio.post(
         _actionPath('logout').toString(),
         data: {'AccessToken': accessToken, 'DeviceID': deviceId},
@@ -247,7 +273,7 @@ class SapAuthController {
     required String newPassword,
     required String deviceId,
   }) async {
-    await client.fetchCsrfToken();
+    await client.requireCsrfToken();
     try {
       await client.dio.post(
         _actionPath('changePassword').toString(),
@@ -274,6 +300,6 @@ class SapAuthController {
     // These codes are already short, human-readable Vietnamese text set by the
     // ABAP handler (e.g. 'Refresh token không hợp lệ hoặc hết hạn') — unlike
     // ZUI_PP_OPALLOC's machine codes, there is nothing to translate here.
-    return code;
+    return _authBusinessMessages[code] ?? code;
   }
 }

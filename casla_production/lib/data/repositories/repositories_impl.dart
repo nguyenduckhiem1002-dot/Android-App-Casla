@@ -14,6 +14,7 @@ import '../../core/sync/sync_push.dart';
 import '../../core/sync/verified_sync_coordinator.dart';
 import '../../core/utils/id_generator.dart';
 import '../../core/utils/device_info.dart';
+import '../../core/utils/sap_entry_time.dart';
 import 'package:flutter/foundation.dart';
 import '../../domain/entities/entities.dart';
 import '../../domain/entities/enums.dart';
@@ -174,7 +175,9 @@ class AuthRepositoryImpl implements AuthRepository {
           workId: work.workId,
           workName: work.workName,
           plant: work.plant,
+          plantName: work.plantName,
           workCenter: work.workCenter,
+          workCenterName: work.workCenterName,
           boPhan: work.boPhan,
           location: work.location,
         ),
@@ -199,20 +202,20 @@ class AuthRepositoryImpl implements AuthRepository {
 
   @override
   Future<void> logout({String? accessToken}) async {
+    if (accessToken == null || accessToken.isEmpty) return;
+
+    // AppState clears the shared login client before starting this best-effort
+    // revoke. Keep the revoke completely isolated: resetting the shared
+    // client here after a new login has started would invalidate that login's
+    // in-flight CSRF fetch and make the next POST fail without a token.
+    final logoutClient = SapODataClient(baseUrl: AppConfig.sapAuthServiceUrl);
     try {
-      if (accessToken != null && accessToken.isNotEmpty) {
-        // A new instance has no shared CSRF/cookie jar with a login or refresh
-        // already in progress. Its `finally` still clears its own state.
-        final logoutClient = SapODataClient(
-          baseUrl: AppConfig.sapAuthServiceUrl,
-        );
-        await SapAuthController(logoutClient).logout(
-          accessToken: accessToken,
-          deviceId: await DeviceInfoHelper.getDeviceId(),
-        );
-      }
+      await SapAuthController(logoutClient).logout(
+        accessToken: accessToken,
+        deviceId: await DeviceInfoHelper.getDeviceId(),
+      );
     } finally {
-      resetTransportSession();
+      logoutClient.dio.close(force: true);
     }
   }
 
@@ -232,6 +235,7 @@ class AuthRepositoryImpl implements AuthRepository {
   static const _funcInitialAssign = 'PP_INITIAL_ASSIGN';
   static const _funcHistSelf = 'PP_HIST_SELF';
   static const _funcHistTeam = 'PP_HIST_TEAM';
+  static const _funcPositionManage = 'PP_POS_MANAGE';
 
   /// Granted to every supervisor session.
   ///
@@ -285,7 +289,13 @@ class AuthRepositoryImpl implements AuthRepository {
       }
       return (
         role: UserRole.supervisor,
-        permissions: {...historyPermissions, ..._supervisorPermissions},
+        permissions: {
+          ...historyPermissions,
+          ..._supervisorPermissions,
+          // Only a supervisor gets the Vị trí tab; SAP re-checks the function
+          // and its Work Center scope on every position call.
+          if (funcIds.contains(_funcPositionManage)) Permission.managePositions,
+        },
         workContexts: workContexts,
       );
     }
@@ -303,6 +313,11 @@ class AuthRepositoryImpl implements AuthRepository {
 }
 
 // ─── Assignment Repository ──────────────────────────────────────────
+String? _blankToNull(String? value) {
+  final trimmed = value?.trim().toUpperCase() ?? '';
+  return trimmed.isEmpty ? null : trimmed;
+}
+
 class AssignmentRepositoryImpl implements AssignmentRepository {
   final CaslaDatabase db;
   final SapWriteGateway gateway;
@@ -320,6 +335,8 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
     String? note,
     required String createdBy,
     String? workerPassword,
+    String? positionId,
+    String? machineId,
   }) async {
     // Round to SAP's scale once, here, so the row we store locally and the
     // payload the gateway formats can never disagree. `quan(15,3)` is what
@@ -332,6 +349,7 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
     final id = IdGenerator.newId();
     final idempotencyKey = IdGenerator.newIdempotencyKey();
     final now = DateTime.now().millisecondsSinceEpoch;
+    final enteredAt = SapEntryTime.fromEpochMillis(now);
 
     // Freeze the unit now. `orders.uom` is rewritten by the next operation QR
     // scan, and this transaction may not reach SAP until long after that.
@@ -350,8 +368,12 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
       'shift_id': shiftId,
       'status': 'OPEN',
       'note': note,
+      'position_id': _blankToNull(positionId),
+      'machine_id': _blankToNull(machineId),
       'created_by': createdBy,
       'occurred_at_utc': now,
+      'entry_date': enteredAt.date,
+      'entry_time': enteredAt.time,
       'device_id': DeviceInfoHelper.deviceId,
       'sync_status': 'PENDING',
       'idempotency_key': idempotencyKey,
@@ -405,7 +427,7 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
       workerPassword: workerPassword,
     );
 
-    return _mutationReceipt(id, failure);
+    return _liveMutationReceipt(db, id, queueItem, failure);
   }
 
   @override
@@ -487,6 +509,7 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
       final assignmentId = entity['id'] as String;
 
       final completed = (entity['completed_quantity'] as num).toDouble();
+      final defect = (entity['defect_quantity'] as num).toDouble();
       final recalled = (entity['recalled_quantity'] as num).toDouble();
 
       result.add(
@@ -498,6 +521,12 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
           teamId: entity['to_id'] as String,
           orderId: orderId,
           orderCode: entity['order_code'] as String? ?? orderId,
+          productionOrder:
+              entity['order_production_order'] as String? ??
+              entity['order_code'] as String? ??
+              '',
+          operation: entity['order_operation'] as String? ?? '',
+          operationName: entity['order_operation_name'] as String? ?? '',
           productCode: entity['product_code'] as String? ?? 'SP',
           productName: entity['product_name'] as String? ?? 'Sản phẩm',
           plant: entity['order_plant'] as String? ?? '',
@@ -505,6 +534,7 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
           uom: entity['display_uom'] as String? ?? 'cái',
           assignedQuantity: entity['assigned_quantity'] as double,
           completedQuantity: completed,
+          defectQuantity: defect,
           recalledQuantity: recalled,
           businessDate: entity['business_date'] as String,
           shiftId: entity['shift_id'] as String,
@@ -517,7 +547,9 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
           note: entity['note'] as String?,
           createdBy: entity['created_by'] as String,
           idempotencyKey: entity['idempotency_key'] as String,
+          sapId: entity['sap_id']?.toString() ?? '',
           syncStatus: SyncStatus.fromStorage(entity['sync_status']),
+          createdAtUtc: (entity['created_at_utc'] as num?)?.toInt() ?? 0,
         ),
       );
     }
@@ -541,11 +573,13 @@ class ProductionRepositoryImpl implements ProductionRepository {
   Future<MutationReceipt> recordProduction({
     required String assignmentId,
     required double quantity,
+    double defectQuantity = 0,
     required String businessDate,
     required String shiftId,
     required String createdBy,
     String? note,
     String? workerPassword,
+    double? expectedRemaining,
   }) async {
     final assignment = await db.getAssignmentById(assignmentId);
     if (assignment == null) throw Exception('Phân công không tồn tại');
@@ -556,38 +590,57 @@ class ProductionRepositoryImpl implements ProductionRepository {
     }
 
     final completed = await db.getCompletedQuantity(assignmentId);
+    final defect = await db.getDefectQuantity(assignmentId);
     final recalled = await db.getRecalledQuantity(assignmentId);
     final assignedQty = assignment['assigned_quantity'] as double;
     final effective = ProductionMath.calculateEffectiveAssigned(
       assignedQty,
       recalled,
     );
-    final remaining = ProductionMath.calculateRemaining(effective, completed);
-
-    // Same single rounding point as createAssignment: validate, store and send
-    // the one value SAP can actually hold.
-    final scaledQuantity = ProductionMath.toSapScale(quantity);
-    final validationErr = ProductionMath.validateProductionEntry(
-      scaledQuantity,
-      remaining,
+    final remaining = ProductionMath.calculateRemaining(
+      effective,
+      completed + defect,
     );
-    if (validationErr != null) throw Exception(validationErr);
+
+    if (expectedRemaining != null &&
+        ProductionMath.toSapScale(expectedRemaining) !=
+            ProductionMath.toSapScale(remaining)) {
+      throw Exception(
+        'Số lượng còn lại đã thay đổi. Vui lòng mở lại và kiểm tra số liệu.',
+      );
+    }
+
+    // Round good and defective quantities at the same point so the local row
+    // and SAP request carry identical values.
+    final scaledQuantity = ProductionMath.toSapScale(quantity);
+    final scaledDefectQuantity = ProductionMath.toSapScale(defectQuantity);
+    if (!quantity.isFinite ||
+        !defectQuantity.isFinite ||
+        scaledQuantity < 0 ||
+        scaledDefectQuantity < 0 ||
+        scaledQuantity + scaledDefectQuantity <= 0) {
+      throw Exception('Số hoàn thành và số phế không hợp lệ.');
+    }
 
     final id = IdGenerator.newId();
     final idempotencyKey = IdGenerator.newIdempotencyKey();
     final now = DateTime.now().millisecondsSinceEpoch;
+    final enteredAt = SapEntryTime.fromEpochMillis(now);
 
     // Atomic: ProductionRecord + SyncQueue + AuditLog
     final recordRow = {
       'id': id,
       'phan_cong_id': assignmentId,
       'quantity': scaledQuantity,
+      'defect_quantity': scaledDefectQuantity,
       'unit_of_measure': assignment['unit_of_measure'],
       'business_date': businessDate,
       'shift_id': shiftId,
       'note': note,
       'created_by': createdBy,
       'occurred_at_utc': now,
+      'entry_date': enteredAt.date,
+      'entry_time': enteredAt.time,
       'device_id': DeviceInfoHelper.deviceId,
       'sync_status': 'PENDING',
       'idempotency_key': idempotencyKey,
@@ -599,7 +652,9 @@ class ProductionRepositoryImpl implements ProductionRepository {
       'entity_id': id,
       'action': 'CREATE',
       'payload_summary':
-          'Xác nhận hoàn thành · +${ProductionMath.formatQuantity(scaledQuantity)}',
+          'Xác nhận hoàn thành · '
+          '+${ProductionMath.formatQuantity(scaledQuantity)}'
+          '${scaledDefectQuantity > 0 ? ' · phế ${ProductionMath.formatQuantity(scaledDefectQuantity)}' : ''}',
       'idempotency_key': idempotencyKey,
       'device_id': DeviceInfoHelper.deviceId,
       'priority': 1,
@@ -624,6 +679,7 @@ class ProductionRepositoryImpl implements ProductionRepository {
       record: recordRow,
       queueItem: queueItem,
       auditLog: auditLog,
+      expectedRemaining: expectedRemaining,
     );
 
     if (workerPassword?.isNotEmpty == true) {
@@ -645,7 +701,7 @@ class ProductionRepositoryImpl implements ProductionRepository {
       workerPassword: workerPassword,
     );
 
-    return _mutationReceipt(id, failure);
+    return _liveMutationReceipt(db, id, queueItem, failure);
   }
 
   @override
@@ -679,7 +735,9 @@ class RecallRepositoryImpl implements RecallRepository {
     final assignment = await db.getAssignmentById(assignmentId);
     if (assignment == null) throw Exception('Phân công không tồn tại');
 
-    final completed = await db.getCompletedQuantity(assignmentId);
+    final completed =
+        await db.getCompletedQuantity(assignmentId) +
+        await db.getDefectQuantity(assignmentId);
     final recalled = await db.getRecalledQuantity(assignmentId);
     final assignedQty = assignment['assigned_quantity'] as double;
     final maxRecall = ProductionMath.calculateMaxRecall(
@@ -700,6 +758,7 @@ class RecallRepositoryImpl implements RecallRepository {
     final id = IdGenerator.newId();
     final idempotencyKey = IdGenerator.newIdempotencyKey();
     final now = DateTime.now().millisecondsSinceEpoch;
+    final enteredAt = SapEntryTime.fromEpochMillis(now);
 
     final recallRow = {
       'id': id,
@@ -712,6 +771,8 @@ class RecallRepositoryImpl implements RecallRepository {
       'shift_id': shiftId,
       'created_by': createdBy,
       'occurred_at_utc': now,
+      'entry_date': enteredAt.date,
+      'entry_time': enteredAt.time,
       'device_id': DeviceInfoHelper.deviceId,
       'sync_status': 'PENDING',
       'idempotency_key': idempotencyKey,
@@ -767,7 +828,7 @@ class RecallRepositoryImpl implements RecallRepository {
       workerPassword: workerPassword,
     );
 
-    return _mutationReceipt(id, failure);
+    return _liveMutationReceipt(db, id, queueItem, failure);
   }
 
   @override
@@ -783,6 +844,19 @@ typedef WorkHistoryLoader =
       DateTime? dateFrom,
       DateTime? dateTo,
       String? shiftId,
+      String? productionOrder,
+      String? operation,
+    });
+
+typedef WorkHistoryLoaderWithWorkId =
+    Future<WorkHistoryResult> Function({
+      required HistoryRange range,
+      DateTime? dateFrom,
+      DateTime? dateTo,
+      String? shiftId,
+      String? workId,
+      String? productionOrder,
+      String? operation,
     });
 
 class WorkHistorySessionChangedException implements Exception {
@@ -794,7 +868,7 @@ class WorkHistorySessionChangedException implements Exception {
 
 class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
   final CaslaDatabase db;
-  final WorkHistoryLoader loadRemote;
+  final WorkHistoryLoader? loadRemote;
   final String? Function() cacheSubject;
   final Duration freshFor;
   final FieldTelemetry telemetry;
@@ -806,10 +880,19 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
   // ignore: close_sinks
   // Closed explicitly by [dispose], which AppState owns for the app lifetime.
   final _updates = StreamController<_WorkHistoryUpdate>.broadcast();
+  // ignore: close_sinks
+  // Closed by [dispose] together with [_updates].
+  final _staleSignals = StreamController<void>.broadcast();
+
+  /// Newer SAP bindings accept WorkID on the history action. Keep the
+  /// original loader callback source-compatible for tests/embedders that
+  /// still implement the pre-WorkID contract.
+  final WorkHistoryLoaderWithWorkId? loadRemoteWithWorkId;
 
   WorkHistoryRepositoryImpl(
     this.db, {
-    required this.loadRemote,
+    this.loadRemote,
+    this.loadRemoteWithWorkId,
     required this.cacheSubject,
     this.freshFor = const Duration(minutes: 2),
     FieldTelemetry? telemetry,
@@ -821,23 +904,47 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
        _isCacheSubjectCurrent = isCacheSubjectCurrent ?? ((_) => true),
        _onAuthorizationRejected = onAuthorizationRejected;
 
+  /// The SQLite namespace of a cache subject.
+  ///
+  /// A subject may be `<lifetime>@<namespace>`. The lifetime part rejects
+  /// results and authorization failures that belong to an earlier login; the
+  /// namespace (account, endpoint, authorization scope) is what is stored, so
+  /// the same account keeps its offline snapshots across logins and restarts.
+  static String storageNamespace(String subject) {
+    final separator = subject.indexOf('@');
+    return separator < 0 ? subject : subject.substring(separator + 1);
+  }
+
+  bool _sharesCurrentNamespace(String subject) {
+    final current = cacheSubject()?.trim();
+    return current != null &&
+        current.isNotEmpty &&
+        storageNamespace(current) == storageNamespace(subject);
+  }
+
   @override
   Future<WorkHistoryResult> getWorkHistory({
     required HistoryRange range,
     DateTime? dateFrom,
     DateTime? dateTo,
     String? shiftId,
+    String? workId,
+    String? productionOrder,
+    String? operation,
     bool forceRefresh = false,
   }) async {
     final subject = cacheSubject()?.trim();
     if (subject == null || subject.isEmpty) {
       final stopwatch = Stopwatch()..start();
       try {
-        final result = await loadRemote(
+        final result = await _loadRemote(
           range: range,
           dateFrom: dateFrom,
           dateTo: dateTo,
           shiftId: shiftId,
+          workId: workId,
+          productionOrder: productionOrder,
+          operation: operation,
         );
         stopwatch.stop();
         telemetry.recordDuration(
@@ -863,6 +970,9 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
       dateFrom: dateFrom,
       dateTo: dateTo,
       shiftId: shiftId,
+      workId: workId,
+      productionOrder: productionOrder,
+      operation: operation,
     );
     // A forced refresh must join the in-flight map before any SQLite await.
     // Otherwise an already-running SWR refresh can finish while this request
@@ -875,12 +985,22 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
         dateFrom: dateFrom,
         dateTo: dateTo,
         shiftId: shiftId,
+        workId: workId,
+        productionOrder: productionOrder,
+        operation: operation,
       );
     }
 
     final cached = await _readCache(cacheKey);
     _ensureSubjectCurrent(subject);
     if (cached != null) {
+      // Cache snapshots written before the local order metadata was learned
+      // can have blank descriptive fields. Apply the same exact
+      // ProductionOrder + Operation fallback used for live SAP responses so
+      // an otherwise fresh snapshot does not permanently render placeholders.
+      var cachedResult = await _enrichHistoryWithOrderCache(cached.result);
+      cachedResult = await _enrichHistoryWithPriorCache(cachedResult, subject);
+      _ensureSubjectCurrent(subject);
       final age = _now().difference(cached.fetchedAt);
       if (age >= freshFor) {
         telemetry.increment(FieldMetric.workHistoryStaleHit);
@@ -893,13 +1013,16 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
               dateFrom: dateFrom,
               dateTo: dateTo,
               shiftId: shiftId,
+              workId: workId,
+              productionOrder: productionOrder,
+              operation: operation,
             ),
           ),
         );
       } else {
         telemetry.increment(FieldMetric.workHistoryCacheHit);
       }
-      return cached.result;
+      return cachedResult;
     }
 
     telemetry.increment(FieldMetric.workHistoryCacheMiss);
@@ -910,6 +1033,9 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
       dateFrom: dateFrom,
       dateTo: dateTo,
       shiftId: shiftId,
+      workId: workId,
+      productionOrder: productionOrder,
+      operation: operation,
     );
   }
 
@@ -919,17 +1045,27 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
     DateTime? dateFrom,
     DateTime? dateTo,
     String? shiftId,
+    String? workId,
+    String? productionOrder,
+    String? operation,
   }) {
     final subject = cacheSubject()?.trim();
     if (subject == null || subject.isEmpty) {
+      // Detail screens can be rebuilt while a route transition or hot reload
+      // is still tearing down the previous StreamBuilder subscription. Keep
+      // this watcher multi-subscription safe so a second listener does not
+      // turn a recoverable refresh into a generic error page.
       return Stream<WorkHistoryResult>.fromFuture(
         getWorkHistory(
           range: range,
           dateFrom: dateFrom,
           dateTo: dateTo,
           shiftId: shiftId,
+          workId: workId,
+          productionOrder: productionOrder,
+          operation: operation,
         ),
-      );
+      ).asBroadcastStream();
     }
     final cacheKey = _cacheKey(
       subject: subject,
@@ -937,10 +1073,14 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
       dateFrom: dateFrom,
       dateTo: dateTo,
       shiftId: shiftId,
+      workId: workId,
+      productionOrder: productionOrder,
+      operation: operation,
     );
 
     late final StreamController<WorkHistoryResult> controller;
     StreamSubscription<_WorkHistoryUpdate>? updatesSubscription;
+    StreamSubscription<void>? staleSubscription;
     var isLoading = false;
     WorkHistoryResult? lastEmitted;
     _WorkHistoryUpdate? pendingUpdate;
@@ -970,6 +1110,9 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
           dateFrom: dateFrom,
           dateTo: dateTo,
           shiftId: shiftId,
+          workId: workId,
+          productionOrder: productionOrder,
+          operation: operation,
         );
         if (_isCacheSubjectCurrent(subject)) {
           emitIfNew(result);
@@ -985,7 +1128,7 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
       }
     }
 
-    controller = StreamController<WorkHistoryResult>(
+    controller = StreamController<WorkHistoryResult>.broadcast(
       onListen: () {
         // Subscribe before the first get: a SWR refresh that finishes while
         // the initial cached value is emitted still reaches this stream.
@@ -1000,14 +1143,59 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
                 emitUpdate(update);
               }
             });
+        staleSubscription = _staleSignals.stream.listen((_) {
+          if (controller.isClosed || !_isCacheSubjectCurrent(subject)) return;
+          void refreshNow() => unawaited(
+            _ignoreRefreshFailure(
+              _refresh(
+                cacheKey: cacheKey,
+                subject: subject,
+                range: range,
+                dateFrom: dateFrom,
+                dateTo: dateTo,
+                shiftId: shiftId,
+                workId: workId,
+                productionOrder: productionOrder,
+                operation: operation,
+              ),
+            ),
+          );
+          // A request already in flight may have left before SAP accepted the
+          // write; joining it would store the old report as fresh again.
+          final pending = _inFlight[_inFlightKey(subject, cacheKey)];
+          if (pending == null) {
+            refreshNow();
+          } else {
+            unawaited(
+              pending
+                  .then<void>((_) {}, onError: (Object _) {})
+                  .then((_) => refreshNow()),
+            );
+          }
+        });
         unawaited(emitCurrent());
       },
       onCancel: () async {
+        await staleSubscription?.cancel();
         await updatesSubscription?.cancel();
         if (!controller.isClosed) await controller.close();
       },
     );
     return controller.stream;
+  }
+
+  /// Marks every cached window of the current subject stale after SAP
+  /// accepted a write, and makes each open watcher re-read SAP.
+  ///
+  /// The snapshots stay readable: offline, screens keep showing them (plus the
+  /// local overlay) instead of an empty state.
+  Future<void> invalidateCurrentSubject() async {
+    final subject = cacheSubject()?.trim();
+    if (subject == null || subject.isEmpty) return;
+    await db.expireWorkHistoryCacheForSubject(storageNamespace(subject));
+    if (!_staleSignals.isClosed && _isCacheSubjectCurrent(subject)) {
+      _staleSignals.add(null);
+    }
   }
 
   Future<void> _ignoreRefreshFailure(Future<WorkHistoryResult> refresh) async {
@@ -1019,6 +1207,37 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
     }
   }
 
+  Future<WorkHistoryResult> _loadRemote({
+    required HistoryRange range,
+    DateTime? dateFrom,
+    DateTime? dateTo,
+    String? shiftId,
+    String? workId,
+    String? productionOrder,
+    String? operation,
+  }) {
+    final loader = loadRemoteWithWorkId;
+    if (loader != null) {
+      return loader(
+        range: range,
+        dateFrom: dateFrom,
+        dateTo: dateTo,
+        shiftId: shiftId,
+        workId: workId,
+        productionOrder: productionOrder,
+        operation: operation,
+      );
+    }
+    return loadRemote!(
+      range: range,
+      dateFrom: dateFrom,
+      dateTo: dateTo,
+      shiftId: shiftId,
+      productionOrder: productionOrder,
+      operation: operation,
+    );
+  }
+
   Future<WorkHistoryResult> _refresh({
     required String cacheKey,
     required String subject,
@@ -1026,8 +1245,14 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
     DateTime? dateFrom,
     DateTime? dateTo,
     String? shiftId,
+    String? workId,
+    String? productionOrder,
+    String? operation,
   }) async {
-    final existing = _inFlight[cacheKey];
+    // Keyed by the full subject: a request from an earlier login must not be
+    // joined by this one, even though both share the stored snapshot.
+    final inFlightKey = _inFlightKey(subject, cacheKey);
+    final existing = _inFlight[inFlightKey];
     if (existing != null) return existing;
 
     final future = _refreshOnce(
@@ -1037,8 +1262,11 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
       dateFrom: dateFrom,
       dateTo: dateTo,
       shiftId: shiftId,
+      workId: workId,
+      productionOrder: productionOrder,
+      operation: operation,
     );
-    _inFlight[cacheKey] = future;
+    _inFlight[inFlightKey] = future;
 
     try {
       return await future;
@@ -1054,8 +1282,8 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
       }
       rethrow;
     } finally {
-      if (identical(_inFlight[cacheKey], future)) {
-        final _ = _inFlight.remove(cacheKey);
+      if (identical(_inFlight[inFlightKey], future)) {
+        final _ = _inFlight.remove(inFlightKey);
       }
     }
   }
@@ -1067,17 +1295,25 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
     DateTime? dateFrom,
     DateTime? dateTo,
     String? shiftId,
+    String? workId,
+    String? productionOrder,
+    String? operation,
   }) async {
     _ensureSubjectCurrent(subject);
     final stopwatch = Stopwatch()..start();
-    late final WorkHistoryResult result;
+    late WorkHistoryResult result;
     try {
-      result = await loadRemote(
+      final remoteResult = await _loadRemote(
         range: range,
         dateFrom: dateFrom,
         dateTo: dateTo,
         shiftId: shiftId,
+        workId: workId,
+        productionOrder: productionOrder,
+        operation: operation,
       );
+      result = await _enrichHistoryWithOrderCache(remoteResult);
+      result = await _enrichHistoryWithPriorCache(result, subject);
       stopwatch.stop();
       telemetry.recordDuration(
         FieldMetric.workHistoryRemoteSuccess,
@@ -1099,7 +1335,7 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
 
     await db.replaceWorkHistoryCache(
       cacheKey: cacheKey,
-      subjectId: subject,
+      subjectId: storageNamespace(subject),
       rangeCode: range.code,
       requestDateFrom: _dateKeyOrNull(dateFrom),
       requestDateTo: _dateKeyOrNull(dateTo),
@@ -1112,15 +1348,28 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
         for (final entry in result.entries)
           {
             'transaction_uuid': entry.transactionUuid,
-            'execution_date': _dateKey(entry.executionDate),
+            'execution_date': entry.executionDate.toIso8601String(),
+            'work_date': entry.reportedWorkDate == null
+                ? null
+                : _dateKey(entry.reportedWorkDate!),
+            'original_transaction_uuid': entry.originalTransactionUuid,
             'worker_id': entry.workerId,
             'worker_name': entry.workerName,
             'production_order': entry.productionOrder,
             'operation': entry.operation,
+            'operation_name': entry.operationName,
+            'product_name': entry.productName,
+            'product_code': entry.productCode,
+            'sales_order': entry.salesOrder,
+            'sales_order_item': entry.salesOrderItem,
             'plant': entry.plant,
             'work_center': entry.workCenter,
+            'work_id': entry.workId,
+            'position_id': entry.positionId,
+            'origin_position_id': entry.originPositionId,
             'transaction_type': entry.transactionType,
             'quantity': entry.quantity,
+            'defect_quantity': entry.defectQuantity,
             'unit_of_measure': entry.unitOfMeasure,
             'transaction_status': entry.transactionStatus,
           },
@@ -1132,9 +1381,14 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
             'worker_name': worker.workerName,
             'assigned_quantity': worker.assignedQuantity,
             'completed_quantity': worker.completedQuantity,
+            'defect_quantity': worker.defectQuantity,
             'remaining_quantity': worker.remainingQuantity,
             'unit_of_measure': worker.unitOfMeasure,
             'transaction_count': worker.transactionCount,
+            'work_id': worker.workId,
+            'work_name': worker.workName,
+            'bo_phan': worker.boPhan,
+            'location': worker.location,
           },
       ],
     );
@@ -1157,8 +1411,11 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
 
     if (!_isCacheSubjectCurrent(subject)) {
       // A logout/scope change happened while SQLite was committing. Cache data
-      // is disposable, so remove the old namespace rather than retain it.
-      await db.clearWorkHistoryCacheForSubject(subject);
+      // is disposable, so remove the old namespace rather than retain it —
+      // unless the same account and scope logged in again and now owns it.
+      if (!_sharesCurrentNamespace(subject)) {
+        await db.clearWorkHistoryCacheForSubject(storageNamespace(subject));
+      }
       throw const WorkHistorySessionChangedException();
     }
     if (!_updates.isClosed) {
@@ -1168,6 +1425,136 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
     return result;
   }
 
+  Future<WorkHistoryResult> _enrichHistoryWithOrderCache(
+    WorkHistoryResult result,
+  ) async {
+    final metadata = await db.getOrderMetadataBySapKeys(
+      result.entries.map((entry) => (entry.productionOrder, entry.operation)),
+    );
+    if (metadata.isEmpty) return result;
+
+    final entries = result.entries
+        .map((entry) {
+          final order =
+              metadata['${entry.productionOrder}\u0000${entry.operation}'];
+          if (order == null ||
+              (entry.operationName.isNotEmpty &&
+                  entry.productName.isNotEmpty &&
+                  entry.productCode.isNotEmpty &&
+                  entry.salesOrder.isNotEmpty &&
+                  entry.salesOrderItem.isNotEmpty)) {
+            return entry;
+          }
+          return WorkHistoryEntry(
+            transactionUuid: entry.transactionUuid,
+            executionDate: entry.executionDate,
+            reportedWorkDate: entry.reportedWorkDate,
+            workerId: entry.workerId,
+            workerName: entry.workerName,
+            productionOrder: entry.productionOrder,
+            operation: entry.operation,
+            operationName: entry.operationName.isNotEmpty
+                ? entry.operationName
+                : order['operation_name']?.toString() ?? '',
+            productName: entry.productName.isNotEmpty
+                ? entry.productName
+                : order['ten_sp']?.toString() ?? '',
+            productCode: entry.productCode.isNotEmpty
+                ? entry.productCode
+                : order['ma_sp']?.toString() ?? '',
+            salesOrder: entry.salesOrder.isNotEmpty
+                ? entry.salesOrder
+                : order['sales_order']?.toString() ?? '',
+            salesOrderItem: entry.salesOrderItem.isNotEmpty
+                ? entry.salesOrderItem
+                : order['sales_order_item']?.toString() ?? '',
+            plant: entry.plant,
+            workCenter: entry.workCenter,
+            workId: entry.workId,
+            positionId: entry.positionId,
+            originPositionId: entry.originPositionId,
+            transactionType: entry.transactionType,
+            quantity: entry.quantity,
+            defectQuantity: entry.defectQuantity,
+            unitOfMeasure: entry.unitOfMeasure,
+            transactionStatus: entry.transactionStatus,
+            originalTransactionUuid: entry.originalTransactionUuid,
+          );
+        })
+        .toList(growable: false);
+    return WorkHistoryResult(
+      scopeCode: result.scopeCode,
+      dateFrom: result.dateFrom,
+      dateTo: result.dateTo,
+      isTruncated: result.isTruncated,
+      entries: entries,
+      workers: result.workers,
+    );
+  }
+
+  Future<WorkHistoryResult> _enrichHistoryWithPriorCache(
+    WorkHistoryResult result,
+    String subject,
+  ) async {
+    final metadata = await db.getHistoryMetadataBySapKeysForSubject(
+      storageNamespace(subject),
+      result.entries.map(
+        (entry) => (entry.productionOrder, entry.operation, entry.plant),
+      ),
+    );
+    if (metadata.isEmpty) return result;
+    final entries = result.entries
+        .map((entry) {
+          final cached =
+              metadata['${entry.productionOrder}\u0000${entry.operation}\u0000${entry.plant}'];
+          if (cached == null) return entry;
+          return WorkHistoryEntry(
+            transactionUuid: entry.transactionUuid,
+            executionDate: entry.executionDate,
+            reportedWorkDate: entry.reportedWorkDate,
+            workerId: entry.workerId,
+            workerName: entry.workerName,
+            productionOrder: entry.productionOrder,
+            operation: entry.operation,
+            operationName: entry.operationName.isNotEmpty
+                ? entry.operationName
+                : cached['operation_name']?.toString() ?? '',
+            productName: entry.productName.isNotEmpty
+                ? entry.productName
+                : cached['product_name']?.toString() ?? '',
+            productCode: entry.productCode.isNotEmpty
+                ? entry.productCode
+                : cached['product_code']?.toString() ?? '',
+            salesOrder: entry.salesOrder.isNotEmpty
+                ? entry.salesOrder
+                : cached['sales_order']?.toString() ?? '',
+            salesOrderItem: entry.salesOrderItem.isNotEmpty
+                ? entry.salesOrderItem
+                : cached['sales_order_item']?.toString() ?? '',
+            plant: entry.plant,
+            workCenter: entry.workCenter,
+            workId: entry.workId,
+            positionId: entry.positionId,
+            originPositionId: entry.originPositionId,
+            transactionType: entry.transactionType,
+            quantity: entry.quantity,
+            defectQuantity: entry.defectQuantity,
+            unitOfMeasure: entry.unitOfMeasure,
+            transactionStatus: entry.transactionStatus,
+            originalTransactionUuid: entry.originalTransactionUuid,
+          );
+        })
+        .toList(growable: false);
+    return WorkHistoryResult(
+      scopeCode: result.scopeCode,
+      dateFrom: result.dateFrom,
+      dateTo: result.dateTo,
+      isTruncated: result.isTruncated,
+      entries: entries,
+      workers: result.workers,
+    );
+  }
+
   void _ensureSubjectCurrent(String subject) {
     if (!_isCacheSubjectCurrent(subject)) {
       throw const WorkHistorySessionChangedException();
@@ -1175,13 +1562,17 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
   }
 
   Future<void> _handleAuthorizationRejected(String subject) async {
-    await db.clearWorkHistoryCacheForSubject(subject);
+    // A 401 for a token an earlier login already revoked says nothing about
+    // the current session or its snapshots.
+    if (!_isCacheSubjectCurrent(subject)) return;
+    await db.clearWorkHistoryCacheForSubject(storageNamespace(subject));
     final callback = _onAuthorizationRejected;
     if (callback != null) await callback(subject);
   }
 
   void dispose() {
     _updates.close();
+    _staleSignals.close();
   }
 
   Future<_CachedWorkHistory?> _readCache(String cacheKey) async {
@@ -1195,15 +1586,32 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
           .map(
             (row) => WorkHistoryEntry(
               transactionUuid: row['transaction_uuid']?.toString() ?? '',
-              executionDate: DateTime.parse(row['execution_date'] as String),
+              executionDate: DateTime.parse(
+                row['execution_date'] as String,
+              ).toLocal(),
+              // Calendar date only ("2026-09-24"): parsed as local midnight.
+              reportedWorkDate: DateTime.tryParse(
+                row['work_date']?.toString() ?? '',
+              ),
+              originalTransactionUuid:
+                  row['original_transaction_uuid']?.toString() ?? '',
               workerId: row['worker_id']?.toString() ?? '',
               workerName: row['worker_name']?.toString() ?? '',
               productionOrder: row['production_order']?.toString() ?? '',
               operation: row['operation']?.toString() ?? '',
+              operationName: row['operation_name']?.toString() ?? '',
+              productName: row['product_name']?.toString() ?? '',
+              productCode: row['product_code']?.toString() ?? '',
+              salesOrder: row['sales_order']?.toString() ?? '',
+              salesOrderItem: row['sales_order_item']?.toString() ?? '',
               plant: row['plant']?.toString() ?? '',
               workCenter: row['work_center']?.toString() ?? '',
+              workId: row['work_id']?.toString() ?? '',
+              positionId: row['position_id']?.toString() ?? '',
+              originPositionId: row['origin_position_id']?.toString() ?? '',
               transactionType: row['transaction_type']?.toString() ?? '',
               quantity: (row['quantity'] as num).toDouble(),
+              defectQuantity: (row['defect_quantity'] as num?)?.toDouble() ?? 0,
               unitOfMeasure: row['unit_of_measure']?.toString() ?? '',
               transactionStatus: row['transaction_status']?.toString() ?? '',
             ),
@@ -1217,9 +1625,22 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
               workerName: row['worker_name']?.toString() ?? '',
               assignedQuantity: (row['assigned_quantity'] as num).toDouble(),
               completedQuantity: (row['completed_quantity'] as num).toDouble(),
+              defectQuantity: (row['defect_quantity'] as num?)?.toDouble() ?? 0,
               remainingQuantity: (row['remaining_quantity'] as num).toDouble(),
+              // Not stored in the cache; SAP's identity recovers it.
+              recalledQuantity:
+                  ((row['assigned_quantity'] as num) -
+                          (row['completed_quantity'] as num) -
+                          ((row['defect_quantity'] as num?) ?? 0) -
+                          (row['remaining_quantity'] as num))
+                      .toDouble()
+                      .clamp(0.0, double.infinity),
               unitOfMeasure: row['unit_of_measure']?.toString() ?? '',
               transactionCount: (row['transaction_count'] as num).toInt(),
+              workId: row['work_id']?.toString() ?? '',
+              workName: row['work_name']?.toString() ?? '',
+              boPhan: row['bo_phan']?.toString() ?? '',
+              location: row['location']?.toString() ?? '',
             ),
           )
           .toList(growable: false);
@@ -1250,6 +1671,9 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
     DateTime? dateFrom,
     DateTime? dateTo,
     String? shiftId,
+    String? workId,
+    String? productionOrder,
+    String? operation,
   }) {
     final anchor = _dateKey(_now());
     final from =
@@ -1257,8 +1681,14 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
         (range == HistoryRange.custom ? '-' : anchor);
     final to =
         _dateKeyOrNull(dateTo) ?? (range == HistoryRange.custom ? '-' : anchor);
-    return '$subject|${range.code}|$from|$to|${shiftId?.trim() ?? ''}';
+    return '${storageNamespace(subject)}|${range.code}|$from|$to|'
+        '${shiftId?.trim() ?? ''}|'
+        '${workId?.trim() ?? ''}|'
+        '${productionOrder?.trim() ?? ''}|${operation?.trim() ?? ''}';
   }
+
+  static String _inFlightKey(String subject, String cacheKey) =>
+      '$subject\u0000$cacheKey';
 
   static String _dateKey(DateTime value) =>
       '${value.year.toString().padLeft(4, '0')}-'
@@ -1295,6 +1725,45 @@ class _WorkHistoryUpdate {
   }) : result = null;
 }
 
+/// Rolls back a transaction the operator just entered when SAP answered with
+/// an error (see `isLiveRejectionDiscarded`). Only timeouts and requests that
+/// never reached SAP are kept on the device and hold their quantity.
+/// The queue row may be FAILED, NEEDS_VERIFICATION or — for a child whose
+/// parent was the one refused — still PENDING.
+Future<MutationReceipt> _discardRefusedMutation(
+  CaslaDatabase db,
+  String id,
+  Map<String, dynamic> queueItem, {
+  required String code,
+  required String message,
+}) async {
+  await db.deleteSyncQueueItem(queueItem['id'] as String, allowPending: true);
+  return MutationReceipt(
+    id: id,
+    state: MutationDeliveryState.discarded,
+    code: code,
+    message: message,
+  );
+}
+
+Future<MutationReceipt> _liveMutationReceipt(
+  CaslaDatabase db,
+  String id,
+  Map<String, dynamic> queueItem,
+  SyncFailure? failure,
+) async {
+  if (failure != null && isLiveRejectionDiscarded(failure.code)) {
+    return _discardRefusedMutation(
+      db,
+      id,
+      queueItem,
+      code: failure.code,
+      message: failure.message,
+    );
+  }
+  return _mutationReceipt(id, failure);
+}
+
 MutationReceipt _mutationReceipt(String id, SyncFailure? failure) {
   if (failure == null) {
     return MutationReceipt(id: id, state: MutationDeliveryState.synced);
@@ -1323,6 +1792,18 @@ Future<MutationReceipt> _verifiedMutationReceipt(
   if (report.outcome == VerifiedSyncOutcome.synced) {
     return MutationReceipt(id: id, state: MutationDeliveryState.synced);
   }
+  if (isLiveRejectionDiscarded(report.failureCode)) {
+    // Also when the refused item was an unsynced parent sent ahead of this
+    // one: the parent was already on the Đồng bộ tab, but the transaction the
+    // operator just entered is dropped rather than queued behind it.
+    return _discardRefusedMutation(
+      db,
+      id,
+      queueItem,
+      code: report.failureCode!,
+      message: report.message,
+    );
+  }
 
   final queued = await db.getSyncQueueItemById(queueItem['id'] as String);
   final status = queued?['status']?.toString();
@@ -1336,6 +1817,6 @@ Future<MutationReceipt> _verifiedMutationReceipt(
     id: id,
     state: state,
     code: code,
-    message: report.message,
+    message: queued?['last_error_message']?.toString() ?? report.message,
   );
 }

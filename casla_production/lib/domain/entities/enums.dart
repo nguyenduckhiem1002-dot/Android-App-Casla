@@ -100,9 +100,15 @@ enum Permission {
   // `zcl_pp_work_history` — một trục RBAC riêng so với nhóm quyền ghi ở trên.
   // Một tài khoản có thể có cái này mà không có cái kia: PP_HIST_SELF luôn chỉ
   // trả về dòng của chính tài khoản đó (WorkerID app gửi lên bị bỏ qua),
-  // PP_HIST_TEAM trả về những người mà tài khoản đó đứng tên tổ trưởng.
+  // PP_HIST_TEAM trả về mọi giao dịch tại các WorkID/công đoạn tài khoản được
+  // cấp quyền, kể cả việc do quản lý khác giao (bàn giao ca) — xem
+  // docs/TEAM_HISTORY_SCOPE.md bên abap_casla_app_mobile.
   viewOwnProductionHistory,
   viewTeamProductionHistory,
+  // PP_POS_MANAGE trong `zcl_pp_position_api`: xem sơ đồ vị trí, tạo vị trí,
+  // đổi máy và xếp công nhân. SAP chỉ cho phép trên Work Center được cấp
+  // function này, app chỉ dùng nó để hiện tab Vị trí.
+  managePositions,
 }
 
 /// Lý do thu hồi (Spec 5.3 S09)

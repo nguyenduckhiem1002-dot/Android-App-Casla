@@ -7,7 +7,7 @@ import 'sap_odata_client.dart';
 const String _shiftEntitySet = 'Shifts';
 
 class SapShift {
-  final String plant;
+  final String workCenter;
   final String shiftId;
   final DateTime validFrom;
   final String shiftName;
@@ -19,7 +19,7 @@ class SapShift {
   final String isActive;
 
   const SapShift({
-    required this.plant,
+    required this.workCenter,
     required this.shiftId,
     required this.validFrom,
     required this.shiftName,
@@ -32,7 +32,7 @@ class SapShift {
   });
 
   factory SapShift.fromJson(Map<String, dynamic> json) => SapShift(
-    plant: '${json['Plant'] ?? ''}',
+    workCenter: '${json['WorkCenter'] ?? ''}',
     shiftId: '${json['ShiftID'] ?? ''}',
     validFrom:
         DateTime.tryParse('${json['ValidFrom'] ?? ''}') ??
@@ -82,7 +82,7 @@ class SapShiftController {
   SapShiftController(this.client);
 
   Future<List<SapShift>> getShifts({
-    required String plant,
+    required String workCenter,
     DateTime? onDate,
   }) async {
     if (AppConfig.sapShiftApiServiceUrl.isEmpty) {
@@ -93,7 +93,8 @@ class SapShiftController {
     final response = await client.dio.get(
       _shiftEntitySet,
       queryParameters: {
-        r'$filter': "Plant eq '${_escape(plant)}' and IsActive eq 'A'",
+        r'$filter':
+            "WorkCenter eq '${_escape(workCenter)}' and IsActive eq 'A'",
         r'$orderby': 'ValidFrom desc,StartTime asc',
       },
     );

@@ -3,8 +3,10 @@ import 'dart:async';
 import 'package:casla_production/core/database/casla_database.dart';
 import 'package:casla_production/core/telemetry/field_telemetry.dart';
 import 'package:casla_production/data/repositories/repositories_impl.dart';
+import 'package:casla_production/data/repositories/confirmation_targets.dart';
 import 'package:casla_production/data/sap/odata_error.dart';
 import 'package:casla_production/domain/entities/work_history.dart';
+import 'package:casla_production/core/utils/operation_qr_parser.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../support/database_test_harness.dart';
@@ -28,10 +30,22 @@ void main() {
       cacheSubject: () => 'user-a:self',
       telemetry: telemetry,
       now: () => now,
-      loadRemote: ({required range, dateFrom, dateTo, shiftId}) async {
-        calls++;
-        return _result(workerName: 'Nguyễn Văn A');
-      },
+      loadRemote:
+          ({
+            required range,
+            dateFrom,
+            dateTo,
+            shiftId,
+            productionOrder,
+            operation,
+          }) async {
+            calls++;
+            return _result(
+              workerName: 'Nguyễn Văn A',
+              productionOrder: '990010001234',
+              operation: '0090',
+            );
+          },
     );
 
     final first = await repo.getWorkHistory(range: HistoryRange.month);
@@ -47,16 +61,324 @@ void main() {
   });
 
   test(
+    'a SAP failure is reported when the fallback cache lacks lineage',
+    () async {
+      var failing = false;
+      final repo = WorkHistoryRepositoryImpl(
+        db,
+        cacheSubject: () => 'user-a:team',
+        loadRemote:
+            ({
+              required range,
+              dateFrom,
+              dateTo,
+              shiftId,
+              productionOrder,
+              operation,
+            }) async {
+              if (failing) throw const SapBusinessError('SABP_BEHV/100');
+              return WorkHistoryResult(
+                scopeCode: 'T',
+                dateFrom: DateTime(2026, 9, 24),
+                dateTo: DateTime(2026, 9, 24),
+                isTruncated: false,
+                entries: [
+                  // As a cache written before lineage was stored reads back.
+                  WorkHistoryEntry(
+                    transactionUuid: 'R1',
+                    executionDate: DateTime(2026, 9, 24, 4),
+                    workerId: 'NV01',
+                    workerName: 'A',
+                    productionOrder: '010140000365',
+                    operation: '0020',
+                    plant: '6711',
+                    workCenter: 'CL100077',
+                    transactionType: 'REASSIGN',
+                    quantity: 60,
+                    unitOfMeasure: 'CHC',
+                    transactionStatus: 'POSTED',
+                  ),
+                ],
+                workers: const [],
+              );
+            },
+      );
+      Future<WorkHistoryResult> load() => loadConfirmationHistory(
+        repo,
+        range: HistoryRange.day,
+        dateFrom: DateTime(2026, 9, 24),
+        dateTo: DateTime(2026, 9, 24),
+        shiftId: 'DAY',
+        workId: 'XM2.002',
+      );
+
+      await load();
+      failing = true;
+      await expectLater(load(), throwsA(isA<SapBusinessError>()));
+    },
+  );
+
+  test('cache keeps the work date and lineage of each row', () async {
+    var calls = 0;
+    final repo = WorkHistoryRepositoryImpl(
+      db,
+      cacheSubject: () => 'user-a:team',
+      loadRemote:
+          ({
+            required range,
+            dateFrom,
+            dateTo,
+            shiftId,
+            productionOrder,
+            operation,
+          }) async {
+            calls++;
+            return WorkHistoryResult(
+              scopeCode: 'T',
+              dateFrom: DateTime(2026, 9, 24),
+              dateTo: DateTime(2026, 9, 24),
+              isTruncated: false,
+              entries: [
+                WorkHistoryEntry(
+                  transactionUuid: 'C1',
+                  // Night shift: posted after midnight, belongs to the 24th.
+                  executionDate: DateTime(2026, 9, 25, 2, 15),
+                  reportedWorkDate: DateTime(2026, 9, 24),
+                  workerId: 'NV01',
+                  workerName: 'A',
+                  productionOrder: '010140000365',
+                  operation: '0020',
+                  plant: '6711',
+                  workCenter: 'CL100077',
+                  transactionType: 'CONFIRM',
+                  quantity: 5,
+                  unitOfMeasure: 'CHC',
+                  transactionStatus: 'POSTED',
+                  originalTransactionUuid: 'R1',
+                ),
+              ],
+              workers: const [],
+            );
+          },
+    );
+
+    await repo.getWorkHistory(range: HistoryRange.day);
+    final cached = (await repo.getWorkHistory(
+      range: HistoryRange.day,
+    )).entries.single;
+
+    expect(calls, 1, reason: 'the second read is served from the cache');
+    expect(cached.workDate, DateTime(2026, 9, 24));
+    expect(cached.executionDate.hour, 2);
+    expect(cached.originalTransactionUuid, 'R1');
+  });
+
+  test(
+    'cached history fills metadata learned after the snapshot was stored',
+    () async {
+      var calls = 0;
+      final repo = WorkHistoryRepositoryImpl(
+        db,
+        cacheSubject: () => 'user-a:self',
+        loadRemote:
+            ({
+              required range,
+              dateFrom,
+              dateTo,
+              shiftId,
+              productionOrder,
+              operation,
+            }) async {
+              calls++;
+              return _result(
+                workerName: 'Nguyễn Văn A',
+                productionOrder: '990010001234',
+                operation: '0090',
+              );
+            },
+      );
+
+      // The first snapshot predates the local QR/order metadata. This is the
+      // shape of existing devices after the history-cache schema upgrade.
+      final first = await repo.getWorkHistory(range: HistoryRange.day);
+      expect(first.entries.single.operationName, isEmpty);
+      expect(first.entries.single.productName, isEmpty);
+
+      await db.upsertOrderFromOperationQr(
+        OperationQrParser.parse(
+          '{"ProductionOrder":"990010001234",'
+          '"Operation":"0090","OperationName":"May thân",'
+          '"ProductCode":"200009017",'
+          '"ProductName":"Áo khoác công nhân",'
+          '"SalesOrder":"5000012345","SalesOrderItem":"000010"}',
+        ),
+      );
+
+      final cached = await repo.getWorkHistory(range: HistoryRange.day);
+
+      expect(calls, 1);
+      expect(cached.entries.single.operationName, 'May thân');
+      expect(cached.entries.single.productName, 'Áo khoác công nhân');
+      expect(cached.entries.single.productCode, '200009017');
+      expect(cached.entries.single.salesOrder, '5000012345');
+      expect(cached.entries.single.salesOrderItem, '000010');
+    },
+  );
+
+  test('refresh keeps metadata from another cached history window', () async {
+    var calls = 0;
+    final fixedNow = DateTime(2026, 9, 17, 12);
+    final repo = WorkHistoryRepositoryImpl(
+      db,
+      cacheSubject: () => 'user-a:self',
+      now: () => fixedNow,
+      loadRemote:
+          ({
+            required range,
+            dateFrom,
+            dateTo,
+            shiftId,
+            productionOrder,
+            operation,
+          }) async {
+            calls++;
+            return _result(
+              workerName: 'Nguyễn Văn A',
+              productionOrder: '990020001234',
+              operation: '0091',
+              operationName: calls == 1 ? 'May thân' : '',
+              productName: calls == 1 ? 'Áo khoác công nhân' : '',
+              productCode: calls == 1 ? '200009017' : '',
+              salesOrder: calls == 1 ? '5000012345' : '',
+              salesOrderItem: calls == 1 ? '000010' : '',
+            );
+          },
+    );
+
+    await repo.getWorkHistory(range: HistoryRange.day);
+    final switchedWindow = await repo.getWorkHistory(
+      range: HistoryRange.month,
+      forceRefresh: true,
+    );
+
+    expect(calls, 2);
+    expect(switchedWindow.entries.single.operationName, 'May thân');
+    expect(switchedWindow.entries.single.productName, 'Áo khoác công nhân');
+    expect(switchedWindow.entries.single.productCode, '200009017');
+    expect(switchedWindow.entries.single.salesOrder, '5000012345');
+    expect(switchedWindow.entries.single.salesOrderItem, '000010');
+    expect(switchedWindow.entries.single.quantity, 10);
+
+    // Replace the month snapshot with the actual failure shape: newer cache
+    // metadata is blank while the older day snapshot remains complete.
+    await db.replaceWorkHistoryCache(
+      cacheKey: 'user-a:self|M|2026-09-17|2026-09-17||||',
+      subjectId: 'user-a:self',
+      rangeCode: HistoryRange.month.code,
+      scopeCode: 'S',
+      resultDateFrom: '2026-09-17',
+      resultDateTo: '2026-09-17',
+      isTruncated: false,
+      fetchedAtUtc: fixedNow.millisecondsSinceEpoch,
+      entries: [
+        {
+          'transaction_uuid': 'tx-blank',
+          'execution_date': fixedNow.toIso8601String(),
+          'worker_id': 'MNV00123',
+          'worker_name': 'Nguyễn Văn A',
+          'production_order': '990020001234',
+          'operation': '0091',
+          'operation_name': '',
+          'product_name': '',
+          'product_code': '',
+          'sales_order': '',
+          'sales_order_item': '',
+          'plant': '6720',
+          'work_center': 'WC-01',
+          'transaction_type': 'CONFIRM',
+          'quantity': 27,
+          'unit_of_measure': 'PC',
+          'transaction_status': 'SUCCESS',
+        },
+      ],
+      workers: [
+        {
+          'worker_id': 'MNV00123',
+          'worker_name': 'Nguyễn Văn A',
+          'assigned_quantity': 20,
+          'completed_quantity': 27,
+          'remaining_quantity': 0,
+          'unit_of_measure': 'PC',
+          'transaction_count': 1,
+        },
+      ],
+    );
+
+    final seeded = await db.getWorkHistoryCache(
+      'user-a:self|M|2026-09-17|2026-09-17||||',
+    );
+    expect(seeded?['entries'], isNotEmpty);
+    final seededEntries = (seeded!['entries'] as List)
+        .cast<Map<String, dynamic>>();
+    expect(seededEntries.single['operation_name'], isEmpty);
+
+    final cachedAgain = await repo.getWorkHistory(range: HistoryRange.month);
+    expect(calls, 2);
+    expect(cachedAgain.entries.single.transactionUuid, 'tx-blank');
+    expect(cachedAgain.entries.single.quantity, 27);
+    expect(cachedAgain.entries.single.operationName, 'May thân');
+    expect(cachedAgain.entries.single.productName, 'Áo khoác công nhân');
+    expect(cachedAgain.entries.single.salesOrderItem, '000010');
+  });
+
+  test('prior history metadata is isolated by cache subject', () async {
+    var subject = 'user-a:self';
+    final repo = WorkHistoryRepositoryImpl(
+      db,
+      cacheSubject: () => subject,
+      loadRemote:
+          ({
+            required range,
+            dateFrom,
+            dateTo,
+            shiftId,
+            productionOrder,
+            operation,
+          }) async => _result(
+            workerName: 'Nguyễn Văn A',
+            operationName: subject.startsWith('user-a') ? 'May thân' : '',
+          ),
+    );
+
+    await repo.getWorkHistory(range: HistoryRange.day);
+    subject = 'user-b:self';
+    final otherUser = await repo.getWorkHistory(
+      range: HistoryRange.month,
+      forceRefresh: true,
+    );
+
+    expect(otherUser.entries.single.operationName, isEmpty);
+  });
+
+  test(
     'watcher keeps cached data, reports refresh failure, then recovers',
     () async {
       var shouldFail = false;
       final repo = WorkHistoryRepositoryImpl(
         db,
         cacheSubject: () => 'worker-recovery',
-        loadRemote: ({required range, dateFrom, dateTo, shiftId}) async {
-          if (shouldFail) throw Exception('offline');
-          return _result(workerName: 'Cached worker');
-        },
+        loadRemote:
+            ({
+              required range,
+              dateFrom,
+              dateTo,
+              shiftId,
+              productionOrder,
+              operation,
+            }) async {
+              if (shouldFail) throw Exception('offline');
+              return _result(workerName: 'Cached worker');
+            },
       );
       await repo.getWorkHistory(range: HistoryRange.day);
       final first = Completer<void>();
@@ -115,11 +437,19 @@ void main() {
       cacheSubject: () => 'user-a:self',
       freshFor: const Duration(minutes: 2),
       now: () => now,
-      loadRemote: ({required range, dateFrom, dateTo, shiftId}) async {
-        calls++;
-        if (calls == 2) await refreshGate.future;
-        return _result(workerName: currentName);
-      },
+      loadRemote:
+          ({
+            required range,
+            dateFrom,
+            dateTo,
+            shiftId,
+            productionOrder,
+            operation,
+          }) async {
+            calls++;
+            if (calls == 2) await refreshGate.future;
+            return _result(workerName: currentName);
+          },
     );
 
     await repo.getWorkHistory(range: HistoryRange.month);
@@ -148,9 +478,17 @@ void main() {
       db,
       cacheSubject: () => 'user-a:self',
       telemetry: telemetry,
-      loadRemote: ({required range, dateFrom, dateTo, shiftId}) async {
-        throw Exception('offline');
-      },
+      loadRemote:
+          ({
+            required range,
+            dateFrom,
+            dateTo,
+            shiftId,
+            productionOrder,
+            operation,
+          }) async {
+            throw Exception('offline');
+          },
     );
 
     await expectLater(
@@ -173,10 +511,18 @@ void main() {
     final repo = WorkHistoryRepositoryImpl(
       db,
       cacheSubject: () => subject,
-      loadRemote: ({required range, dateFrom, dateTo, shiftId}) async {
-        calls++;
-        return _result(workerName: workerName);
-      },
+      loadRemote:
+          ({
+            required range,
+            dateFrom,
+            dateTo,
+            shiftId,
+            productionOrder,
+            operation,
+          }) async {
+            calls++;
+            return _result(workerName: workerName);
+          },
     );
 
     final a = await repo.getWorkHistory(range: HistoryRange.day);
@@ -193,8 +539,15 @@ void main() {
     final repo = WorkHistoryRepositoryImpl(
       db,
       cacheSubject: () => 'user-a:team',
-      loadRemote: ({required range, dateFrom, dateTo, shiftId}) async =>
-          _result(workerId: 'MNV00123', workerName: 'Tên cập nhật'),
+      loadRemote:
+          ({
+            required range,
+            dateFrom,
+            dateTo,
+            shiftId,
+            productionOrder,
+            operation,
+          }) async => _result(workerId: 'MNV00123', workerName: 'Tên cập nhật'),
     );
 
     await repo.getWorkHistory(range: HistoryRange.month, forceRefresh: true);
@@ -208,8 +561,16 @@ void main() {
     final repo = WorkHistoryRepositoryImpl(
       db,
       cacheSubject: () => 'user-a:team',
-      loadRemote: ({required range, dateFrom, dateTo, shiftId}) async =>
-          _result(workerId: 'MNV00999', workerName: 'Nhân viên SAP'),
+      loadRemote:
+          ({
+            required range,
+            dateFrom,
+            dateTo,
+            shiftId,
+            productionOrder,
+            operation,
+          }) async =>
+              _result(workerId: 'MNV00999', workerName: 'Nhân viên SAP'),
     );
 
     await repo.getWorkHistory(range: HistoryRange.month, forceRefresh: true);
@@ -229,13 +590,21 @@ void main() {
         db,
         cacheSubject: () => 'active-session',
         onAuthorizationRejected: (_) async => authorizationCallbacks++,
-        loadRemote: ({required range, dateFrom, dateTo, shiftId}) async {
-          calls++;
-          if (rejected) {
-            throw const SapBusinessError('TOKEN_INVALID_OR_EXPIRED');
-          }
-          return _result(workerName: 'Bản đã lưu');
-        },
+        loadRemote:
+            ({
+              required range,
+              dateFrom,
+              dateTo,
+              shiftId,
+              productionOrder,
+              operation,
+            }) async {
+              calls++;
+              if (rejected) {
+                throw const SapBusinessError('TOKEN_INVALID_OR_EXPIRED');
+              }
+              return _result(workerName: 'Bản đã lưu');
+            },
       );
 
       await repo.getWorkHistory(range: HistoryRange.day);
@@ -261,8 +630,15 @@ void main() {
       final repo = WorkHistoryRepositoryImpl(
         db,
         cacheSubject: () => 'active-session',
-        loadRemote: ({required range, dateFrom, dateTo, shiftId}) async =>
-            _result(workerName: workerName),
+        loadRemote:
+            ({
+              required range,
+              dateFrom,
+              dateTo,
+              shiftId,
+              productionOrder,
+              operation,
+            }) async => _result(workerName: workerName),
       );
       final values = <String>[];
       final firstValue = Completer<void>();
@@ -288,6 +664,13 @@ void main() {
 WorkHistoryResult _result({
   String workerId = 'MNV00123',
   required String workerName,
+  String productionOrder = '000010001234',
+  String operation = '0010',
+  String operationName = '',
+  String productName = '',
+  String productCode = '',
+  String salesOrder = '',
+  String salesOrderItem = '',
 }) {
   final date = DateTime(2026, 9, 4);
   return WorkHistoryResult(
@@ -301,8 +684,13 @@ WorkHistoryResult _result({
         executionDate: date,
         workerId: workerId,
         workerName: workerName,
-        productionOrder: '000010001234',
-        operation: '0010',
+        productionOrder: productionOrder,
+        operation: operation,
+        operationName: operationName,
+        productName: productName,
+        productCode: productCode,
+        salesOrder: salesOrder,
+        salesOrderItem: salesOrderItem,
         plant: '6720',
         workCenter: 'WC-01',
         transactionType: 'CONFIRM',

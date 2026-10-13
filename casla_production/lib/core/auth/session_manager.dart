@@ -7,11 +7,14 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import '../../data/repositories/repositories_impl.dart';
 import '../../data/sap/sap_odata_client.dart';
+import '../../data/sap/sap_position_gateway.dart';
 import '../../data/sap/sap_pp_opalloc_gateway.dart';
 import '../../data/sap/sap_session_provider.dart';
 import '../../domain/entities/entities.dart';
 import '../../domain/entities/enums.dart';
+import '../../domain/entities/work_history.dart';
 import '../config/app_config.dart';
+import '../utils/shift_execution_validation.dart';
 import '../database/casla_database.dart';
 import '../network/connectivity_monitor.dart';
 import '../sync/sync_engine.dart';
@@ -32,12 +35,17 @@ class AppState extends ChangeNotifier {
   late final SyncEngine syncEngine;
   late final VerifiedSyncCoordinator verifiedSync;
   late final SapShiftController shiftController;
+  late final SapPositionGateway positionGateway;
   late final SessionCoordinator _session;
   UserWorkContext? _activeWorkContext;
   SapShift? _activeShift;
   DateTime _activeBusinessDate = DateTime.now();
   DateTime? _setupExpiresAt;
   Timer? _setupExpiryTimer;
+  StreamSubscription<void>? _remotePostingSubscription;
+  int _criticalOperations = 0;
+  bool _restoringSetup = false;
+  Timer? _historyInvalidationTimer;
 
   AppState() : db = CaslaDatabase.instance {
     authRepo = AuthRepositoryImpl(db);
@@ -51,6 +59,10 @@ class AppState extends ChangeNotifier {
     );
     shiftController = SapShiftController(
       SapODataClient(baseUrl: AppConfig.sapShiftApiServiceUrl),
+    );
+    positionGateway = SapPositionGateway(
+      client: SapODataClient(baseUrl: AppConfig.sapPositionServiceUrl),
+      session: _AppStateSapSession(this),
     );
     verifiedSync = VerifiedSyncCoordinator(
       database: db,
@@ -72,12 +84,23 @@ class AppState extends ChangeNotifier {
     );
     workHistoryRepo = WorkHistoryRepositoryImpl(
       db,
-      loadRemote: ({required range, dateFrom, dateTo, shiftId}) =>
-          sapGateway.getWorkHistory(
+      loadRemoteWithWorkId:
+          ({
+            required range,
+            dateFrom,
+            dateTo,
+            shiftId,
+            workId,
+            productionOrder,
+            operation,
+          }) => sapGateway.getWorkHistory(
             range: range,
             dateFrom: dateFrom,
             dateTo: dateTo,
             shiftId: shiftId,
+            workId: workId,
+            productionOrder: productionOrder,
+            operation: operation,
           ),
       cacheSubject: () => _workHistoryCacheSubject,
       isCacheSubjectCurrent: _isCurrentWorkHistorySubject,
@@ -99,6 +122,18 @@ class AppState extends ChangeNotifier {
       canRun: _canRunBackgroundSync,
       scopeProvider: () => _syncAccessScope,
     );
+
+    // A write SAP just accepted is missing from every history report cached
+    // before it. Coalesce a queue drain into one refresh of the open screens.
+    _remotePostingSubscription = db.remotePostings.listen((_) {
+      _historyInvalidationTimer?.cancel();
+      _historyInvalidationTimer = Timer(
+        const Duration(milliseconds: 400),
+        () => unawaited(
+          workHistoryRepo.invalidateCurrentSubject().catchError((Object _) {}),
+        ),
+      );
+    });
   }
 
   String? get _workHistoryCacheSubject {
@@ -119,10 +154,14 @@ class AppState extends ChangeNotifier {
             .toList()
           ..sort();
     final workScopes = session.toIds.toList()..sort();
-    // A cache entry belongs to one exact local session lifetime, SAP endpoint
-    // and authorization scope. This prevents a new user (or a user whose
-    // scope was reduced) from seeing an earlier account's cached history.
-    return 'v3:${_session.generation}:${AppConfig.sapPpOpAllocServiceUrl}:'
+    // A cache entry belongs to one SAP endpoint, account and authorization
+    // scope. This prevents a new user (or a user whose scope was reduced)
+    // from seeing an earlier account's cached history.
+    // `<lifetime>@<namespace>`: the lifetime drops late results and 401s of a
+    // previous login; only the namespace is stored (see
+    // WorkHistoryRepositoryImpl.storageNamespace), so offline snapshots survive
+    // a re-login or restart of the same account and scope.
+    return '${_session.generation}@v4:${AppConfig.sapPpOpAllocServiceUrl}:'
         '${session.id}:${session.maNv}:${scopes.join(',')}:'
         '${workScopes.join(',')}';
   }
@@ -178,7 +217,7 @@ class AppState extends ChangeNotifier {
     _activeWorkContext = refreshedWork;
     final shift = _activeShift;
     if (shift == null ||
-        shift.plant != refreshedWork.plant ||
+        shift.workCenter != refreshedWork.workCenter ||
         !shift.isValidOn(_activeBusinessDate)) {
       _setupExpiryTimer?.cancel();
       _setupExpiresAt = null;
@@ -186,23 +225,56 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  DateTime _nextSupervisorSetupBoundary([DateTime? value]) {
-    final now = value ?? DateTime.now();
-    final todayAtEight = DateTime(now.year, now.month, now.day, 8);
-    return now.isBefore(todayAtEight)
-        ? todayAtEight
-        : todayAtEight.add(const Duration(days: 1));
-  }
+  DateTime _setupExpiryFor(SapShift shift, DateTime businessDate) =>
+      supervisorSetupExpiry(
+        shift: shift,
+        businessDate: businessDate,
+        now: DateTime.now(),
+      );
 
   // ─── Session ──────────────────────────────────────────────────────
   UserSession? get currentSession => _session.currentSession;
+
+  /// Refreshes the serialized session so setup screens can pick up the latest
+  /// SAP work context names and locations.
+  Future<bool> refreshWorkContexts() => _session.refresh();
+
+  /// Expires cached history windows for this login and refreshes the active
+  /// business-day scope from SAP. Local outbox transactions are never cleared.
+  Future<WorkHistoryResult> refreshProductionDataCache() async {
+    final subject = _workHistoryCacheSubject;
+    if (subject == null || subject.trim().isEmpty) {
+      throw StateError('Cần đăng nhập để làm mới dữ liệu sản lượng.');
+    }
+
+    await db.expireWorkHistoryCacheForSubject(
+      WorkHistoryRepositoryImpl.storageNamespace(subject),
+    );
+    final date = _activeBusinessDate;
+    return workHistoryRepo.getWorkHistory(
+      range: HistoryRange.day,
+      dateFrom: DateTime(date.year, date.month, date.day),
+      dateTo: DateTime(date.year, date.month, date.day),
+      shiftId: _activeShift?.shiftId,
+      workId: activeWorkContext?.workId,
+      forceRefresh: true,
+    );
+  }
+
+  /// True between accepting a login and finishing the saved-setup restore.
+  /// The router holds its position meanwhile, so a supervisor with a valid
+  /// saved shift never flashes through the setup screen.
+  bool get isRestoringSetup => _restoringSetup;
+
   int get sessionGeneration => _session.generation;
   bool isSessionGenerationCurrent(int generation) =>
       _session.isGenerationCurrent(generation);
   bool get isLoggedIn => _session.isLoggedIn;
   UserRole? get currentRole => _session.currentSession?.role;
-  bool get _setupExpired =>
+  bool get _setupDeadlinePassed =>
       _setupExpiresAt != null && !DateTime.now().isBefore(_setupExpiresAt!);
+  // Held open while a SAP write is in progress; see [runCriticalOperation].
+  bool get _setupExpired => _criticalOperations == 0 && _setupDeadlinePassed;
   UserWorkContext? get activeWorkContext =>
       _setupExpired ? null : _activeWorkContext;
   SapShift? get activeShift => _setupExpired ? null : _activeShift;
@@ -229,12 +301,9 @@ class AppState extends ChangeNotifier {
       businessDate.month,
       businessDate.day,
     );
-    final now = DateTime.now();
-    // A selection remains valid for the working day. "Ngày mới" starts at
-    // 08:00 the following calendar day, even when the setup is completed
-    // before 08:00 today.
-    final expiresAt = _nextSupervisorSetupBoundary(now);
-    _setupExpiresAt = expiresAt;
+    // The selection lasts while late entry for the chosen shift is allowed:
+    // until the end of the day the SAP shift ends on.
+    _setupExpiresAt = _setupExpiryFor(shift, _activeBusinessDate);
     _scheduleSetupExpiry();
     try {
       await _persistSupervisorSetup(session);
@@ -276,18 +345,22 @@ class AppState extends ChangeNotifier {
       final expiresAt = DateTime.fromMillisecondsSinceEpoch(
         expiresAtMs.toInt(),
       );
-      final setupBoundary = _nextSupervisorSetupBoundary();
-      final effectiveExpiresAt = expiresAt.isAfter(setupBoundary)
-          ? setupBoundary
-          : expiresAt;
-      if (!DateTime.now().isBefore(effectiveExpiresAt)) return;
       final businessDate = DateTime.tryParse('${data['business_date'] ?? ''}');
       if (businessDate == null) return;
+      // Never trust a stored expiry beyond what the shift itself allows now
+      // (older builds stored the 08:00 rule; a clock change can do the same).
+      final limit = _setupExpiryFor(
+        SapShift.fromJson(Map<String, dynamic>.from(shiftData)),
+        businessDate,
+      );
+      final effectiveExpiresAt = expiresAt.isAfter(limit) ? limit : expiresAt;
+      if (!DateTime.now().isBefore(effectiveExpiresAt)) return;
       final savedWorkId = '${data['work_id'] ?? ''}';
       final workContext = _findCurrentWorkContext(session, savedWorkId);
       if (workContext == null) return;
       final shift = SapShift.fromJson(Map<String, dynamic>.from(shiftData));
-      if (shift.plant != workContext.plant || !shift.isValidOn(businessDate)) {
+      if (shift.workCenter != workContext.workCenter ||
+          !shift.isValidOn(businessDate)) {
         return;
       }
       _activeWorkContext = workContext;
@@ -297,7 +370,7 @@ class AppState extends ChangeNotifier {
         businessDate.month,
         businessDate.day,
       );
-       _setupExpiresAt = effectiveExpiresAt;
+      _setupExpiresAt = effectiveExpiresAt;
       _scheduleSetupExpiry();
       notifyListeners();
     } catch (_) {
@@ -333,7 +406,7 @@ class AppState extends ChangeNotifier {
         'business_date': _activeBusinessDate.toIso8601String(),
         'expires_at_local_ms': expiresAt.millisecondsSinceEpoch,
         'shift': {
-          'Plant': shift.plant,
+          'WorkCenter': shift.workCenter,
           'ShiftID': shift.shiftId,
           'ValidFrom': shift.validFrom.toIso8601String(),
           'ShiftName': shift.shiftName,
@@ -360,6 +433,21 @@ class AppState extends ChangeNotifier {
     );
   }
 
+  /// Runs a write flow (worker password → SAP post → result dialog) without
+  /// letting the daily setup expiry redirect the app to the setup screen in
+  /// the middle of it. The expiry is applied as soon as the last flow ends.
+  Future<T> runCriticalOperation<T>(Future<T> Function() action) async {
+    _criticalOperations++;
+    try {
+      return await action();
+    } finally {
+      _criticalOperations--;
+      if (_criticalOperations == 0 && _setupDeadlinePassed) {
+        _expireSupervisorSetup();
+      }
+    }
+  }
+
   void _expireSupervisorSetup() {
     if (!_setupExpired) return;
     _setupExpiresAt = null;
@@ -375,16 +463,27 @@ class AppState extends ChangeNotifier {
     // Login, logout and refresh must not share a stale CSRF/cookie jar.
     authRepo.resetTransportSession();
     sapGateway.resetTransportSession();
+    positionGateway.resetTransportSession();
     _setupExpiryTimer?.cancel();
     _setupExpiresAt = null;
     _activeWorkContext = null;
     _activeShift = null;
     try {
       final session = await authRepo.loginByCredentials(username, password);
+      _restoringSetup = true;
       if (_session.completeLogin(generation: generation, session: session)) {
-        await _restoreSupervisorSetup(session, generation: _session.generation);
+        try {
+          await _restoreSupervisorSetup(
+            session,
+            generation: _session.generation,
+          );
+        } finally {
+          _restoringSetup = false;
+          notifyListeners();
+        }
         return true;
       }
+      _restoringSetup = false;
 
       // A newer login/logout won the race. Revoke this abandoned token on a
       // dedicated client without ever restoring it locally.
@@ -405,6 +504,7 @@ class AppState extends ChangeNotifier {
     _activeShift = null;
     authRepo.resetTransportSession();
     sapGateway.resetTransportSession();
+    positionGateway.resetTransportSession();
     if (previous != null) unawaited(_revokeDiscardedSession(previous));
   }
 
@@ -420,6 +520,8 @@ class AppState extends ChangeNotifier {
   @override
   void dispose() {
     _setupExpiryTimer?.cancel();
+    _historyInvalidationTimer?.cancel();
+    unawaited(_remotePostingSubscription?.cancel());
     _session.removeListener(_onSessionChanged);
     _session.dispose();
     workHistoryRepo.dispose();

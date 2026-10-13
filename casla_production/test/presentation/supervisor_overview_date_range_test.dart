@@ -79,17 +79,20 @@ void main() {
     expect(find.byType(TextField), findsNWidgets(2));
     expect(find.text('Từ ngày'), findsOneWidget);
     expect(find.text('Đến ngày'), findsOneWidget);
+    // The picker's lastDate is today, so use last month: the 1st–7th of the
+    // current month are still in the future during the first week.
     final now = DateTime.now();
-    final month = now.month.toString().padLeft(2, '0');
+    final lastMonth = DateTime(now.year, now.month - 1);
+    final month = lastMonth.month.toString().padLeft(2, '0');
     // MaterialApp's default locale is en_US; enter two distinct dates and
     // verify the applied range appears on the overview, not a single date.
     await tester.enterText(
       find.byType(TextField).at(0),
-      '$month/01/${now.year}',
+      '$month/01/${lastMonth.year}',
     );
     await tester.enterText(
       find.byType(TextField).at(1),
-      '$month/07/${now.year}',
+      '$month/07/${lastMonth.year}',
     );
     await tester.tap(find.text('ÁP DỤNG'));
     await tester.pump();

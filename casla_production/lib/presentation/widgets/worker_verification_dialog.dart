@@ -1,11 +1,18 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../app/theme/casla_colors.dart';
+
+/// How many times a worker may re-enter a password SAP refused before the
+/// operation is abandoned.
+const int maxWorkerPasswordAttempts = 3;
 
 Future<String?> showWorkerVerificationDialog(
   BuildContext context, {
   required String workerName,
   required String actionLabel,
+  String? errorText,
 }) {
   return showDialog<String>(
     context: context,
@@ -13,17 +20,139 @@ Future<String?> showWorkerVerificationDialog(
     builder: (_) => _WorkerVerificationDialog(
       workerName: workerName,
       actionLabel: actionLabel,
+      initialError: errorText,
     ),
   );
+}
+
+/// Outcome of [runWithWorkerPassword].
+class WorkerPasswordRun<T> {
+  /// The last submit result; null when the operator cancelled before any
+  /// accepted attempt.
+  final T? result;
+
+  /// SAP refused the password [maxWorkerPasswordAttempts] times in a row.
+  final bool exhausted;
+
+  const WorkerPasswordRun._(this.result, {this.exhausted = false});
+
+  bool get cancelled => result == null && !exhausted;
+}
+
+/// Asks for the worker's password and submits with it. When SAP answers that
+/// the password is wrong ([isWrongPassword]), the popup opens again with the
+/// error shown inside it, up to [maxWorkerPasswordAttempts] times; after that
+/// it closes, a red notice says the limit was reached, and the run reports
+/// [WorkerPasswordRun.exhausted]. A refused password is rolled back on the
+/// device, never parked on the Đồng bộ tab.
+Future<WorkerPasswordRun<T>> runWithWorkerPassword<T>(
+  BuildContext context, {
+  required String workerName,
+  required String actionLabel,
+  required Future<T> Function(String password) submit,
+  required bool Function(T result) isWrongPassword,
+}) async {
+  String? error;
+  for (var attempt = 1; attempt <= maxWorkerPasswordAttempts; attempt++) {
+    if (!context.mounted) return const WorkerPasswordRun._(null);
+    final password = await showWorkerVerificationDialog(
+      context,
+      workerName: workerName,
+      actionLabel: actionLabel,
+      errorText: error,
+    );
+    if (password == null) return const WorkerPasswordRun._(null);
+    final result = await submit(password);
+    if (!isWrongPassword(result)) return WorkerPasswordRun._(result);
+    final left = maxWorkerPasswordAttempts - attempt;
+    if (left <= 0) {
+      if (context.mounted) {
+        showWorkerPasswordNotice(context, workerPasswordExhaustedMessage);
+      }
+      return WorkerPasswordRun._(result, exhausted: true);
+    }
+    error = 'Mật khẩu công nhân không đúng. Còn $left lần nhập.';
+  }
+  return const WorkerPasswordRun._(null, exhausted: true);
+}
+
+const String workerPasswordExhaustedMessage =
+    'Bạn đã nhập sai mật khẩu quá $maxWorkerPasswordAttempts lần.';
+
+/// A short red notice at the top of the screen. It sits on the root overlay,
+/// so it stays visible above a bottom sheet (the confirmation form) where a
+/// SnackBar would be hidden underneath.
+void showWorkerPasswordNotice(
+  BuildContext context,
+  String message, {
+  Duration duration = const Duration(seconds: 3),
+}) {
+  final overlay = Overlay.maybeOf(context, rootOverlay: true);
+  if (overlay == null) return;
+  late final OverlayEntry entry;
+  var removed = false;
+  void remove() {
+    if (removed) return;
+    removed = true;
+    entry.remove();
+  }
+
+  entry = OverlayEntry(
+    builder: (context) => Positioned(
+      top: 0,
+      left: 0,
+      right: 0,
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+          child: Material(
+            color: CaslaColors.danger,
+            elevation: 6,
+            borderRadius: BorderRadius.circular(12),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: remove,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                child: Row(
+                  children: [
+                    const Icon(Icons.lock_outline, color: Colors.white),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Semantics(
+                        liveRegion: true,
+                        child: Text(
+                          message,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            height: 1.35,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  overlay.insert(entry);
+  unawaited(Future<void>.delayed(duration, remove));
 }
 
 class _WorkerVerificationDialog extends StatefulWidget {
   final String workerName;
   final String actionLabel;
+  final String? initialError;
 
   const _WorkerVerificationDialog({
     required this.workerName,
     required this.actionLabel,
+    this.initialError,
   });
 
   @override
@@ -35,7 +164,7 @@ class _WorkerVerificationDialogState extends State<_WorkerVerificationDialog> {
   final _controller = TextEditingController();
   bool _obscure = true;
   bool _isClosing = false;
-  String? _error;
+  late String? _error = widget.initialError;
 
   @override
   void dispose() {
@@ -100,6 +229,7 @@ class _WorkerVerificationDialogState extends State<_WorkerVerificationDialog> {
             decoration: InputDecoration(
               labelText: 'Mật khẩu công nhân',
               errorText: _error,
+              errorMaxLines: 3,
               suffixIcon: IconButton(
                 tooltip: _obscure ? 'Hiện mật khẩu' : 'Ẩn mật khẩu',
                 onPressed: () => setState(() => _obscure = !_obscure),

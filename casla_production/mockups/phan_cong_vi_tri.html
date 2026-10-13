@@ -1,0 +1,557 @@
+<title>Phân công kèm vị trí</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=Inter:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: review canvas — live PDA prototype of Tạo phân công on the left, review notes, demo controls and the live SAP payload on the right; stacks on phones. */
+:root {
+  --pg-bg: #ECEEF3;
+  --pg-card: #FFFFFF;
+  --pg-fg: #16234A;
+  --pg-muted: #596274;
+  --pg-line: #D8DCE5;
+  --pg-accent: #7A5A18;
+  --pg-accent-bg: #F6EAD2;
+  --pg-chip: #E4E8F1;
+  --pg-code-bg: #F3F5F9;
+  --bezel: #0E1730;
+
+  /* Device screen: the Casla app has a light theme only */
+  --navy: #16234A;
+  --navy-700: #1D2E5C;
+  --navy-900: #0E1730;
+  --navy-100: #EDF1F5;
+  --gold: #C9A24B;
+  --gold-100: #F6EAD2;
+  --gold-700: #765515;
+  --app-bg: #F5F6F8;
+  --surface: #FFFFFF;
+  --line: #E7E9EE;
+  --muted: #626A78;
+  --muted-100: #EEF0F3;
+  --id-meta: #B9C2E4;
+  --success: #2E7D32;
+  --success-bg: #E5F2E6;
+  --danger: #C62828;
+  --danger-bg: #FBEAEA;
+  --pending: #85601A;
+  --pending-bg: #FBF1DD;
+  --on-navy: #FFFFFF;
+  --scrim: rgba(14, 23, 48, .55);
+  --cam: #05080F;
+
+  --f-display: "Manrope", "Segoe UI", system-ui, sans-serif;
+  --f-body: "Inter", "Segoe UI", system-ui, sans-serif;
+  --f-mono: ui-monospace, "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --pg-bg: #0B1022; --pg-card: #131A31; --pg-fg: #E5E9F5; --pg-muted: #A0A9C6;
+    --pg-line: #273153; --pg-accent: #E0BE6E; --pg-accent-bg: #2A2413; --pg-chip: #1C2542;
+    --pg-code-bg: #0F1529; --bezel: #020409; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --pg-bg: #0B1022; --pg-card: #131A31; --pg-fg: #E5E9F5; --pg-muted: #A0A9C6;
+  --pg-line: #273153; --pg-accent: #E0BE6E; --pg-accent-bg: #2A2413; --pg-chip: #1C2542;
+  --pg-code-bg: #0F1529; --bezel: #020409; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--f-body); font-size: 15px; line-height: 1.5; padding-inline: 16px; }
+button { font: inherit; color: inherit; cursor: pointer; touch-action: manipulation; }
+button:disabled { cursor: not-allowed; }
+:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+.page { max-width: 1160px; margin: 0 auto; padding-block: 28px 48px; display: grid; grid-template-columns: 404px minmax(0, 1fr); gap: 40px; align-items: start; }
+@media (max-width: 920px) { .page { grid-template-columns: minmax(0, 1fr); gap: 28px; } }
+
+/* ---------- device ---------- */
+.device-col { display: grid; justify-items: center; gap: 12px; }
+@media (min-width: 921px) and (min-height: 900px) { .device-col { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 20px); } }
+.device { width: 404px; max-width: 100%; height: 840px; padding: 12px; border-radius: 48px; background: var(--bezel); box-shadow: 0 30px 60px -30px rgba(14, 23, 48, .55); }
+.screen { position: relative; height: 100%; border-radius: 37px; overflow: hidden; background: var(--app-bg); color: var(--navy); display: flex; flex-direction: column; font-size: 14px; }
+@media (max-width: 460px) {
+  .device { padding: 0; border-radius: 22px; height: 780px; box-shadow: none; background: transparent; }
+  .screen { border-radius: 22px; border: 1px solid var(--pg-line); }
+}
+.device-caption { font-size: 13px; color: var(--pg-muted); text-align: center; max-width: 40ch; }
+
+.statusbar { background: var(--navy); color: var(--on-navy); display: flex; justify-content: space-between; padding: 10px 26px 4px; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.appbar { background: var(--navy); color: var(--on-navy); padding: 6px 8px 12px 16px; display: flex; align-items: center; gap: 8px; }
+.appbar .t { flex: 1; min-width: 0; }
+.appbar h1 { margin: 0; font-family: var(--f-display); font-weight: 800; font-size: 20px; line-height: 1.25; }
+.appbar .sub { font-size: 12px; color: var(--id-meta); }
+.avatar-btn { width: 44px; height: 44px; border-radius: 50%; border: 0; background: transparent; display: grid; place-items: center; }
+.avatar-btn span { width: 36px; height: 36px; border-radius: 50%; border: 2px solid var(--gold); background: var(--navy-700); color: var(--on-navy); font-family: var(--f-display); font-weight: 800; font-size: 13px; display: grid; place-items: center; }
+
+.strip { display: flex; gap: 8px; align-items: center; padding: 8px 16px; font-size: 12.5px; font-weight: 600; background: var(--success-bg); color: var(--success); }
+.body { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 14px; }
+
+/* scan field — mirrors ScanSlotField */
+.fld { display: grid; gap: 8px; }
+.fld-label { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; font-weight: 700; color: var(--navy); }
+.fld-label > span:first-child { flex: 1; }
+.req { color: var(--danger); }
+.opt-tag { font-size: 11.5px; font-weight: 700; color: var(--muted); background: var(--muted-100); padding: 1px 8px; border-radius: 99px; }
+.tgt { font-size: 12px; font-weight: 700; }
+.slot { background: var(--surface); border: 1.2px solid var(--line); border-radius: var(--r-md); padding: 4px 4px 4px 0; }
+.slot.target { border: 2px solid var(--navy); padding: 3px 3px 3px 0; }
+.slot.filled { background: var(--success-bg); border-color: var(--success); }
+.slot.temp { background: var(--pending-bg); border-color: var(--pending); }
+.slot.filled.target, .slot.temp.target { border-color: var(--navy); }
+.slot-row { display: flex; align-items: center; }
+.slot-main { flex: 1; min-width: 0; min-height: 48px; border: 0; background: transparent; text-align: left; display: flex; align-items: center; gap: 10px; padding: 4px 4px 4px 12px; font-size: 14px; font-weight: 700; color: var(--muted); }
+.slot-main svg { width: 22px; height: 22px; color: var(--muted); }
+.slot.filled .slot-main { color: var(--navy); } .slot.filled .slot-main svg { color: var(--success); }
+.slot.temp .slot-main { color: var(--navy); } .slot.temp .slot-main svg { color: var(--pending); }
+.slot-main .val { overflow-wrap: anywhere; }
+.slot-main .kv { flex: 1; display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; row-gap: 2px; min-width: 0; font-variant-numeric: tabular-nums; }
+.slot-main .kv > span { white-space: nowrap; }
+.slot-main .kv small { font-size: 12.5px; font-weight: 600; color: var(--muted); margin-right: 4px; }
+.slot-btn { width: 44px; height: 44px; border: 0; background: transparent; border-radius: 50%; display: grid; place-items: center; color: var(--navy); flex: none; }
+.slot-btn.clear { color: var(--muted); }
+.slot-btn:hover { background: rgba(22,35,74,.07); }
+.slot-info { padding: 2px 12px 10px 44px; display: grid; gap: 2px; }
+.info-row { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+.info-row .k { font-size: 12px; font-weight: 600; color: var(--muted); }
+.info-row .v { font-size: 14px; font-weight: 700; color: var(--navy); overflow-wrap: anywhere; }
+.info-row .v.quiet { color: var(--muted); font-weight: 600; }
+.info-row.warn .v { color: var(--pending); }
+.slot-hint { padding: 0 12px 10px 44px; font-size: 12.5px; color: var(--muted); line-height: 1.4; }
+.slot-hint.warn { color: var(--pending); }
+.link-btn { border: 0; background: transparent; padding: 4px 0; min-height: 32px; font-size: 13px; font-weight: 700; color: var(--navy); text-decoration: underline; text-underline-offset: 3px; display: inline-flex; gap: 6px; align-items: center; }
+.link-btn svg { width: 16px; height: 16px; }
+.skeleton { height: 14px; border-radius: 6px; background: linear-gradient(90deg, var(--muted-100), var(--line), var(--muted-100)); background-size: 200% 100%; animation: shimmer 1.2s infinite; }
+@keyframes shimmer { to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } }
+
+.op-card { background: var(--success-bg); border: 1.2px solid var(--success); border-radius: var(--r-md); padding: 12px; display: grid; gap: 8px; }
+.op-card .head { display: flex; gap: 10px; align-items: center; font-weight: 700; }
+.op-card .head svg { color: var(--success); }
+.metric { background: var(--surface); border-radius: var(--r-sm); padding: 8px 12px; display: flex; justify-content: space-between; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+.metric b { font-family: var(--f-display); }
+
+.qty { display: grid; gap: 8px; }
+.remain { display: flex; justify-content: space-between; padding: 10px 12px; border-radius: var(--r-sm); background: var(--pending-bg); color: var(--pending); font-weight: 700; font-variant-numeric: tabular-nums; }
+.qty-input { display: flex; align-items: center; border: 1.5px solid var(--line); border-radius: var(--r-sm); background: var(--surface); padding: 0 14px; min-height: 52px; }
+.qty-input input { flex: 1; min-width: 0; border: 0; outline: 0; font: 700 18px var(--f-display); color: var(--navy); background: transparent; }
+.qty-input span { color: var(--muted); font-weight: 600; }
+.qty-input:focus-within { border-color: var(--navy); }
+
+.cta { background: var(--surface); border-top: 1px solid var(--line); padding: 10px 14px; }
+.btn { min-height: 48px; border-radius: var(--r-md); border: 1.5px solid var(--navy); background: var(--surface); color: var(--navy); font-weight: 700; font-size: 14px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 14px; }
+.btn.gold { background: var(--gold); border-color: var(--gold); color: var(--navy-900); width: 100%; min-height: 52px; font-size: 15px; }
+.btn:disabled { opacity: .45; }
+
+.nav { background: var(--surface); border-top: 1px solid var(--line); display: grid; grid-template-columns: repeat(5, 1fr); padding: 4px 4px 14px; }
+.nav button { border: 0; background: transparent; min-height: 56px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 11.5px; color: var(--muted); position: relative; }
+.nav .pill { width: 56px; height: 30px; border-radius: 99px; display: grid; place-items: center; }
+.nav button[aria-current="page"] { color: var(--navy); font-weight: 700; }
+.nav button[aria-current="page"] .pill { background: var(--gold-100); }
+.nav .badge-n { position: absolute; top: 4px; left: calc(50% + 6px); min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px; background: var(--danger); color: var(--on-navy); font-size: 10.5px; font-weight: 700; display: grid; place-items: center; }
+
+/* sync tab */
+.sync-kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.sync-kpis div { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 6px; text-align: center; }
+.sync-kpis b { display: block; font-family: var(--f-display); font-size: 20px; }
+.sync-kpis small { font-size: 11px; font-weight: 700; letter-spacing: .04em; color: var(--muted); }
+.txn { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px; display: grid; gap: 6px; }
+.txn.recent { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(201,162,75,.18); }
+.txn .top { display: flex; gap: 8px; align-items: flex-start; }
+.txn .top .t { flex: 1; min-width: 0; font-weight: 700; }
+.txn .meta { font-size: 12.5px; color: var(--muted); }
+.st { display: inline-flex; gap: 6px; align-items: center; padding: 3px 10px; border-radius: 99px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.st::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.st.ok { background: var(--success-bg); color: var(--success); }
+.st.wait { background: var(--pending-bg); color: var(--pending); }
+.st.err { background: var(--danger-bg); color: var(--danger); }
+.pos-line { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 12.5px; }
+.pos-chip { display: inline-flex; gap: 4px; align-items: center; padding: 2px 8px; border-radius: 99px; background: var(--navy-100); color: var(--navy); font-weight: 700; }
+.pos-chip svg { width: 13px; height: 13px; }
+.pos-chip.temp { background: var(--pending-bg); color: var(--pending); }
+.txn .err-msg { font-size: 12.5px; color: var(--danger); background: var(--danger-bg); padding: 6px 8px; border-radius: var(--r-sm); }
+.placeholder { margin: auto 0; text-align: center; color: var(--muted); padding: 24px; display: grid; gap: 8px; justify-items: center; }
+.placeholder h3 { margin: 0; color: var(--navy); font-family: var(--f-display); font-size: 17px; }
+
+/* overlays */
+.layer { position: absolute; inset: 0; z-index: 20; display: flex; align-items: flex-end; }
+.layer.center { align-items: center; padding: 20px; }
+.scrim { position: absolute; inset: 0; background: var(--scrim); }
+.sheet { position: relative; width: 100%; max-height: 88%; overflow-y: auto; background: var(--surface); border-radius: 22px 22px 0 0; padding: 8px 18px 22px; animation: rise .22s cubic-bezier(.2,.8,.2,1); }
+@keyframes rise { from { transform: translateY(40px); opacity: .4; } }
+@media (prefers-reduced-motion: reduce) { .sheet { animation: none; } }
+.grab { width: 40px; height: 4px; border-radius: 99px; background: var(--line); margin: 4px auto 12px; }
+.sheet h3 { margin: 0; font-family: var(--f-display); font-size: 19px; font-weight: 800; }
+.cam { position: relative; height: 200px; border-radius: 16px; background: var(--cam); display: grid; place-items: center; margin-top: 12px; overflow: hidden; }
+.cam .frame { width: 130px; height: 130px; border: 3px solid var(--gold); border-radius: 12px; opacity: .9; }
+.cam small { position: absolute; bottom: 10px; color: var(--id-meta); font-size: 12px; }
+.samples { margin-top: 12px; display: grid; gap: 8px; }
+.sample { display: flex; align-items: center; gap: 10px; text-align: left; min-height: 52px; padding: 8px 12px; border-radius: var(--r-md); border: 1px solid var(--line); background: var(--surface); }
+.sample:hover { background: var(--app-bg); }
+.sample .code { font-family: var(--f-mono); font-weight: 700; font-size: 13.5px; }
+.sample .desc { font-size: 12.5px; color: var(--muted); }
+.toast { position: absolute; left: 14px; right: 14px; bottom: 96px; z-index: 30; background: var(--navy-900); color: var(--on-navy); padding: 12px 14px; border-radius: var(--r-md); font-size: 13.5px; display: flex; gap: 10px; align-items: center; }
+
+/* ---------- review panel ---------- */
+.panel { display: grid; gap: 22px; min-width: 0; }
+.panel header .kicker { font-size: 12.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--pg-accent); }
+.panel header h1 { margin: 6px 0 8px; font-family: var(--f-display); font-weight: 800; font-size: clamp(28px, 4vw, 38px); line-height: 1.15; text-wrap: balance; }
+.panel header p { margin: 0; max-width: 64ch; color: var(--pg-muted); }
+.card { background: var(--pg-card); border: 1px solid var(--pg-line); border-radius: var(--r-lg); padding: 20px; display: grid; gap: 14px; min-width: 0; }
+.card h2 { margin: 0; font-family: var(--f-display); font-size: 18px; font-weight: 800; }
+.card > p { margin: 0; color: var(--pg-muted); font-size: 14px; max-width: 66ch; }
+.ctl-group { display: grid; gap: 8px; }
+.ctl-group .lab { font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--pg-muted); }
+.ctl-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.ctl { text-align: left; border: 1px solid var(--pg-line); background: var(--pg-card); color: var(--pg-fg); border-radius: var(--r-md); padding: 10px 12px; display: grid; gap: 2px; }
+.ctl:hover { border-color: var(--pg-accent); }
+.ctl[aria-pressed="true"] { border-color: var(--pg-accent); background: var(--pg-accent-bg); }
+.ctl b { font-size: 14px; }
+.ctl span { font-size: 12.5px; color: var(--pg-muted); }
+.ctl code { font-family: var(--f-mono); font-size: 12.5px; }
+pre.payload { margin: 0; padding: 14px; border-radius: var(--r-md); background: var(--pg-code-bg); border: 1px solid var(--pg-line); font: 12.5px/1.55 var(--f-mono); overflow-x: auto; color: var(--pg-fg); }
+pre.payload .hl { background: var(--pg-accent-bg); color: var(--pg-accent); font-weight: 700; border-radius: 3px; }
+.states { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; }
+.states li { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 12px; font-size: 14px; }
+.states li b { font-weight: 700; }
+@media (max-width: 520px) { .states li { grid-template-columns: 1fr; gap: 2px; } }
+.open-q { margin: 0; padding-left: 20px; display: grid; gap: 8px; font-size: 14px; }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6M9 16h4"/></symbol>
+  <symbol id="i-scan" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></symbol>
+  <symbol id="i-sync" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 0-15-6.7L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 15 6.7L21 16"/><path d="M16 16h5v5"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-badge" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2"/><path d="M6 16a3 3 0 0 1 6 0M15 10h3M15 14h3"/></symbol>
+  <symbol id="i-factory" viewBox="0 0 24 24"><path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8l-7 5V8l-7 5V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M17 18h1M12 18h1M7 18h1"/></symbol>
+  <symbol id="i-swap" viewBox="0 0 24 24"><path d="m16 3 4 4-4 4M20 7H4M8 21l-4-4 4-4M4 17h16"/></symbol>
+  <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></symbol>
+  <symbol id="i-box" viewBox="0 0 24 24"><path d="M21 8 12 3 3 8v8l9 5 9-5Z"/><path d="m3 8 9 5 9-5M12 13v8"/></symbol>
+  <symbol id="i-cloud-off" viewBox="0 0 24 24"><path d="m2 2 20 20M5.78 5.78A7 7 0 0 0 6 19h11M21.6 15.6A4.5 4.5 0 0 0 17.5 9h-1.8A7 7 0 0 0 9 5.07"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></symbol>
+  <symbol id="i-sensor" viewBox="0 0 24 24"><path d="M5 12a7 7 0 0 1 14 0M8.5 12a3.5 3.5 0 0 1 7 0"/><circle cx="12" cy="12" r="1"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+</svg>
+
+<div class="page">
+  <div class="device-col">
+    <div class="device">
+      <div class="screen" id="screen">
+        <div class="statusbar" aria-hidden="true"><span id="clock">14:48</span><span>4G · 64%</span></div>
+        <div class="appbar" id="appbar"></div>
+        <div id="strip"></div>
+        <div class="body" id="body"></div>
+        <div class="cta" id="cta"></div>
+        <nav class="nav" id="nav" aria-label="Điều hướng chính"></nav>
+        <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+        <div class="layer" id="layer" hidden></div>
+      </div>
+    </div>
+    <p class="device-caption">Prototype bấm được. Dữ liệu và phản hồi SAP là mô phỏng.</p>
+  </div>
+
+  <main class="panel">
+    <header>
+      <div class="kicker">Casla Production · Tạo phân công · Bản review</div>
+      <h1>Phân công kèm vị trí</h1>
+      <p>Chọn công nhân xong, app gọi SAP lấy vị trí hiện tại của người đó và điền sẵn vào ô Vị trí / mã máy. Công nhân đang làm tạm ở máy khác thì quét nhãn trên máy đó. Vị trí đi kèm giao dịch lên SAP; SAP tự ghi thêm vị trí gốc.</p>
+    </header>
+
+    <section class="card" aria-labelledby="h-ctl">
+      <h2 id="h-ctl">Chạy thử</h2>
+      <div class="ctl-group">
+        <div class="lab">1 · Chọn công nhân (giả lập kết quả SAP)</div>
+        <div class="ctl-row" id="ctl-worker"></div>
+      </div>
+      <div class="ctl-group">
+        <div class="lab">2 · Giả lập quét nhãn vào ô Vị trí / mã máy</div>
+        <div class="ctl-row" id="ctl-scan"></div>
+      </div>
+      <p>Sau đó bấm <b>Xác nhận phân công</b> trên máy rồi mở tab Đồng bộ để xem vị trí đi theo giao dịch.</p>
+    </section>
+
+    <section class="card" aria-labelledby="h-payload">
+      <h2 id="h-payload">Gửi lên SAP (submitInitialAssign)</h2>
+      <p>Cập nhật theo màn hình bên trái. Chỉ có <code>PositionID</code> là mới; mã máy chỉ hiện trên app vì ledger chưa lưu máy.</p>
+      <pre class="payload" id="payload"></pre>
+    </section>
+
+    <section class="card" aria-labelledby="h-states">
+      <h2 id="h-states">Ô Vị trí / mã máy có 5 trạng thái</h2>
+      <ul class="states">
+        <li><b>Đang lấy</b><span>Vừa chọn công nhân, app đang hỏi SAP. Vẫn quét nhãn được, mã quét thắng kết quả SAP.</span></li>
+        <li><b>Vị trí gốc</b><span>Nền xanh, một dòng Mã vị trí / Mã máy. Lấy theo bảng vị trí, không cần làm gì thêm.</span></li>
+        <li><b>Tạm thời</b><span>Nền vàng, vẫn một dòng Mã vị trí / Mã máy, kèm nút quay về vị trí gốc. Bảng vị trí không bị đổi.</span></li>
+        <li><b>Chưa xếp</b><span>Công nhân chưa ngồi vị trí nào. Ô để trống, vẫn giao được; quét nhãn nếu đang ngồi máy.</span></li>
+        <li><b>SAP lỗi</b><span>Mất mạng hoặc không có quyền. Không chặn phân công; nhắc quét nhãn trên máy.</span></li>
+      </ul>
+    </section>
+
+    <section class="card" aria-labelledby="h-q">
+      <h2 id="h-q">Cần chốt</h2>
+      <ol class="open-q">
+        <li><b>API lấy vị trí của một công nhân.</b> Hiện chỉ có <code>getPositionBoard</code> trả được, và nó đòi quyền <code>PP_POS_MANAGE</code>. Tổ trưởng chỉ có quyền giao việc sẽ bị <code>MISSING_PERMISSION</code>. Đề xuất thêm một action nhẹ trên <code>ZUI_PP_OPALLOC</code>, ví dụ <code>getWorkerPosition(WorkerID, WorkID)</code>, kiểm tra theo quyền giao việc.</li>
+        <li><b>Bắt buộc hay tùy chọn?</b> Bản demo để tùy chọn (backend cũng không bắt buộc). Nếu muốn bắt buộc thì khóa nút Xác nhận khi ô trống.</li>
+        <li><b>Có làm tương tự cho Xác nhận và Thu hồi không?</b> Backend đã nhận <code>PositionID</code> ở cả <code>submitConfirm</code> và <code>submitRecall</code>.</li>
+        <li><b>Vị trí ngừng dùng.</b> App không kiểm tra trước khi giao; SAP trả <code>POSITION_NOT_ACTIVE</code> lúc đồng bộ và giao dịch nằm ở mục Lỗi để chọn lại. Thử bằng nhãn <code>G99|M999</code>.</li>
+      </ol>
+    </section>
+  </main>
+</div>
+
+<script>
+(() => {
+  const ACTIVE = { G05: { mac: 'M105', name: 'Ghế 5 · chuyền 2' }, G07: { mac: 'M107', name: 'Ghế 7 · chuyền 2' }, G12: { mac: 'M112', name: 'Ghế 12 · chuyền 3' } };
+  const WORKERS = [
+    { key: 'tham', code: 'CL400096', name: 'Nguyễn Thị Thắm', dept: 'MAY MIỆNG-XM1', api: 'found', seat: 'G05', title: 'Đang ngồi G05', desc: 'SAP trả vị trí gốc' },
+    { key: 'lan', code: 'CL400112', name: 'Phạm Thị Lan', dept: 'MAY MIỆNG-XM1', api: 'none', title: 'Chưa xếp vị trí', desc: 'SAP trả rỗng' },
+    { key: 'hoa', code: 'CL400130', name: 'Đỗ Thị Hoa', dept: 'MAY MIỆNG-XM1', api: 'error', title: 'SAP không trả lời', desc: 'Mất mạng / thiếu quyền' },
+  ];
+  const LABELS = [
+    { code: 'G07|M107', title: 'Máy khác (tạm thời)', desc: 'Vị trí đang dùng' },
+    { code: 'G05|M105', title: 'Đúng vị trí gốc', desc: 'Trùng vị trí của Thắm' },
+    { code: 'G99|M999', title: 'Vị trí ngừng dùng', desc: 'SAP sẽ trả lỗi lúc đồng bộ' },
+  ];
+
+  const S = { tab: 'assign', worker: null, origin: null, apiState: 'idle', current: null, target: 'worker', qty: '500', busy: false, txns: [], recentId: null };
+  let loadSeq = 0;
+  const $ = (s) => document.querySelector(s);
+  const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const icon = (n, c = 'i') => `<svg class="${c}" aria-hidden="true"><use href="#i-${n}"/></svg>`;
+  const two = (n) => String(n).padStart(2, '0');
+  const hhmm = (d) => `${two(d.getHours())}:${two(d.getMinutes())}`;
+
+  function parseLabel(raw) {
+    const parts = String(raw).trim().toUpperCase().split(/\s*[|;,/]\s*/);
+    if (parts.length !== 2 || !/^[A-Z0-9._-]{1,10}$/.test(parts[0]) || !/^[A-Z0-9._-]{1,10}$/.test(parts[1])) return null;
+    return { pos: parts[0], mac: parts[1] };
+  }
+
+  /* ----- actions ----- */
+  function selectWorker(w) {
+    S.worker = w; S.origin = null; S.current = null; S.apiState = 'loading'; S.target = 'position';
+    const seq = ++loadSeq;
+    render();
+    setTimeout(() => {
+      if (seq !== loadSeq) return;
+      if (w.api === 'found') { S.origin = { pos: w.seat, mac: ACTIVE[w.seat].mac, name: ACTIVE[w.seat].name }; S.apiState = 'found'; if (!S.current || S.current.pos === S.origin.pos) S.current = { ...S.origin, source: 'origin' }; }
+      else S.apiState = w.api;
+      render();
+    }, 900);
+  }
+  function scanLabel(raw) {
+    const l = parseLabel(raw);
+    if (!l) { toast('Mã vừa quét không phải nhãn vị trí. Nhãn đúng có dạng G05|M105.'); return; }
+    const sameAsOrigin = S.origin && S.origin.pos === l.pos;
+    S.current = { pos: l.pos, mac: l.mac, name: ACTIVE[l.pos]?.name || '', source: sameAsOrigin ? 'origin' : 'scan' };
+    S.target = 'qty';
+    render();
+  }
+  function useOrigin() { if (S.origin) { S.current = { ...S.origin, source: 'origin' }; render(); } }
+  function clearPosition() { S.current = null; S.target = 'position'; render(); }
+
+  async function submit() {
+    if (!S.worker || S.busy) return;
+    S.busy = true; render();
+    await new Promise((r) => setTimeout(r, 800));
+    const now = new Date();
+    const cur = S.current;
+    const bad = cur && !ACTIVE[cur.pos];
+    const txn = {
+      id: 'T' + (S.txns.length + 1), at: now, worker: S.worker, qty: S.qty,
+      pos: cur ? cur.pos : '', mac: cur ? cur.mac : '',
+      origin: S.worker.api === 'found' ? S.worker.seat : '',
+      temp: !!cur && cur.source === 'scan',
+      status: bad ? 'err' : 'ok',
+    };
+    S.txns.unshift(txn); S.recentId = txn.id;
+    S.busy = false;
+    S.worker = null; S.origin = null; S.current = null; S.apiState = 'idle'; S.target = 'worker';
+    render();
+    toast(bad ? 'Đã lưu phân công. SAP từ chối vị trí, xem tab Đồng bộ.' : 'Đã giao và đồng bộ lên SAP.');
+  }
+
+  /* ----- render ----- */
+  const TABS = [
+    { id: 'overview', label: 'Tổng quan', icon: 'grid' },
+    { id: 'assign', label: 'Phân công', icon: 'clip' },
+    { id: 'confirm', label: 'Xác nhận', icon: 'scan' },
+    { id: 'pos', label: 'Vị trí', icon: 'pin' },
+    { id: 'sync', label: 'Đồng bộ', icon: 'sync' },
+  ];
+
+  function render() {
+    renderAppbar(); renderBody(); renderCta(); renderNav(); renderPayload(); renderControls();
+  }
+  function renderAppbar() {
+    const t = S.tab === 'sync' ? ['Đồng bộ', 'Theo dõi và xử lý giao dịch chưa lên SAP'] : S.tab === 'assign' ? ['Tạo phân công', 'Chọn đúng ô rồi bấm quét'] : [TABS.find((x) => x.id === S.tab).label, 'Màn hình hiện có'];
+    $('#appbar').innerHTML = `<div class="t"><h1>${t[0]}</h1><div class="sub">${t[1]}</div></div><button class="avatar-btn" aria-label="Tài khoản: Hải Anh"><span>HA</span></button>`;
+    $('#strip').innerHTML = S.tab === 'assign' ? `<div class="strip">${icon('sensor')}Sẵn sàng nhận mã từ đầu đọc · đang quét vào ô ${S.target === 'worker' ? 'Công nhân' : S.target === 'position' ? 'Vị trí / mã máy' : 'Số lượng'}</div>` : '';
+  }
+  function renderNav() {
+    const pending = S.txns.filter((t) => t.status === 'err').length;
+    $('#nav').innerHTML = TABS.map((t) => `<button data-tab="${t.id}" ${S.tab === t.id ? 'aria-current="page"' : ''}><span class="pill">${icon(t.icon)}</span>${t.label}${t.id === 'sync' && pending ? `<span class="badge-n">${pending}</span>` : ''}</button>`).join('');
+    document.querySelectorAll('[data-tab]').forEach((b) => b.onclick = () => { S.tab = b.dataset.tab; render(); });
+  }
+  const infoRow = (k, v, cls = '') => `<div class="info-row ${cls}"><span class="k">${k}</span><span class="v">${v}</span></div>`;
+
+  function workerField() {
+    const w = S.worker;
+    const target = S.target === 'worker';
+    return `<div class="fld"><div class="fld-label"><span>Công nhân <span class="req">*</span></span>${target ? '<span class="tgt">Đang chọn quét</span>' : ''}</div>
+      <div class="slot ${w ? 'filled' : ''} ${target ? 'target' : ''}"><div class="slot-row">
+        <button class="slot-main" data-target="worker">${icon(w ? 'check' : 'badge')}<span class="val">${w ? esc(w.name) : 'Chưa chọn công nhân'}</span></button>
+        ${w ? `<button class="slot-btn clear" data-clear-worker aria-label="Xóa công nhân">${icon('x')}</button>` : ''}
+        <button class="slot-btn" data-cam="worker" aria-label="Quét công nhân bằng camera">${icon('camera')}</button>
+      </div>${w ? `<div class="slot-info">${infoRow('Mã NV', w.code)}${infoRow('Bộ phận', esc(w.dept))}</div>` : ''}</div></div>`;
+  }
+
+  function positionField() {
+    const target = S.target === 'position';
+    const cur = S.current;
+    const temp = cur && cur.source === 'scan';
+    const cls = cur ? (temp ? 'temp' : 'filled') : '';
+    let main, info = '', hint = '';
+    if (cur) {
+      // Two plain lines only; the colour says origin (green) or temporary (amber).
+      main = `${icon(temp ? 'swap' : 'check')}<span class="kv"><span><small>Mã vị trí:</small>${cur.pos}</span><span><small>Mã máy:</small>${cur.mac}</span></span>`;
+    } else if (S.apiState === 'loading') {
+      main = `${icon('pin')}<span class="val" style="flex:1"><span class="skeleton" style="display:block;width:70%"></span></span>`;
+      hint = 'Đang lấy vị trí hiện tại của công nhân từ SAP…';
+    } else {
+      main = `${icon('pin')}<span class="val">${S.worker ? 'Chưa có vị trí' : 'Chọn công nhân trước'}</span>`;
+      if (S.apiState === 'none') hint = 'Công nhân chưa được xếp vị trí. Quét nhãn trên máy nếu đang ngồi máy nào.';
+      if (S.apiState === 'error') hint = 'Không lấy được vị trí từ SAP. Vẫn giao được; quét nhãn trên máy để ghi vị trí.';
+    }
+    return `<div class="fld"><div class="fld-label"><span>Vị trí / mã máy</span>${target ? '<span class="tgt">Đang chọn quét</span>' : '<span class="opt-tag">Tùy chọn</span>'}</div>
+      <div class="slot ${cls} ${target ? 'target' : ''}"><div class="slot-row">
+        <button class="slot-main" data-target="position" ${S.worker ? '' : 'disabled'}>${main}</button>
+        ${cur ? `<button class="slot-btn clear" data-clear-pos aria-label="Xóa vị trí">${icon('x')}</button>` : ''}
+        <button class="slot-btn" data-cam="position" aria-label="Quét nhãn vị trí bằng camera" ${S.worker ? '' : 'disabled'}>${icon('camera')}</button>
+      </div>
+      ${info ? `<div class="slot-info">${info}</div>` : ''}
+      ${hint ? `<div class="slot-hint ${S.apiState === 'error' ? 'warn' : ''}">${hint}</div>` : ''}
+      ${temp && S.origin ? `<div class="slot-hint"><button class="link-btn" data-origin>${icon('rotate')}Dùng vị trí gốc ${S.origin.pos}</button></div>` : ''}
+      </div></div>`;
+  }
+
+  function renderBody() {
+    const body = $('#body');
+    if (S.tab === 'sync') { body.innerHTML = syncView(); return; }
+    if (S.tab !== 'assign') { body.innerHTML = `<div class="placeholder"><h3>${TABS.find((t) => t.id === S.tab).label}</h3><p>Màn hình hiện có, không đổi trong bản review này.</p></div>`; return; }
+    body.innerHTML = `
+      <div class="op-card"><div class="head">${icon('check')}<span>LSX 100000000123 · CĐ 0010 · May miệng túi</span></div>
+        <div class="metric"><span>SL công đoạn</span><b>10.000 CHC</b></div>
+        <div class="metric"><span>Đã giao</span><b>0 CHC</b></div></div>
+      ${workerField()}
+      ${positionField()}
+      <div class="qty"><div class="fld-label"><span>Số lượng giao <span class="req">*</span></span></div>
+        <div class="remain"><span>Còn lại</span><span>10.000 CHC</span></div>
+        <label class="qty-input"><input id="qty" inputmode="decimal" value="${esc(S.qty)}" aria-label="Số lượng giao"><span>CHC</span></label></div>`;
+    document.querySelectorAll('[data-target]').forEach((b) => b.onclick = () => { if (b.dataset.target === 'worker' && !S.worker) { openCamera('worker'); return; } S.target = b.dataset.target; render(); });
+    document.querySelectorAll('[data-cam]').forEach((b) => b.onclick = () => openCamera(b.dataset.cam));
+    $('[data-clear-worker]') && ($('[data-clear-worker]').onclick = () => { loadSeq++; S.worker = null; S.origin = null; S.current = null; S.apiState = 'idle'; S.target = 'worker'; render(); });
+    $('[data-clear-pos]') && ($('[data-clear-pos]').onclick = clearPosition);
+    $('[data-origin]') && ($('[data-origin]').onclick = useOrigin);
+    $('#qty').oninput = (e) => { S.qty = e.target.value; renderCta(); renderPayload(); };
+  }
+
+  function syncView() {
+    const ok = S.txns.filter((t) => t.status === 'ok').length, err = S.txns.length - ok;
+    const rows = S.txns.map((t) => `
+      <div class="txn ${t.id === S.recentId ? 'recent' : ''}">
+        <div class="top"><span class="t">Giao ${esc(t.qty)} CHC · ${esc(t.worker.name)}</span><span class="st ${t.status === 'ok' ? 'ok' : 'err'}">${t.status === 'ok' ? 'Đã đồng bộ' : 'Lỗi'}</span></div>
+        <div class="meta">LSX 100000000123 · CĐ 0010 · ${hhmm(t.at)}</div>
+        <div class="pos-line">${t.pos ? `<span class="pos-chip ${t.temp ? 'temp' : ''}">${icon('pin')}${t.pos} · ${t.mac}${t.temp ? ' · tạm' : ''}</span>` : '<span class="meta">Không ghi vị trí</span>'}
+          ${t.status === 'ok' && t.origin && t.origin !== t.pos ? `<span class="meta">Vị trí gốc ${t.origin}</span>` : ''}</div>
+        ${t.status === 'err' ? '<div class="err-msg">POSITION_NOT_ACTIVE · Vị trí chưa có hoặc đang ngừng dùng. Mở giao dịch để chọn lại vị trí.</div>' : ''}
+      </div>`).join('');
+    return `<div class="sync-kpis"><div><b>0</b><small>ĐANG CHỜ</small></div><div><b>${ok}</b><small>ĐÃ LÊN SAP</small></div><div><b style="color:var(--danger)">${err}</b><small>LỖI</small></div></div>
+      ${rows || '<div class="placeholder"><h3>Chưa có giao dịch</h3><p>Tạo một phân công ở tab Phân công để xem vị trí đi kèm.</p></div>'}`;
+  }
+
+  function renderCta() {
+    const cta = $('#cta');
+    if (S.tab !== 'assign') { cta.hidden = true; return; }
+    cta.hidden = false;
+    const ready = S.worker && Number(S.qty) > 0 && !S.busy;
+    cta.innerHTML = `<button class="btn gold" id="submit" ${ready ? '' : 'disabled'}>${S.busy ? 'Đang gửi SAP…' : 'Xác nhận phân công'}</button>`;
+    $('#submit').onclick = submit;
+  }
+
+  function renderPayload() {
+    const pos = S.current ? S.current.pos : '';
+    const lines = [
+      '{',
+      '  "AccessToken": "…",',
+      '  "DeviceID": "…",',
+      '  "SyncItemUUID": "…",',
+      '  "ProductionOrder": "100000000123",',
+      '  "Operation": "0010",',
+      '  "WorkID": "XM2.001",',
+      `  <span class="hl">"PositionID": "${pos}"</span>,`,
+      `  "ToWorkerID": "${S.worker ? S.worker.code : ''}",`,
+      `  "Quantity": "${esc(S.qty || '0')}",`,
+      '  "UnitOfMeasure": "CHC",',
+      '  "ShiftID": "CA1",',
+      '  "ExecutedAt": "…",',
+      '  "WorkerPassword": "…"',
+      '}',
+      '',
+      '// SAP trả về thêm:',
+      `// "PositionID": "${pos}", "OriginPositionID": "${S.origin ? S.origin.pos : ''}"`,
+    ];
+    $('#payload').innerHTML = lines.join('\n');
+  }
+
+  function renderControls() {
+    $('#ctl-worker').innerHTML = WORKERS.map((w) => `<button class="ctl" data-w="${w.key}" aria-pressed="${S.worker?.key === w.key}"><b>${esc(w.name)}</b><span>${w.title} · ${w.desc}</span></button>`).join('');
+    $('#ctl-scan').innerHTML = LABELS.map((l) => `<button class="ctl" data-l="${l.code}" ${S.worker ? '' : 'disabled'}><b>${l.title}</b><span><code>${l.code}</code> · ${l.desc}</span></button>`).join('');
+    document.querySelectorAll('[data-w]').forEach((b) => b.onclick = () => { S.tab = 'assign'; selectWorker(WORKERS.find((w) => w.key === b.dataset.w)); });
+    document.querySelectorAll('[data-l]').forEach((b) => b.onclick = () => { S.tab = 'assign'; scanLabel(b.dataset.l); });
+  }
+
+  /* ----- overlays ----- */
+  function openCamera(kind) {
+    const layer = $('#layer');
+    const isW = kind === 'worker';
+    const items = isW ? WORKERS.map((w) => ({ code: w.code, desc: `${w.name} · ${w.title}`, act: () => selectWorker(w) }))
+      : LABELS.map((l) => ({ code: l.code, desc: l.title, act: () => scanLabel(l.code) }));
+    layer.className = 'layer'; layer.hidden = false;
+    layer.innerHTML = `<div class="scrim" data-close></div><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="cam-t">
+      <div class="grab"></div><h3 id="cam-t">${isW ? 'Quét QR công nhân' : 'Quét nhãn vị trí / máy'}</h3>
+      <div class="cam" aria-hidden="true"><div class="frame"></div><small>${isW ? 'Đưa thẻ công nhân vào khung' : 'Đưa nhãn dán trên máy vào khung'}</small></div>
+      <div class="samples">${items.map((it, i) => `<button class="sample" data-i="${i}">${icon(isW ? 'badge' : 'factory')}<span style="flex:1"><span class="code">${esc(it.code)}</span><br><span class="desc">${esc(it.desc)}</span></span>${icon('chev')}</button>`).join('')}</div></div>`;
+    const close = () => { layer.hidden = true; layer.innerHTML = ''; };
+    layer.querySelector('[data-close]').onclick = close;
+    layer.onkeydown = (e) => { if (e.key === 'Escape') close(); };
+    layer.querySelectorAll('[data-i]').forEach((b) => b.onclick = () => { close(); items[+b.dataset.i].act(); });
+    layer.querySelector('[data-i]').focus();
+  }
+  let toastTimer;
+  function toast(msg) {
+    const t = $('#toast'); t.innerHTML = `${icon('info')}<span>${esc(msg)}</span>`; t.hidden = false;
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, 3500);
+  }
+
+  $('#clock').textContent = hhmm(new Date());
+  // Open in a working state: Thắm is selected and SAP has answered with her seat.
+  S.worker = WORKERS[0];
+  S.origin = { pos: 'G05', mac: 'M105', name: ACTIVE.G05.name };
+  S.current = { ...S.origin, source: 'origin' };
+  S.apiState = 'found';
+  S.target = 'qty';
+  render();
+})();
+</script>

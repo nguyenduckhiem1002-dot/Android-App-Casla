@@ -1,0 +1,339 @@
+<title>Thẻ số lượng lỗi</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=Inter:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: review canvas. A sample-data switch on top, then two groups (Tổng quan, Xác nhận); each group lays its card options side by side at phone width so they can be compared, and wraps to one column on a phone. */
+:root {
+  --pg-bg: #ECEEF3; --pg-card: #FFFFFF; --pg-fg: #16234A; --pg-muted: #596274; --pg-line: #D8DCE5;
+  --pg-accent: #7A5A18; --pg-accent-bg: #F6EAD2; --pg-chip: #E4E8F1;
+
+  /* App surfaces: the Casla app has a light theme only, so the cards keep it */
+  --navy: #16234A; --navy-100: #EDF1F5; --gold: #C9A24B;
+  --app-bg: #F5F6F8; --surface: #FFFFFF; --line: #E7E9EE; --muted: #626A78; --muted-100: #EEF0F3;
+  --success: #2E7D32; --success-bg: #E5F2E6; --danger: #C62828; --danger-bg: #FBEAEA;
+  --pending: #85601A; --pending-bg: #FBF1DD; --on-navy: #FFFFFF;
+
+  --f-display: "Manrope", "Segoe UI", system-ui, sans-serif;
+  --f-body: "Inter", "Segoe UI", system-ui, sans-serif;
+  --f-mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --r-sm: 8px; --r-md: 12px; --r-lg: 16px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --pg-bg: #0B1022; --pg-card: #131A31; --pg-fg: #E5E9F5; --pg-muted: #A0A9C6; --pg-line: #273153;
+    --pg-accent: #E0BE6E; --pg-accent-bg: #2A2413; --pg-chip: #1C2542; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --pg-bg: #0B1022; --pg-card: #131A31; --pg-fg: #E5E9F5; --pg-muted: #A0A9C6; --pg-line: #273153;
+  --pg-accent: #E0BE6E; --pg-accent-bg: #2A2413; --pg-chip: #1C2542; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--f-body); font-size: 15px; line-height: 1.5; padding-inline: 16px; }
+button { font: inherit; color: inherit; cursor: pointer; touch-action: manipulation; }
+:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+svg.i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+.page { max-width: 1180px; margin: 0 auto; padding-block: 28px 56px; display: grid; gap: 36px; }
+.intro { display: grid; gap: 14px; }
+.intro h1 { margin: 0; font-family: var(--f-display); font-weight: 800; font-size: 28px; line-height: 1.2; text-wrap: balance; }
+.lead { margin: 0; color: var(--pg-muted); max-width: 66ch; }
+.switch { display: inline-flex; flex-wrap: wrap; padding: 4px; gap: 4px; border-radius: 99px; background: var(--pg-chip); border: 1px solid var(--pg-line); justify-self: start; }
+.switch button { border: 0; background: transparent; color: var(--pg-muted); border-radius: 99px; min-height: 40px; padding: 0 16px; font-weight: 700; font-size: 13.5px; }
+.switch button[aria-pressed="true"] { background: var(--pg-card); color: var(--pg-fg); box-shadow: 0 1px 3px rgba(14, 23, 48, .18); }
+
+.group { display: grid; gap: 16px; }
+.group > h2 { margin: 0; font-family: var(--f-display); font-weight: 800; font-size: 21px; }
+.group > p { margin: -8px 0 0; color: var(--pg-muted); max-width: 66ch; }
+.options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 20px; align-items: start; }
+.option { display: grid; gap: 10px; min-width: 0; }
+.option-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.option-head h3 { margin: 0; font-family: var(--f-display); font-weight: 800; font-size: 15.5px; }
+.pick { font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 99px; background: var(--pg-accent-bg); color: var(--pg-accent); border: 1px solid var(--pg-accent); }
+.option > p { margin: 0; font-size: 13.5px; color: var(--pg-muted); }
+
+/* ---------- a cut-out of the app screen ---------- */
+.cut { background: var(--app-bg); color: var(--navy); border-radius: var(--r-lg); padding: 12px; display: grid; gap: 10px; font-size: 14px; max-width: 380px; width: 100%; }
+.cut-title { font-size: 12px; font-weight: 700; color: var(--muted); padding: 2px 2px 0; }
+
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); padding: 14px; display: grid; gap: 10px; }
+.card-head { display: flex; gap: 8px; align-items: flex-start; }
+.who { flex: 1; min-width: 0; }
+.who b { display: block; font-family: var(--f-display); font-weight: 700; font-size: 14.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.who small { display: block; font-family: var(--f-mono); font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip { font-size: 11.5px; font-weight: 700; padding: 3px 9px; border-radius: 99px; white-space: nowrap; }
+.chip.doing { background: var(--pending-bg); color: var(--pending); }
+.chip.done { background: var(--success-bg); color: var(--success); }
+.chip.defect { background: var(--danger-bg); color: var(--danger); display: inline-flex; align-items: center; gap: 4px; }
+.chip.defect svg { width: 13px; height: 13px; }
+
+.bar { display: flex; height: 8px; border-radius: 99px; background: var(--muted-100); overflow: hidden; }
+.bar i { display: block; height: 100%; }
+.bar .ok { background: var(--success); }
+/* hatched, so a defect reads without relying on red alone */
+.bar .bad { background: repeating-linear-gradient(135deg, var(--danger) 0 4px, #E57373 4px 7px); }
+.bar .plain { background: var(--navy); }
+
+.stats { display: grid; gap: 4px; font-variant-numeric: tabular-nums; }
+.stats.c4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.stats.c5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.stat { display: grid; gap: 1px; min-width: 0; }
+.stat span { font-size: 11px; font-weight: 600; color: var(--muted); }
+.stat b { font-family: var(--f-display); font-weight: 800; font-size: 14.5px; }
+.stat small { font-size: 11px; font-weight: 700; }
+.stat.bad b, .stat.bad small, .bad-text { color: var(--danger); }
+.stat.zero b { color: var(--muted); font-weight: 700; }
+.stat.over b { color: var(--pending); }
+
+.defect-line { display: flex; gap: 6px; align-items: center; padding: 7px 10px; border-radius: var(--r-sm); background: var(--danger-bg); color: var(--danger); font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.defect-line span { flex: 1; min-width: 0; }
+.defect-line small { font-weight: 600; }
+
+/* rows of the confirmation side */
+.row { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 12px; display: flex; gap: 10px; align-items: center; min-height: 56px; }
+.row.on { border-color: var(--navy); background: var(--navy-100); }
+.row .who b { font-size: 14px; }
+.side { text-align: right; display: grid; gap: 2px; justify-items: end; font-variant-numeric: tabular-nums; }
+.side b { font-family: var(--f-display); font-weight: 800; font-size: 14px; white-space: nowrap; }
+.side small { font-size: 11px; color: var(--muted); font-weight: 600; }
+.box { width: 22px; height: 22px; border-radius: 6px; border: 2px solid var(--muted); background: var(--surface); display: grid; place-items: center; flex: none; color: transparent; }
+.row.on .box { background: var(--navy); border-color: var(--navy); color: var(--on-navy); }
+.box svg { width: 14px; height: 14px; stroke-width: 3; }
+.detail { display: grid; gap: 0; margin: -4px 0 0; padding: 4px 12px 8px 44px; background: var(--surface); border: 1px solid var(--line); border-top: 0; border-radius: 0 0 var(--r-md) var(--r-md); font-size: 13px; font-variant-numeric: tabular-nums; }
+.detail div { display: flex; justify-content: space-between; gap: 8px; padding: 5px 0; }
+.detail span { color: var(--muted); }
+.detail b { font-weight: 700; }
+.row.open { border-radius: var(--r-md) var(--r-md) 0 0; }
+
+.tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.tile { background: var(--app-bg); border-radius: var(--r-sm); padding: 8px 10px; display: grid; gap: 1px; font-variant-numeric: tabular-nums; }
+.tile span { font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.tile b { font-family: var(--f-display); font-weight: 800; font-size: 17px; }
+.tile.bad { background: var(--danger-bg); }
+.tile.bad span, .tile.bad b { color: var(--danger); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11.5px; color: var(--muted); font-weight: 600; }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.legend i { width: 14px; height: 8px; border-radius: 3px; display: inline-block; }
+
+.panel { background: var(--pg-card); border: 1px solid var(--pg-line); border-radius: var(--r-lg); padding: 18px 20px; }
+.panel h2 { margin: 0 0 10px; font-family: var(--f-display); font-weight: 800; font-size: 17px; }
+.list { margin: 0; padding-left: 18px; display: grid; gap: 8px; max-width: 70ch; }
+</style>
+
+<div class="page">
+  <div class="intro">
+    <h1>Hiển thị số lượng lỗi ở Tổng quan và Xác nhận</h1>
+    <p class="lead">Mỗi nhóm dưới đây là cùng một dữ liệu vẽ theo vài cách. Đổi bộ dữ liệu mẫu để xem từng cách trông ra sao khi có lỗi, không có lỗi và khi xác nhận vượt số đã giao. Số liệu là ví dụ.</p>
+    <div class="switch" role="group" aria-label="Dữ liệu mẫu">
+      <button type="button" data-case="defect" aria-pressed="true">Có lỗi</button>
+      <button type="button" data-case="none" aria-pressed="false">Không có lỗi</button>
+      <button type="button" data-case="over" aria-pressed="false">Xác nhận vượt</button>
+    </div>
+  </div>
+
+  <section class="group">
+    <h2>Tổng quan: thẻ công nhân</h2>
+    <p>Thẻ hiện tại có bốn cột Giao, Thu hồi, H.thành, Còn lại và một thanh tiến độ. Chưa có chỗ cho số lỗi.</p>
+    <div class="options">
+      <div class="option">
+        <div class="option-head"><h3>A. Thêm cột Lỗi</h3><span class="pick">Tớ đề xuất</span></div>
+        <div class="cut" id="ov-a"></div>
+        <p>Lỗi có cột riêng, luôn ở cùng một vị trí nên lướt dọc danh sách là so được. Thanh tiến độ chia hai đoạn: xanh là hoàn thành, đỏ kẻ sọc là lỗi.</p>
+      </div>
+      <div class="option">
+        <div class="option-head"><h3>B. Giữ bốn cột, thêm dòng lỗi</h3></div>
+        <div class="cut" id="ov-b"></div>
+        <p>Thẻ cũ giữ nguyên. Chỉ công nhân có lỗi mới có thêm một dòng đỏ ở cuối thẻ, kèm tỉ lệ lỗi. Thay đổi ít nhất, nhưng thẻ cao thấp không đều.</p>
+      </div>
+      <div class="option">
+        <div class="option-head"><h3>C. Ghi lỗi dưới H.thành</h3></div>
+        <div class="cut" id="ov-c"></div>
+        <p>Vẫn bốn cột, số lỗi là dòng nhỏ màu đỏ ngay dưới số hoàn thành. Gọn nhất, nhưng số lỗi nhỏ nên dễ bỏ sót trên máy PDA.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="group">
+    <h2>Xác nhận</h2>
+    <p>Ba chỗ người dùng nhìn số liệu trước khi nhập: danh sách công nhân, danh sách công đoạn và đầu form xác nhận.</p>
+    <div class="options">
+      <div class="option">
+        <div class="option-head"><h3>Danh sách công nhân</h3></div>
+        <div class="cut" id="cf-workers"></div>
+        <p>Bên phải mỗi dòng là số còn lại. Công nhân có lỗi thì có thêm nhãn đỏ "Lỗi" ngay dưới, công nhân không lỗi thì để trống cho đỡ rối.</p>
+      </div>
+      <div class="option">
+        <div class="option-head"><h3>Chọn công đoạn</h3></div>
+        <div class="cut" id="cf-ops"></div>
+        <p>Dòng thu gọn vẫn chỉ có tên công đoạn như cậu yêu cầu, thêm số còn lại và nhãn lỗi ở bên phải. Mở chi tiết thì có dòng "Số lượng lỗi".</p>
+      </div>
+      <div class="option">
+        <div class="option-head"><h3>Đầu form xác nhận</h3></div>
+        <div class="cut" id="cf-form"></div>
+        <p>Bốn ô số thay cho ba dòng chữ hiện tại, ô Lỗi đổi nền đỏ khi lớn hơn 0. Thanh chia đoạn cho thấy đã làm bao nhiêu trên tổng đã giao.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="panel">
+    <h2>Quy ước dùng chung</h2>
+    <ul class="list">
+      <li><b>Lỗi luôn tách khỏi hoàn thành.</b> Hoàn thành là số đạt. Còn lại bằng giao trừ thu hồi, trừ hoàn thành, trừ lỗi.</li>
+      <li><b>Không chỉ dựa vào màu.</b> Lỗi luôn có chữ "Lỗi" đi kèm, nhãn lỗi có thêm biểu tượng cảnh báo, đoạn lỗi trên thanh tiến độ có kẻ sọc.</li>
+      <li><b>Lỗi bằng 0 thì chìm xuống.</b> Số 0 màu xám, không nhãn, không dòng đỏ, để mắt chỉ dừng ở chỗ thật sự có lỗi.</li>
+      <li><b>Xác nhận vượt</b> hiện số còn lại âm màu vàng, đúng như SAP ghi.</li>
+    </ul>
+  </div>
+
+  <div class="panel">
+    <h2>Cần cậu chốt</h2>
+    <ul class="list">
+      <li>Thẻ Tổng quan chọn A, B hay C?</li>
+      <li>Tỉ lệ lỗi tính bằng lỗi / (lỗi + hoàn thành) × 100, hiện hai chữ số thập phân (ví dụ 12 / 332 = 3,61%). Cậu xác nhận lại con số này.</li>
+      <li>Ba phần bên Xác nhận như trên được chưa, hay chỗ nào cậu muốn giữ nguyên như hiện tại?</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+(function () {
+  var WARN = '<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9v4M12 17h.01M10.3 3.9 2.6 17a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>';
+  var CHECK = '<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+  var UOM = 'CHC';
+
+  var CASES = {
+    defect: {
+      workers: [
+        { name: 'Nguyễn Thị Thắm', code: 'CL400096', dept: 'MAY MIỆNG-XM2', giao: 500, thuHoi: 0, ht: 320, loi: 12 },
+        { name: 'Trần Văn Hòa', code: 'CL400112', dept: 'MAY MIỆNG-XM2', giao: 300, thuHoi: 50, ht: 250, loi: 0 },
+        { name: 'Lê Thị Mai', code: 'CL400205', dept: 'MAY LẬP TRÌNH-XM2', giao: 240, thuHoi: 0, ht: 150, loi: 30 }
+      ],
+      ops: [
+        { name: 'May miệng túi', lsx: '100000000123', no: '0010', giao: 300, ht: 200, loi: 12 },
+        { name: 'May thân sau', lsx: '100000000123', no: '0020', giao: 200, ht: 120, loi: 0 }
+      ]
+    },
+    none: {
+      workers: [
+        { name: 'Nguyễn Thị Thắm', code: 'CL400096', dept: 'MAY MIỆNG-XM2', giao: 500, thuHoi: 0, ht: 320, loi: 0 },
+        { name: 'Trần Văn Hòa', code: 'CL400112', dept: 'MAY MIỆNG-XM2', giao: 300, thuHoi: 50, ht: 250, loi: 0 },
+        { name: 'Lê Thị Mai', code: 'CL400205', dept: 'MAY LẬP TRÌNH-XM2', giao: 240, thuHoi: 0, ht: 150, loi: 0 }
+      ],
+      ops: [
+        { name: 'May miệng túi', lsx: '100000000123', no: '0010', giao: 300, ht: 200, loi: 0 },
+        { name: 'May thân sau', lsx: '100000000123', no: '0020', giao: 200, ht: 120, loi: 0 }
+      ]
+    },
+    over: {
+      workers: [
+        { name: 'Nguyễn Thị Thắm', code: 'CL400096', dept: 'MAY MIỆNG-XM2', giao: 500, thuHoi: 0, ht: 320, loi: 12 },
+        { name: 'Trần Văn Hòa', code: 'CL400112', dept: 'MAY MIỆNG-XM2', giao: 300, thuHoi: 50, ht: 250, loi: 0 },
+        { name: 'Lê Thị Mai', code: 'CL400205', dept: 'MAY LẬP TRÌNH-XM2', giao: 200, thuHoi: 0, ht: 230, loi: 20 }
+      ],
+      ops: [
+        { name: 'May miệng túi', lsx: '100000000123', no: '0010', giao: 200, ht: 230, loi: 20 },
+        { name: 'May thân sau', lsx: '100000000123', no: '0020', giao: 200, ht: 120, loi: 0 }
+      ]
+    }
+  };
+
+  function fmt(n) { return n.toLocaleString('vi-VN'); }
+  function left(x) { return x.giao - (x.thuHoi || 0) - x.ht - x.loi; }
+  /* defect rate = lỗi / (lỗi + hoàn thành) x 100, two decimals */
+  function pct(part, whole) { return whole > 0 ? (part / whole * 100).toLocaleString('vi-VN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '%' : '0%'; }
+
+  function chip(x) {
+    return left(x) <= 0
+      ? '<span class="chip done">Hoàn tất</span>'
+      : '<span class="chip doing">Đang làm</span>';
+  }
+  function head(w) {
+    return '<div class="card-head"><div class="who"><b>' + w.name + '</b><small>' + w.code + ' · ' + w.dept +
+      '</small></div>' + chip(w) + '</div>';
+  }
+  /* one scale for both segments: what was given, or what was done if that is more */
+  function bar(x, split) {
+    var base = Math.max(x.giao - (x.thuHoi || 0), x.ht + x.loi, 1);
+    if (!split) return '<div class="bar"><i class="plain" style="width:' + (x.ht + x.loi) / base * 100 + '%"></i></div>';
+    return '<div class="bar" role="img" aria-label="Hoàn thành ' + fmt(x.ht) + ', lỗi ' + fmt(x.loi) + ' trên ' + fmt(base) + ' ' + UOM + '">' +
+      '<i class="ok" style="width:' + x.ht / base * 100 + '%"></i>' +
+      '<i class="bad" style="width:' + x.loi / base * 100 + '%"></i></div>';
+  }
+  function stat(label, value, cls, sub) {
+    return '<div class="stat ' + (cls || '') + '"><span>' + label + '</span><b>' + value + '</b>' + (sub || '') + '</div>';
+  }
+  function leftStat(x) { return stat('Còn lại', fmt(left(x)), left(x) < 0 ? 'over' : ''); }
+
+  function cardA(w) {
+    return '<div class="card">' + head(w) + bar(w, true) + '<div class="stats c5">' +
+      stat('Giao', fmt(w.giao)) + stat('Thu hồi', fmt(w.thuHoi)) + stat('H.thành', fmt(w.ht)) +
+      stat('Lỗi', fmt(w.loi), w.loi > 0 ? 'bad' : 'zero') + leftStat(w) + '</div></div>';
+  }
+  function cardB(w) {
+    return '<div class="card">' + head(w) + bar(w, false) + '<div class="stats c4">' +
+      stat('Giao', fmt(w.giao)) + stat('Thu hồi', fmt(w.thuHoi)) + stat('H.thành', fmt(w.ht)) + leftStat(w) + '</div>' +
+      (w.loi > 0 ? '<div class="defect-line">' + WARN + '<span>Lỗi ' + fmt(w.loi) + ' ' + UOM +
+        '</span><small>' + pct(w.loi, w.ht + w.loi) + ' sản lượng đã làm</small></div>' : '') + '</div>';
+  }
+  function cardC(w) {
+    return '<div class="card">' + head(w) + bar(w, true) + '<div class="stats c4">' +
+      stat('Giao', fmt(w.giao)) + stat('Thu hồi', fmt(w.thuHoi)) +
+      stat('H.thành', fmt(w.ht), '', w.loi > 0 ? '<small class="bad-text">Lỗi ' + fmt(w.loi) + '</small>' : '') +
+      leftStat(w) + '</div></div>';
+  }
+
+  function defectChip(n) {
+    return n > 0 ? '<span class="chip defect">' + WARN + 'Lỗi ' + fmt(n) + '</span>' : '';
+  }
+  function workerRows(ws) {
+    return '<div class="cut-title">Công nhân còn việc cần xác nhận</div>' + ws.map(function (w) {
+      return '<div class="row"><div class="who"><b>' + w.name + '</b><small>' + w.code + ' · ' + w.dept + '</small></div>' +
+        '<div class="side"><b>' + fmt(left(w)) + ' ' + UOM + '</b>' + (defectChip(w.loi) || '<small>còn lại</small>') + '</div></div>';
+    }).join('');
+  }
+  function opRows(ops) {
+    var first = ops[0], second = ops[1];
+    return '<div class="cut-title">Nguyễn Thị Thắm · chọn công đoạn</div>' +
+      '<div><div class="row on open"><span class="box">' + CHECK + '</span><div class="who"><b>' + first.name + '</b></div>' +
+      '<div class="side"><b>' + fmt(left(first)) + ' ' + UOM + '</b>' + (defectChip(first.loi) || '<small>còn lại</small>') + '</div></div>' +
+      '<div class="detail"><div><span>Lệnh SX</span><b>' + first.lsx + '</b></div><div><span>Công đoạn</span><b>' + first.no + '</b></div>' +
+      '<div><span>Đã giao</span><b>' + fmt(first.giao) + ' ' + UOM + '</b></div><div><span>Đã xác nhận</span><b>' + fmt(first.ht) + ' ' + UOM + '</b></div>' +
+      '<div><span>Số lượng lỗi</span><b class="' + (first.loi > 0 ? 'bad-text' : '') + '">' + fmt(first.loi) + ' ' + UOM + '</b></div>' +
+      '<div><span>Còn lại</span><b>' + fmt(left(first)) + ' ' + UOM + '</b></div></div></div>' +
+      '<div class="row"><span class="box">' + CHECK + '</span><div class="who"><b>' + second.name + '</b></div>' +
+      '<div class="side"><b>' + fmt(left(second)) + ' ' + UOM + '</b>' + (defectChip(second.loi) || '<small>còn lại</small>') + '</div></div>';
+  }
+  function formHead(op) {
+    return '<div class="cut-title">Xác nhận sản lượng</div><div class="card">' +
+      '<div class="card-head"><div class="who"><b>' + op.name + '</b><small>LSX ' + op.lsx + ' · CĐ ' + op.no + '</small></div>' + chip(op) + '</div>' +
+      bar(op, true) +
+      '<div class="legend"><span><i style="background:var(--success)"></i>Hoàn thành</span>' +
+      '<span><i style="background:repeating-linear-gradient(135deg,var(--danger) 0 4px,#E57373 4px 7px)"></i>Lỗi</span>' +
+      '<span><i style="background:var(--muted-100)"></i>Còn lại</span></div>' +
+      '<div class="tiles"><div class="tile"><span>Đã giao</span><b>' + fmt(op.giao) + '</b></div>' +
+      '<div class="tile"><span>Đã xác nhận</span><b>' + fmt(op.ht) + '</b></div>' +
+      '<div class="tile ' + (op.loi > 0 ? 'bad' : '') + '"><span>Lỗi</span><b>' + fmt(op.loi) + '</b></div>' +
+      '<div class="tile"><span>Còn lại</span><b' + (left(op) < 0 ? ' style="color:var(--pending)"' : '') + '>' + fmt(left(op)) + '</b></div></div></div>';
+  }
+
+  function render(key) {
+    var data = CASES[key];
+    var title = '<div class="cut-title">Công nhân trong phạm vi · Hôm nay</div>';
+    document.getElementById('ov-a').innerHTML = title + data.workers.map(cardA).join('');
+    document.getElementById('ov-b').innerHTML = title + data.workers.map(cardB).join('');
+    document.getElementById('ov-c').innerHTML = title + data.workers.map(cardC).join('');
+    document.getElementById('cf-workers').innerHTML = workerRows(data.workers);
+    document.getElementById('cf-ops').innerHTML = opRows(data.ops);
+    document.getElementById('cf-form').innerHTML = formHead(data.ops[0]);
+    document.querySelectorAll('.switch button').forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.case === key));
+    });
+  }
+  document.querySelectorAll('.switch button').forEach(function (b) {
+    b.addEventListener('click', function () { render(b.dataset.case); });
+  });
+  render('defect');
+})();
+</script>

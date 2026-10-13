@@ -1,3 +1,4 @@
+import '../../../core/utils/shift_execution_validation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -6,6 +7,7 @@ import '../../../app/theme/casla_colors.dart';
 import '../../../core/utils/quantity_formatter.dart';
 import '../../../domain/entities/entities.dart';
 import '../../../domain/entities/enums.dart';
+import '../../../domain/entities/mutation_receipt.dart';
 import '../../../main.dart';
 import '../../../presentation/widgets/casla_empty_state.dart';
 import '../../../presentation/widgets/casla_skeleton.dart';
@@ -56,7 +58,11 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
     super.dispose();
   }
 
-  Future<void> _submitRecall(double maxRecall) async {
+  Future<void> _submitRecall(double maxRecall) => ref
+      .read(appStateProvider)
+      .runCriticalOperation(() => _submitRecallNow(maxRecall));
+
+  Future<void> _submitRecallNow(double maxRecall) async {
     if (_isSubmitting) return;
     final qty = double.tryParse(_qtyController.text) ?? 0.0;
     // Same scale-aware comparison the repository validates with, so the screen
@@ -67,8 +73,16 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
       setState(() {
         _quantityError =
             'Nhập số lượng lớn hơn 0 và không quá '
-            '${ProductionMath.formatQuantity(maxRecall)}.';
+            '${_displayQuantity(maxRecall)}.';
       });
+      return;
+    }
+    final wholeError = wholeQuantityInputError(
+      _qtyController.text,
+      widget.assignment.uom,
+    );
+    if (wholeError != null) {
+      setState(() => _quantityError = wholeError);
       return;
     }
 
@@ -96,14 +110,16 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
       );
       return;
     }
-    final assignmentPlant = widget.assignment.plant.trim();
-    if (assignmentPlant.isNotEmpty &&
-        activeShift.plant.trim() != assignmentPlant) {
+    // SAP resolves the shift by the operation's Work Center + ShiftID.
+    final assignmentWorkCenter = widget.assignment.workCenter.trim();
+    if (assignmentWorkCenter.isNotEmpty &&
+        activeShift.workCenter.trim() != assignmentWorkCenter) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Ca đang chọn thuộc nhà máy ${activeShift.plant}, nhưng công đoạn '
-            'thuộc nhà máy $assignmentPlant. Hãy đổi ca làm việc trước khi thu hồi.',
+            'Ca đang chọn thuộc Xưởng ${activeShift.workCenter}, nhưng '
+            'công đoạn thuộc Xưởng $assignmentWorkCenter. Hãy đổi Xưởng '
+            'và ca làm việc trước khi thu hồi.',
           ),
           backgroundColor: CaslaColors.danger,
         ),
@@ -119,36 +135,55 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
     // Through the repository so ProductionMath.validateRecallEntry runs — the
     // max-recall ceiling and the mandatory note for "Khác" live there.
     try {
-      final workerPassword = await showWorkerVerificationDialog(
+      final shiftError = validateShiftExecution(
+        shift: activeShift,
+        businessDate: DateTime.parse(businessDate),
+        executedAt: DateTime.now(),
+      );
+      if (shiftError != null) throw Exception(shiftError);
+      final run = await runWithWorkerPassword<MutationReceipt>(
         context,
         workerName: widget.assignment.workerName,
         actionLabel: 'gửi thu hồi lên SAP',
+        isWrongPassword: (receipt) => receipt.isWrongWorkerPassword,
+        submit: (workerPassword) {
+          final latestShiftError = validateShiftExecution(
+            shift: activeShift,
+            businessDate: DateTime.parse(businessDate),
+            executedAt: DateTime.now(),
+          );
+          if (latestShiftError != null) throw Exception(latestShiftError);
+          if (!appState.isSessionGenerationCurrent(generation)) {
+            throw Exception(
+              'Phiên đăng nhập đã thay đổi. Vui lòng mở lại thao tác.',
+            );
+          }
+          return appState.recallRepo.recallAssignment(
+            assignmentId: widget.assignment.id,
+            quantity: qty,
+            reasonCode: _selectedReason.code,
+            note: _noteController.text.trim().isEmpty
+                ? null
+                : _noteController.text.trim(),
+            businessDate: businessDate,
+            shiftId: activeShift.shiftId,
+            createdBy: supervisorMaNv,
+            workerPassword: workerPassword,
+          );
+        },
       );
-      if (!mounted || workerPassword == null) return;
-      if (!appState.isSessionGenerationCurrent(generation)) {
-        throw Exception(
-          'Phiên đăng nhập đã thay đổi. Vui lòng mở lại thao tác.',
-        );
-      }
-      final receipt = await appState.recallRepo.recallAssignment(
-        assignmentId: widget.assignment.id,
-        quantity: qty,
-        reasonCode: _selectedReason.code,
-        note: _noteController.text.trim().isEmpty
-            ? null
-            : _noteController.text.trim(),
-        businessDate: businessDate,
-        shiftId: activeShift.shiftId,
-        createdBy: supervisorMaNv,
-        workerPassword: workerPassword,
-      );
-      if (!mounted) return;
-      showMutationFeedback(
+      // Three wrong passwords: the notice is up and the popup has closed.
+      // The worker belongs to the assignment, so there is nothing to clear.
+      if (!mounted || run.cancelled || run.exhausted) return;
+      final receipt = run.result!;
+      await showMutationFeedback(
         context,
         receipt: receipt,
         successMessage:
-            'Đã thu hồi ${qty.toStringAsFixed(2)} ${widget.assignment.uom}.',
+            'Đã thu hồi ${_displayQuantity(qty)} ${widget.assignment.uom}.',
       );
+      // Nothing was saved: stay on the form instead of implying it went out.
+      if (receipt.state == MutationDeliveryState.discarded) return;
     } on Exception catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -167,8 +202,17 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
     context.pop();
   }
 
+  String _displayQuantity(double value) =>
+      formatQuantity(value, uom: widget.assignment.uom);
+
   @override
   Widget build(BuildContext context) {
+    // Leaving mid-submit hides the SAP result; the operator may then assume it
+    // failed and recall the same quantity a second time.
+    return PopScope(canPop: !_isSubmitting, child: _buildScaffold(context));
+  }
+
+  Widget _buildScaffold(BuildContext context) {
     return Scaffold(
       backgroundColor: CaslaColors.background,
       appBar: AppBar(
@@ -176,7 +220,7 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
         foregroundColor: Colors.white,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () => context.pop(),
+          onPressed: _isSubmitting ? null : () => context.pop(),
         ),
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -257,15 +301,15 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
                           children: [
                             _buildStatCol(
                               'Giao ban đầu',
-                              formatQuantity(effective),
+                              _displayQuantity(effective),
                             ),
                             _buildStatCol(
                               'Đã hoàn thành',
-                              formatQuantity(completed),
+                              _displayQuantity(completed),
                             ),
                             _buildStatCol(
                               'Có thể thu hồi',
-                              formatQuantity(maxRecall),
+                              _displayQuantity(maxRecall),
                               color: CaslaColors.gold700,
                             ),
                           ],
@@ -290,12 +334,15 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
                           decimal: true,
                         ),
                         onChanged: (value) => setState(() {
-                          _quantityError = null;
+                          _quantityError = wholeQuantityInputError(
+                            value,
+                            widget.assignment.uom,
+                          );
                         }),
                         decoration: InputDecoration(
                           errorText: _quantityError,
                           suffixText:
-                              '/ ${maxRecall.toStringAsFixed(2)} ${widget.assignment.uom}',
+                              '/ ${_displayQuantity(maxRecall)} ${widget.assignment.uom}',
                           suffixStyle: const TextStyle(
                             color: CaslaColors.muted,
                           ),
@@ -400,7 +447,7 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
                                   ),
                                 ),
                                 Text(
-                                  '${effective.toStringAsFixed(0)} → ${afterEffective < 0 ? 0 : afterEffective.toStringAsFixed(0)}',
+                                  '${_displayQuantity(effective)} → ${_displayQuantity(afterEffective < 0 ? 0 : afterEffective)}',
                                   style: const TextStyle(
                                     fontFamily: 'monospace',
                                     fontWeight: FontWeight.w700,
@@ -421,7 +468,7 @@ class _S09RecallScreenState extends ConsumerState<S09RecallScreen> {
                                   ),
                                 ),
                                 Text(
-                                  '${maxRecall.toStringAsFixed(0)} → ${afterRemaining < 0 ? 0 : afterRemaining.toStringAsFixed(0)}',
+                                  '${_displayQuantity(maxRecall)} → ${_displayQuantity(afterRemaining < 0 ? 0 : afterRemaining)}',
                                   style: const TextStyle(
                                     fontFamily: 'monospace',
                                     fontWeight: FontWeight.w700,

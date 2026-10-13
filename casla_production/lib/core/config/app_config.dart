@@ -48,6 +48,12 @@ class AppConfig {
   static const String shiftApiServiceSuffix =
       'zapi_pp_shift/srvd_a2x/sap/zui_pp_shift_api/0001/';
 
+  /// ZUI_PP_POS (binding ZAPI_PP_POS): worker position board and the three
+  /// position commands. Kept apart from ZUI_PP_OPALLOC on the backend.
+  @visibleForTesting
+  static const String positionServiceSuffix =
+      'zapi_pp_pos/srvd_a2x/sap/zui_pp_pos/0001/';
+
   /// Full service root for `ZUI_MOB_AUTH` (login/refresh/logout/changePassword).
   static String get sapAuthServiceUrl =>
       joinServiceUrl(sapBaseUrl, authServiceSuffix);
@@ -59,6 +65,11 @@ class AppConfig {
 
   static String get sapShiftApiServiceUrl =>
       joinServiceUrl(sapBaseUrl, shiftApiServiceSuffix);
+
+  /// Full service root for `ZUI_PP_POS` (getPositionBoard/submitPositionCreate/
+  /// submitMachineChange/submitPositionTransfer).
+  static String get sapPositionServiceUrl =>
+      joinServiceUrl(sapBaseUrl, positionServiceSuffix);
 
   /// Joins [sapBaseUrl] with a service-binding suffix. A blank [base] means
   /// SAP_BASE_URL was never configured — stays blank rather than becoming a

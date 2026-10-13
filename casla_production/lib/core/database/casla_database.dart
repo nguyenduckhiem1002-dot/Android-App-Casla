@@ -18,6 +18,9 @@ import 'package:sqflite/sqflite.dart';
 
 import '../utils/id_generator.dart';
 import '../utils/operation_qr_parser.dart';
+import '../../domain/policies/production_math.dart';
+import '../../domain/entities/work_history.dart';
+import '../../domain/policies/history_work_context.dart';
 import 'casla_schema.dart';
 
 /// Maps a `sync_queue.entity_type` onto the table holding the source row.
@@ -48,6 +51,11 @@ class MutationValidationException implements Exception {
 }
 
 enum SyncFeedFilter { all, pending, verification, failed }
+
+/// Failed SAP writes remain available long enough for the operator to inspect
+/// them, then leave the sync feed. The queue row itself is retained for audit
+/// and diagnostics; this is a visibility policy, not destructive cleanup.
+const syncFailureVisibilityDuration = Duration(minutes: 10);
 
 class SyncFeedPage {
   final List<Map<String, dynamic>> items;
@@ -90,6 +98,11 @@ class CaslaDatabase {
   final _syncQueueController = StreamController<void>.broadcast();
   final _productionController = StreamController<void>.broadcast();
   final _recallController = StreamController<void>.broadcast();
+  final _remotePostingController = StreamController<void>.broadcast();
+
+  /// Ticks whenever SAP acknowledges a queued write. The work-history report
+  /// cached before that moment no longer matches SAP and should be refreshed.
+  Stream<void> get remotePostings => _remotePostingController.stream;
 
   static CaslaDatabase? _instance;
   static CaslaDatabase get instance {
@@ -562,6 +575,13 @@ class CaslaDatabase {
     return quantity;
   }
 
+  static double _requireFiniteNonNegative(Object? value, String message) {
+    if (value is! num || !value.toDouble().isFinite || value < 0) {
+      throw MutationValidationException(message);
+    }
+    return value.toDouble();
+  }
+
   static String _dateOnly(DateTime value) =>
       '${value.year.toString().padLeft(4, '0')}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';
 
@@ -681,20 +701,31 @@ class CaslaDatabase {
   Future<void> upsertEmployeesBatch(List<Map<String, String>> workers) async {
     if (workers.isEmpty) return;
 
-    final deduplicated = <String, String>{};
+    final deduplicated = <String, Map<String, String>>{};
     for (final worker in workers) {
       final workerId = worker['worker_id']?.trim() ?? '';
       if (workerId.isEmpty) continue;
-      final workerName = worker['worker_name']?.trim();
-      deduplicated[workerId] = workerName == null || workerName.isEmpty
-          ? workerId
-          : workerName;
+      deduplicated[workerId] = worker;
     }
     if (deduplicated.isEmpty) return;
 
     final db = await _database;
     final batch = db.batch();
     for (final entry in deduplicated.entries) {
+      final worker = entry.value;
+      final workerId = entry.key;
+      final workerName = worker['worker_name']?.trim();
+      final name = workerName == null || workerName.isEmpty
+          ? workerId
+          : workerName;
+      final dept =
+          worker['department']?.trim() ?? worker['bo_phan']?.trim() ?? '';
+      final defaultDept = dept.isNotEmpty ? dept : 'Công nhân sản xuất';
+      final teamId = worker['team_id']?.trim() ?? worker['to_id']?.trim() ?? '';
+      final toIdsJson = teamId.isNotEmpty
+          ? jsonEncode([teamId])
+          : jsonEncode(<String>[]);
+
       batch.rawInsert(
         '''
         INSERT INTO employees (
@@ -702,15 +733,24 @@ class CaslaDatabase {
         ) VALUES (?, ?, ?, ?, 'ACTIVE', 'CONG_NHAN', ?, ?)
         ON CONFLICT(ma_nv) DO UPDATE SET
           ten = excluded.ten,
+          bo_phan = CASE
+            WHEN excluded.bo_phan != 'Công nhân sản xuất' THEN excluded.bo_phan
+            WHEN employees.bo_phan IS NULL OR employees.bo_phan = 'Công nhân sản xuất' THEN excluded.bo_phan
+            ELSE employees.bo_phan
+          END,
+          to_ids = CASE
+            WHEN excluded.to_ids != '[]' THEN excluded.to_ids
+            ELSE employees.to_ids
+          END,
           trang_thai = 'ACTIVE'
         ''',
         [
-          'sap-worker:${entry.key}',
-          entry.key,
-          entry.value,
-          'Công nhân sản xuất',
+          'sap-worker:$workerId',
+          workerId,
+          name,
+          defaultDept,
           jsonEncode(['VIEW_OWN_PRODUCTION']),
-          jsonEncode(<String>[]),
+          toIdsJson,
         ],
       );
     }
@@ -763,6 +803,21 @@ class CaslaDatabase {
         whereArgs: [subjectId],
       );
     });
+  }
+
+  /// Marks every history window for one account as stale without deleting its
+  /// last-known values. A later read can show the snapshot while refreshing
+  /// it from SAP, including when the device is temporarily offline.
+  Future<void> expireWorkHistoryCacheForSubject(String subjectId) async {
+    final normalizedSubject = subjectId.trim();
+    if (normalizedSubject.isEmpty) return;
+    final db = await _database;
+    await db.update(
+      'work_history_cache_meta',
+      {'fetched_at_utc': 0},
+      where: 'subject_id = ?',
+      whereArgs: [normalizedSubject],
+    );
   }
 
   /// Atomically replaces one WorkHistory cache window.
@@ -886,6 +941,32 @@ class CaslaDatabase {
         .toList();
   }
 
+  /// Manual selection can reuse identities learned from QR/history before SAP
+  /// supplies a team. This does not assign team membership or permissions;
+  /// SAP still authorizes the write just as it does for a scanned card.
+  Future<List<Map<String, dynamic>>> getWorkersForManualSelection(
+    List<String> teamIds, {
+    DateTime? now,
+  }) async {
+    if (teamIds.isEmpty) return const [];
+    final scope = (await _resolveTeamScopeIds(teamIds)).toSet();
+    final db = await _database;
+    final today = _dateOnly(now ?? DateTime.now());
+    final rows = await db.query(
+      'employees',
+      where:
+          "vai_tro = 'CONG_NHAN' AND trang_thai = 'ACTIVE' "
+          "AND (valid_from IS NULL OR valid_from = '' OR valid_from <= ?) "
+          "AND (valid_to IS NULL OR valid_to = '' OR valid_to >= ?)",
+      whereArgs: [today, today],
+      orderBy: 'ten COLLATE NOCASE, ma_nv',
+    );
+    return rows.map(_employeeRow).where((worker) {
+      final teams = worker['to_ids'] as List;
+      return teams.isEmpty || teams.any(scope.contains);
+    }).toList();
+  }
+
   /// Whether [employeeId] falls inside a supervisor's team scope.
   ///
   /// Previously returned true unconditionally.
@@ -901,6 +982,35 @@ class CaslaDatabase {
   }
 
   // ─── Team Queries ─────────────────────────────────────────────────
+  Future<Set<String>> getAssignedWorkerIdsForShift({
+    required List<String> teamIds,
+    required String businessDate,
+    required String shiftId,
+  }) async {
+    final scope = await _resolveTeamScopeIds(teamIds);
+    if (scope.isEmpty || shiftId.trim().isEmpty) return {};
+    final db = await _database;
+    final rows = await db.rawQuery(
+      'SELECT DISTINCT a.nhan_vien_id FROM assignments a '
+      'WHERE a.business_date = ? AND a.shift_id = ? '
+      "AND COALESCE(a.sync_status, '') != 'FAILED' "
+      'AND a.to_id IN (${List.filled(scope.length, '?').join(',')}) '
+      'AND a.assigned_quantity '
+      '  - COALESCE((SELECT SUM(p.quantity) FROM production_records p '
+      '      WHERE p.phan_cong_id = a.id '
+      "        AND COALESCE(p.sync_status, 'PENDING') != 'FAILED'), 0) "
+      '  - COALESCE((SELECT SUM(p.defect_quantity) FROM production_records p '
+      '      WHERE p.phan_cong_id = a.id '
+      "        AND COALESCE(p.sync_status, 'PENDING') != 'FAILED'), 0) "
+      '  - COALESCE((SELECT SUM(r.quantity) FROM recall_records r '
+      '      WHERE r.phan_cong_id = a.id '
+      "        AND COALESCE(r.sync_status, 'PENDING') != 'FAILED'), 0) "
+      '  > 0.0001',
+      [businessDate, shiftId, ...scope],
+    );
+    return rows.map((row) => row['nhan_vien_id'].toString()).toSet();
+  }
+
   Future<List<Map<String, dynamic>>> getAllTeams() async {
     final db = await _database;
     return _rows(await db.query('teams'));
@@ -982,6 +1092,51 @@ class CaslaDatabase {
       limit: 1,
     );
     return rows.isEmpty ? null : Map<String, dynamic>.from(rows.first);
+  }
+
+  Future<Map<String, double>> getOperationQuantitySummary({
+    required String orderId,
+  }) async {
+    final db = await _database;
+    final rows = await db.rawQuery(
+      '''
+      SELECT COALESCE(o.so_luong_don, 0) AS operation_quantity,
+        COALESCE((SELECT SUM(p.quantity) FROM production_records p
+          JOIN assignments pa ON pa.id = p.phan_cong_id
+          WHERE pa.don_hang_id = ? AND COALESCE(p.sync_status, 'PENDING') != 'FAILED'), 0)
+          AS confirmed_quantity,
+        COALESCE((SELECT SUM(p.defect_quantity) FROM production_records p
+          JOIN assignments pa ON pa.id = p.phan_cong_id
+          WHERE pa.don_hang_id = ? AND COALESCE(p.sync_status, 'PENDING') != 'FAILED'), 0)
+          AS defect_quantity,
+        COALESCE((SELECT SUM(
+            a.assigned_quantity - COALESCE((
+              SELECT SUM(r.quantity) FROM recall_records r
+              WHERE r.phan_cong_id = a.id
+                AND COALESCE(r.sync_status, 'PENDING') != 'FAILED'
+            ), 0)
+          ) FROM assignments a
+          WHERE a.don_hang_id = ?
+            AND COALESCE(a.sync_status, 'PENDING') != 'FAILED'), 0)
+          AS assigned_quantity
+      FROM orders o WHERE o.id = ? LIMIT 1
+      ''',
+      [orderId, orderId, orderId, orderId],
+    );
+    if (rows.isEmpty) return const {};
+    double number(Object? value) => (value as num?)?.toDouble() ?? 0.0;
+    final row = rows.single;
+    final operation = number(row['operation_quantity']);
+    final confirmed = number(row['confirmed_quantity']);
+    final defect = number(row['defect_quantity']);
+    final assignedQuantity = number(row['assigned_quantity']);
+    return {
+      'operationQuantity': operation,
+      'confirmedQuantity': confirmed,
+      'defectQuantity': defect,
+      'assignedQuantity': assignedQuantity,
+      'remaining': (operation - assignedQuantity).clamp(0.0, double.infinity),
+    };
   }
 
   /// The live SAP keys a mutation against [assignmentId] must resolve to, or
@@ -1090,11 +1245,14 @@ class CaslaDatabase {
       final values = <String, Object?>{
         'production_order': qr.productionOrder,
         'operation': qr.operation,
+        if (qr.operationName.isNotEmpty) 'operation_name': qr.operationName,
         'operation_qr_payload': qr.rawPayload,
         if (qr.plant.isNotEmpty) 'plant': qr.plant,
         if (qr.workCenter.isNotEmpty) 'work_center': qr.workCenter,
         if (qr.productCode.isNotEmpty) 'ma_sp': qr.productCode,
         if (qr.productName.isNotEmpty) 'ten_sp': qr.productName,
+        if (qr.salesOrder.isNotEmpty) 'sales_order': qr.salesOrder,
+        if (qr.salesOrderItem.isNotEmpty) 'sales_order_item': qr.salesOrderItem,
         if (qr.workCenterDescription.isNotEmpty)
           'dac_tinh': qr.workCenterDescription,
         if (uom.isNotEmpty) 'uom': uom,
@@ -1113,6 +1271,7 @@ class CaslaDatabase {
               ? qr.orderCode
               : qr.productionOrder,
           'ma_qr': '${qr.productionOrder}-${qr.operation}',
+          'operation_name': qr.operationName,
           'ma_sp': qr.productCode,
           'ten_sp': displayName,
           'dac_tinh': qr.workCenterDescription,
@@ -1167,6 +1326,215 @@ class CaslaDatabase {
   }
 
   // ─── Assignment Queries ───────────────────────────────────────────
+  /// Reconcile one SAP allocation, never a worker/operation aggregate. The
+  /// caller must establish that [entries] have a single INITIAL_ASSIGN source.
+  /// Imported history is a replaceable balance snapshot; real local writes and
+  /// their queue/idempotency keys must survive every refresh.
+  Future<String> reconcileHistoryConfirmationAssignment({
+    required Map<String, dynamic> assignment,
+    required List<WorkHistoryEntry> entries,
+  }) async {
+    String uuid(Object? value) =>
+        (value ?? '').toString().replaceAll('-', '').trim().toUpperCase();
+    final initial = entries
+        .where((e) => e.transactionType == 'INITIAL_ASSIGN')
+        .toList();
+    if (initial.length != 1 || uuid(initial.single.transactionUuid).isEmpty) {
+      throw const FormatException(
+        'Chưa xác định được giao dịch giao việc gốc.',
+      );
+    }
+    final source = initial.single;
+    final db = await _database;
+    final id = await db.transaction((txn) async {
+      // A SAP allocation UUID identifies one worker's allocation. Match on it
+      // alone: a screen that knows the worker by SAP code and one that knows
+      // the local employee id must land on the same row, not insert a second
+      // copy (which the unique idempotency key rejects).
+      final matches = await txn.query(
+        'assignments',
+        where: 'don_hang_id = ?',
+        whereArgs: [assignment['don_hang_id']],
+      );
+      final sameSource = matches
+          .where((row) => uuid(row['sap_id']) == uuid(source.transactionUuid))
+          .toList();
+      for (final row in sameSource) {
+        if (row['to_id'] != assignment['to_id'] ||
+            row['business_date'] != assignment['business_date'] ||
+            row['shift_id'] != assignment['shift_id']) {
+          throw const FormatException(
+            'Lần giao này thuộc bộ phận, ca hoặc ngày khác với lựa chọn hiện '
+            'tại. Hãy chọn đúng ca và bộ phận rồi thử lại.',
+          );
+        }
+      }
+      if (sameSource.length > 1) {
+        throw const FormatException(
+          'Có bản ghi giao việc trùng trên thiết bị. Chưa thể xác định số lượng xác nhận an toàn.',
+        );
+      }
+      final existing = sameSource.firstOrNull;
+      final targetId = (existing?['id'] ?? assignment['id']) as String;
+      if (existing != null && existing['sync_status'] != 'SYNCED') {
+        throw const FormatException(
+          'Phân công đang đồng bộ. Vui lòng đợi đồng bộ xong rồi xác nhận.',
+        );
+      }
+      if (existing == null) {
+        await txn.insert('assignments', {
+          ...assignment,
+          'assigned_quantity': source.quantity,
+        });
+      } else {
+        await txn.update(
+          'assignments',
+          {'assigned_quantity': source.quantity},
+          where: 'id = ?',
+          whereArgs: [targetId],
+        );
+      }
+      double completed = 0, recalled = 0;
+      for (final table in ['production_records', 'recall_records']) {
+        final isProduction = table == 'production_records';
+        final rows = await txn.query(
+          table,
+          where: 'phan_cong_id = ?',
+          whereArgs: [targetId],
+        );
+        final imported = rows.where((row) {
+          final key = row['idempotency_key'].toString();
+          return key.startsWith('history-confirm:') ||
+              key.startsWith('history-recall:') ||
+              key.startsWith('history-balance:');
+        }).toList();
+        for (final row in imported) {
+          final queued = await txn.query(
+            'sync_queue',
+            columns: ['id'],
+            where: 'entity_id = ?',
+            whereArgs: [row['id']],
+            limit: 1,
+          );
+          if (queued.isNotEmpty) {
+            throw const FormatException(
+              'Bản ghi lịch sử đang được đồng bộ. Vui lòng thử lại.',
+            );
+          }
+          await txn.delete(table, where: 'id = ?', whereArgs: [row['id']]);
+        }
+        final real = rows
+            .where(
+              (row) =>
+                  !imported.contains(row) && row['sync_status'] != 'FAILED',
+            )
+            .toList();
+        final remote = entries
+            .where(
+              (e) => isProduction
+                  ? const [
+                      'CONFIRM',
+                      'CORRECTION',
+                      'REVERSE',
+                    ].contains(e.transactionType)
+                  : e.transactionType == 'RECALL',
+            )
+            .toList();
+        final remoteIds = remote.map((e) => uuid(e.transactionUuid)).toSet();
+        final remoteTotal = remote.fold<double>(
+          0,
+          (sum, e) =>
+              sum +
+              (e.transactionType == 'REVERSE'
+                  ? -(e.quantity + e.defectQuantity)
+                  : e.quantity + e.defectQuantity),
+        );
+        final remoteDefectTotal = isProduction
+            ? remote.fold<double>(
+                0,
+                (sum, e) =>
+                    sum +
+                    (e.transactionType == 'REVERSE'
+                        ? -e.defectQuantity
+                        : e.defectQuantity),
+              )
+            : 0.0;
+        final representedRows = real
+            .where((row) => remoteIds.contains(uuid(row['sap_id'])))
+            .toList(growable: false);
+        final representedQuantity = representedRows.fold<double>(
+          0,
+          (sum, row) => sum + _toDouble(row['quantity']),
+        );
+        final representedDefect = representedRows.fold<double>(
+          0,
+          (sum, row) => sum + _toDouble(row['defect_quantity']),
+        );
+        final baselineQuantity = ProductionMath.toSapScale(
+          remoteTotal - remoteDefectTotal - representedQuantity,
+        );
+        final baselineDefect = ProductionMath.toSapScale(
+          remoteDefectTotal - representedDefect,
+        );
+        if (baselineQuantity < 0 || baselineDefect < 0) {
+          throw const FormatException(
+            'Lịch sử có điều chỉnh chưa khớp với giao dịch trên máy. Chưa thể xác nhận số lượng.',
+          );
+        }
+        if (baselineQuantity + baselineDefect > 0) {
+          final key = 'history-balance:$table:$targetId';
+          await txn.insert(table, {
+            'id': key,
+            'phan_cong_id': targetId,
+            'quantity': baselineQuantity,
+            if (isProduction) 'defect_quantity': baselineDefect,
+            'unit_of_measure': source.unitOfMeasure,
+            'business_date': assignment['business_date'],
+            'shift_id': assignment['shift_id'],
+            'created_by': 'SAP_HISTORY',
+            'occurred_at_utc': assignment['occurred_at_utc'],
+            'device_id': assignment['device_id'],
+            'sync_status': 'SYNCED',
+            'idempotency_key': key,
+            'created_at_utc': assignment['created_at_utc'],
+            if (!isProduction) 'reason_code': 'OTHER',
+            'note': historyImportedAssignmentNote,
+          });
+        }
+        final total =
+            baselineQuantity +
+            baselineDefect +
+            real.fold<double>(
+              0,
+              (sum, row) =>
+                  sum +
+                  _toDouble(row['quantity']) +
+                  (isProduction ? _toDouble(row['defect_quantity']) : 0),
+            );
+        if (isProduction) {
+          completed = total;
+        } else {
+          recalled = total;
+        }
+      }
+      await txn.update(
+        'assignments',
+        {
+          'status': source.quantity - completed - recalled > 0.0001
+              ? 'OPEN'
+              : 'COMPLETED',
+        },
+        where: 'id = ?',
+        whereArgs: [targetId],
+      );
+      return targetId;
+    });
+    _notifyAssignments();
+    _notifyProduction();
+    _notifyRecalls();
+    return id;
+  }
+
   Future<void> insertAssignment(Map<String, dynamic> assignment) async {
     final db = await _database;
     await db.insert('assignments', assignment);
@@ -1193,6 +1561,31 @@ class CaslaDatabase {
     _notifySyncQueue();
   }
 
+  /// The position the worker's assignments for this operation and shift were
+  /// made at on this device, newest first; null when none recorded one.
+  ///
+  /// Rows SAP rejected are skipped: they never became part of the group.
+  Future<String?> getGroupAssignmentPosition({
+    required String workerId,
+    required String orderId,
+    required String businessDate,
+    required String shiftId,
+  }) async {
+    final db = await _database;
+    final rows = await db.query(
+      'assignments',
+      columns: ['position_id'],
+      where:
+          'nhan_vien_id = ? AND don_hang_id = ? AND business_date = ? '
+          "AND shift_id = ? AND sync_status <> 'FAILED' "
+          "AND position_id IS NOT NULL AND TRIM(position_id) <> ''",
+      whereArgs: [workerId, orderId, businessDate, shiftId],
+      orderBy: 'created_at_utc DESC',
+      limit: 1,
+    );
+    return rows.isEmpty ? null : rows.first['position_id']?.toString();
+  }
+
   Future<Map<String, dynamic>?> getAssignmentById(String id) async {
     final db = await _database;
     final rows = await db.query(
@@ -1204,13 +1597,228 @@ class CaslaDatabase {
     return rows.isEmpty ? null : Map<String, dynamic>.from(rows.first);
   }
 
+  /// Resolves descriptive fields for history rows using the QR order cache.
+  /// SAP history is a transaction ledger and may only carry ProductionOrder +
+  /// Operation, so this lookup deliberately keys on that immutable pair.
+  Future<Map<String, Map<String, dynamic>>> getOrderMetadataBySapKeys(
+    Iterable<(String, String)> keys,
+  ) async {
+    final pairs = keys
+        .where((key) => key.$1.trim().isNotEmpty && key.$2.trim().isNotEmpty)
+        .map((key) => (key.$1.trim(), key.$2.trim()))
+        .toSet()
+        .toList(growable: false);
+    if (pairs.isEmpty) return const {};
+    final db = await _database;
+    final where = List.filled(
+      pairs.length,
+      '(production_order = ? AND operation = ?)',
+    ).join(' OR ');
+    final args = <Object?>[
+      for (final pair in pairs) ...[pair.$1, pair.$2],
+    ];
+    final rows = await db.query('orders', where: where, whereArgs: args);
+    return {
+      for (final row in rows)
+        '${row['production_order']}\u0000${row['operation']}':
+            Map<String, dynamic>.from(row),
+    };
+  }
+
+  /// Returns only local transactions that are not confirmed by SAP yet for
+  /// one exact production order and operation.
+  ///
+  /// Pending/syncing/verification rows form the device delta. Callers with a
+  /// full operation ledger may also include acknowledged writes missing from
+  /// that read model, excluding represented SAP transaction identities. Failed
+  /// rows never affect the balance.
+  ///
+  /// [workId], [businessDate] and [shiftId] describe the window of the SAP
+  /// report the result is merged with. They narrow only the acknowledged
+  /// (SYNCED) rows that report is missing: a one-day report must not be topped
+  /// up with this device's postings from other days, which it never covered.
+  /// Queued rows are in no SAP report at all, so they always count.
+  /// History-import rows are always excluded: they mirror SAP itself.
+  Future<Map<String, double>> getPendingOperationQuantitySummary({
+    required String productionOrder,
+    required String operation,
+    String? workId,
+    String? businessDate,
+    String? shiftId,
+    Set<String> representedTransactionIds = const {},
+    bool includeSyncedMissingFromHistory = false,
+  }) async {
+    if (productionOrder.trim().isEmpty || operation.trim().isEmpty) {
+      return const {};
+    }
+    final db = await _database;
+    final work = workId?.trim() ?? '';
+    final date = businessDate?.trim() ?? '';
+    final shift = shiftId?.trim() ?? '';
+    String notImported(String alias) =>
+        " AND COALESCE($alias.note, '') != ?"
+        " AND $alias.idempotency_key NOT LIKE 'history-%'";
+    final args = <Object?>[
+      productionOrder.trim(),
+      operation.trim(),
+      historyImportedAssignmentNote,
+    ];
+    String normalizedId(String value) =>
+        value.replaceAll('-', '').trim().toUpperCase();
+    final represented = representedTransactionIds.map(normalizedId).toSet()
+      ..remove('');
+    // Read a single snapshot so a synchronizing row cannot be counted twice
+    // across separate assignment/recall/confirmation reads.
+    final rows = await db.rawQuery(
+      '''
+      SELECT 'ASSIGN' AS kind, a.assigned_quantity AS quantity,
+        0 AS defect_quantity,
+        a.sync_status, a.sap_id, a.to_id, a.business_date, a.shift_id
+        FROM assignments a
+        JOIN orders o ON o.id = a.don_hang_id
+        WHERE o.production_order = ? AND o.operation = ?${notImported('a')}
+      UNION ALL
+      SELECT 'RECALL', r.quantity, 0, r.sync_status, r.sap_id, a.to_id,
+        r.business_date, r.shift_id FROM recall_records r
+        JOIN assignments a ON a.id = r.phan_cong_id
+        JOIN orders o ON o.id = a.don_hang_id
+        WHERE o.production_order = ? AND o.operation = ?${notImported('r')}
+          AND a.sync_status != 'FAILED'
+      UNION ALL
+      SELECT 'CONFIRM', p.quantity, p.defect_quantity, p.sync_status,
+        p.sap_id, a.to_id,
+        p.business_date, p.shift_id FROM production_records p
+        JOIN assignments a ON a.id = p.phan_cong_id
+        JOIN orders o ON o.id = a.don_hang_id
+        WHERE o.production_order = ? AND o.operation = ?${notImported('p')}
+          AND a.sync_status != 'FAILED'
+      ''',
+      [...args, ...args, ...args],
+    );
+    bool inReportWindow(Map<String, Object?> row) =>
+        (work.isEmpty || row['to_id']?.toString() == work) &&
+        (date.isEmpty || row['business_date']?.toString() == date) &&
+        (shift.isEmpty || row['shift_id']?.toString() == shift);
+    var initial = 0.0;
+    var recalled = 0.0;
+    var completed = 0.0;
+    var defect = 0.0;
+    for (final row in rows) {
+      final status = row['sync_status']?.toString() ?? 'PENDING';
+      final sapId = row['sap_id']?.toString().trim() ?? '';
+      if (sapId.isNotEmpty && represented.contains(normalizedId(sapId))) {
+        continue;
+      }
+      final pending = const {
+        'PENDING',
+        'SYNCING',
+        'NEEDS_VERIFICATION',
+      }.contains(status);
+      // A successful write may reach SAP before its history read model updates.
+      // Only include acknowledged rows with an identity we can later
+      // deduplicate, and only those the report's window should have held.
+      if (!pending &&
+          !(includeSyncedMissingFromHistory &&
+              status == 'SYNCED' &&
+              sapId.isNotEmpty &&
+              inReportWindow(row))) {
+        continue;
+      }
+      final quantity = (row['quantity'] as num).toDouble();
+      switch (row['kind']) {
+        case 'ASSIGN':
+          initial += quantity;
+        case 'RECALL':
+          recalled += quantity;
+        case 'CONFIRM':
+          completed += quantity;
+          defect += (row['defect_quantity'] as num).toDouble();
+      }
+    }
+    return {
+      'initialAssignedQuantity': initial,
+      'currentAssignedQuantity': initial - recalled,
+      'assignedDelta': initial - recalled,
+      'recalledQuantity': recalled,
+      'completedQuantity': completed,
+      'defectQuantity': defect,
+    };
+  }
+
+  /// Finds descriptive fields from prior history snapshots for one subject.
+  /// Only metadata is returned; transaction quantities and statuses always
+  /// come from the current SAP response.
+  Future<Map<String, Map<String, dynamic>>>
+  getHistoryMetadataBySapKeysForSubject(
+    String subjectId,
+    Iterable<(String, String, String)> keys,
+  ) async {
+    final triples = keys
+        .where(
+          (key) =>
+              key.$1.trim().isNotEmpty &&
+              key.$2.trim().isNotEmpty &&
+              key.$3.trim().isNotEmpty,
+        )
+        .map((key) => (key.$1.trim(), key.$2.trim(), key.$3.trim()))
+        .toSet()
+        .toList(growable: false);
+    if (triples.isEmpty || subjectId.trim().isEmpty) return const {};
+    final db = await _database;
+    final result = <String, Map<String, dynamic>>{};
+    // Keep comfortably below SQLite's variable/expression limits.
+    for (var offset = 0; offset < triples.length; offset += 100) {
+      final chunk = triples.skip(offset).take(100).toList(growable: false);
+      final where = List.filled(
+        chunk.length,
+        '(e.production_order = ? AND e.operation = ? AND e.plant = ?)',
+      ).join(' OR ');
+      final args = <Object?>[subjectId.trim()];
+      args.addAll([
+        for (final triple in chunk) ...[triple.$1, triple.$2, triple.$3],
+      ]);
+      final rows = await db.rawQuery('''
+        SELECT e.production_order, e.operation, e.plant,
+               e.operation_name, e.product_name, e.product_code,
+               e.sales_order, e.sales_order_item,
+               m.fetched_at_utc
+        FROM work_history_cache_entries e
+        JOIN work_history_cache_meta m ON m.cache_key = e.cache_key
+        WHERE m.subject_id = ? AND ($where)
+        ORDER BY m.fetched_at_utc DESC
+        ''', args);
+      for (final row in rows) {
+        final key =
+            '${row['production_order']}\u0000${row['operation']}\u0000${row['plant']}';
+        final merged = result.putIfAbsent(key, () => <String, dynamic>{});
+        for (final field in const [
+          'operation_name',
+          'product_name',
+          'product_code',
+          'sales_order',
+          'sales_order_item',
+        ]) {
+          if ((merged[field]?.toString().trim() ?? '').isEmpty &&
+              (row[field]?.toString().trim() ?? '').isNotEmpty) {
+            merged[field] = row[field];
+          }
+        }
+      }
+    }
+    return result;
+  }
+
+  /// Assignments that exist or may still exist on SAP. A FAILED assignment
+  /// (rejected by SAP, or dismissed from the sync screen) was never posted and
+  /// must not count as assigned work anywhere; the sync screen keeps its own
+  /// view of it for Undo.
   Stream<List<Map<String, dynamic>>> watchAssignmentsByWorker(String workerId) {
     return _watch(_assignmentController, () async {
       final db = await _database;
       return _rows(
         await db.query(
           'assignments',
-          where: 'nhan_vien_id = ?',
+          where: "nhan_vien_id = ? AND COALESCE(sync_status, '') != 'FAILED'",
           whereArgs: [workerId],
           orderBy: 'created_at_utc DESC',
         ),
@@ -1268,13 +1876,19 @@ class CaslaDatabase {
           return clauses.isEmpty ? '' : ' AND ${clauses.join(' AND ')}';
         }
 
+        // One call per subquery, in SQL order: each call appends its own
+        // bind values, so reusing a fragment would leave placeholders unbound.
         final productionPeriod = period('p');
+        final defectPeriod = period('p');
         final recallPeriod = period('r');
         final rows = await txn.rawQuery(
           '''
           SELECT a.*, e.ma_nv AS worker_code, e.ten AS worker_name,
                  o.ma_don_hang AS order_code, o.ma_sp AS product_code,
                  o.ten_sp AS product_name,
+                 o.production_order AS order_production_order,
+                 o.operation AS order_operation,
+                 o.operation_name AS order_operation_name,
                  o.plant AS order_plant,
                  o.work_center AS order_work_center,
                  -- The unit frozen onto the assignment wins; `o.uom` is
@@ -1288,6 +1902,12 @@ class CaslaDatabase {
                     $productionPeriod
                     AND COALESCE(p.sync_status, 'PENDING') != 'FAILED')
                     AS completed_quantity,
+                 (SELECT COALESCE(SUM(p.defect_quantity), 0)
+                  FROM production_records p
+                  WHERE p.phan_cong_id = a.id
+                    $defectPeriod
+                    AND COALESCE(p.sync_status, 'PENDING') != 'FAILED')
+                    AS defect_quantity,
                  (SELECT COALESCE(SUM(r.quantity), 0)
                   FROM recall_records r
                   WHERE r.phan_cong_id = a.id
@@ -1321,6 +1941,7 @@ class CaslaDatabase {
             }
             if (!assignedInPeriod &&
                 _toDouble(value['completed_quantity']) == 0 &&
+                _toDouble(value['defect_quantity']) == 0 &&
                 _toDouble(value['recalled_quantity']) == 0) {
               continue;
             }
@@ -1347,7 +1968,9 @@ class CaslaDatabase {
       return _rows(
         await db.query(
           'assignments',
-          where: 'to_id IN ($placeholders)',
+          // See watchAssignmentsByWorker: never count FAILED assignments.
+          where:
+              "to_id IN ($placeholders) AND COALESCE(sync_status, '') != 'FAILED'",
           whereArgs: resolvedTeamIds,
           orderBy: 'created_at_utc DESC',
         ),
@@ -1383,7 +2006,8 @@ class CaslaDatabase {
   Future<double> getRemaining(String assignmentId) async {
     final effective = await getEffectiveAssigned(assignmentId);
     final completed = await getCompletedQuantity(assignmentId);
-    final remaining = effective - completed;
+    final defect = await getDefectQuantity(assignmentId);
+    final remaining = effective - completed - defect;
     return remaining < 0 ? 0 : remaining;
   }
 
@@ -1400,15 +2024,25 @@ class CaslaDatabase {
     required Map<String, dynamic> record,
     required Map<String, dynamic> queueItem,
     required Map<String, dynamic> auditLog,
+    double? expectedRemaining,
   }) async {
     final assignmentId = record['phan_cong_id']?.toString();
     if (assignmentId == null || assignmentId.isEmpty) {
       throw const MutationValidationException('Phân công không tồn tại.');
     }
-    final quantity = _requireFinitePositive(
+    final quantity = _requireFiniteNonNegative(
       record['quantity'],
-      'Số lượng hoàn thành phải là một số dương hợp lệ.',
+      'Số lượng hoàn thành không hợp lệ.',
     );
+    final defectQuantity = _requireFiniteNonNegative(
+      record['defect_quantity'] ?? 0,
+      'Số lượng phế không hợp lệ.',
+    );
+    if (quantity + defectQuantity <= 0) {
+      throw const MutationValidationException(
+        'Số hoàn thành và số phế phải có ít nhất một giá trị lớn hơn 0.',
+      );
+    }
 
     final db = await _database;
     await db.transaction((txn) async {
@@ -1431,7 +2065,7 @@ class CaslaDatabase {
       }
 
       final completedRows = await txn.rawQuery(
-        'SELECT COALESCE(SUM(quantity), 0) AS total '
+        'SELECT COALESCE(SUM(quantity + defect_quantity), 0) AS total '
         'FROM production_records WHERE phan_cong_id = ? '
         "AND COALESCE(sync_status, '') != 'FAILED'",
         [assignmentId],
@@ -1448,14 +2082,17 @@ class CaslaDatabase {
       final remaining = (assigned - recalled - completed)
           .clamp(0.0, double.infinity)
           .toDouble();
-      if (quantity > remaining + 0.0001) {
-        throw MutationValidationException(
-          'Số lượng vượt quá số lượng còn lại (${remaining.toInt()}).',
+      if (expectedRemaining != null &&
+          ProductionMath.toSapScale(expectedRemaining) !=
+              ProductionMath.toSapScale(remaining)) {
+        throw const MutationValidationException(
+          'Số lượng còn lại đã thay đổi. Vui lòng mở lại và kiểm tra số liệu.',
         );
       }
-
+      // More than what is left may be confirmed: the supervisor is warned on
+      // the form, and the assignment simply closes with nothing remaining.
       await txn.insert('production_records', record);
-      if (remaining - quantity <= 0.0001) {
+      if (remaining - quantity - defectQuantity <= 0.0001) {
         await txn.update(
           'assignments',
           {'status': 'COMPLETED'},
@@ -1481,6 +2118,7 @@ class CaslaDatabase {
   Future<void> recordProductionOffline({
     required String assignmentId,
     required double quantity,
+    double defectQuantity = 0,
     required String businessDate,
     required String shiftId,
     required String createdBy,
@@ -1492,6 +2130,7 @@ class CaslaDatabase {
       'id': id,
       'phan_cong_id': assignmentId,
       'quantity': quantity,
+      'defect_quantity': defectQuantity,
       'business_date': businessDate,
       'shift_id': shiftId,
       'created_by': createdBy,
@@ -1525,6 +2164,30 @@ class CaslaDatabase {
       [assignmentId],
     );
     return _toDouble(rows.first['total']);
+  }
+
+  Future<double> getDefectQuantity(String assignmentId) async {
+    final db = await _database;
+    final rows = await db.rawQuery(
+      'SELECT COALESCE(SUM(defect_quantity), 0) AS total '
+      "FROM production_records WHERE phan_cong_id = ? "
+      "AND COALESCE(sync_status, 'PENDING') != 'FAILED'",
+      [assignmentId],
+    );
+    return _toDouble(rows.first['total']);
+  }
+
+  Future<Map<String, double>> getDefectQuantitiesByAssignment() async {
+    final db = await _database;
+    final rows = await db.rawQuery(
+      'SELECT phan_cong_id, SUM(defect_quantity) AS total '
+      "FROM production_records WHERE COALESCE(sync_status, 'PENDING') != 'FAILED' "
+      'GROUP BY phan_cong_id',
+    );
+    return {
+      for (final row in rows)
+        row['phan_cong_id'].toString(): _toDouble(row['total']),
+    };
   }
 
   /// Completed totals for every assignment, in one pass.
@@ -1589,6 +2252,10 @@ class CaslaDatabase {
     final db = await _database;
     final where = StringBuffer('a.nhan_vien_id = ?');
     final args = <Object?>[employeeId];
+    // Balance snapshots are already represented by the SAP history ledger.
+    // Include them in assignment validation, never as an extra visible event.
+    where.write(' AND COALESCE(p.note, \'\') != ?');
+    args.add(historyImportedAssignmentNote);
 
     if (fromBusinessDate != null) {
       where.write(' AND p.business_date >= ?');
@@ -1612,6 +2279,10 @@ class CaslaDatabase {
                a.to_id AS work_context_id,
                o.plant AS plant,
                o.work_center AS work_center,
+               o.production_order AS production_order,
+               o.operation AS operation,
+               o.operation_name AS operation_name,
+               o.ma_sp AS ma_sp,
                COALESCE(e.ten, p.created_by) AS nguoi_xac_nhan
         FROM production_records p
         JOIN assignments a ON a.id = p.phan_cong_id
@@ -1640,6 +2311,123 @@ class CaslaDatabase {
     );
   }
 
+  /// Confirmation and recall rows recorded against [assignmentIds], FAILED
+  /// ones excluded: `kind` (CONFIRM/RECALL), quantity, sync status, SAP id and
+  /// idempotency key. Used to attribute SAP's ledger rows to allocations.
+  Future<List<Map<String, dynamic>>> getConsumptionRowsForAssignments(
+    List<String> assignmentIds,
+  ) async {
+    final ids = assignmentIds.where((id) => id.trim().isNotEmpty).toList();
+    if (ids.isEmpty) return const [];
+    final db = await _database;
+    final placeholders = List.filled(ids.length, '?').join(',');
+    return _rows(
+      await db.rawQuery(
+        '''
+        SELECT 'CONFIRM' AS kind, phan_cong_id, quantity, defect_quantity,
+               sync_status, sap_id, idempotency_key
+        FROM production_records
+        WHERE phan_cong_id IN ($placeholders)
+          AND COALESCE(sync_status, 'PENDING') != 'FAILED'
+        UNION ALL
+        SELECT 'RECALL', phan_cong_id, quantity, 0, sync_status, sap_id,
+               idempotency_key
+        FROM recall_records
+        WHERE phan_cong_id IN ($placeholders)
+          AND COALESCE(sync_status, 'PENDING') != 'FAILED'
+        ''',
+        [...ids, ...ids],
+      ),
+    );
+  }
+
+  /// Every local assignment, confirmation and recall in a team scope and
+  /// business-date window, flattened for [buildLocalPendingLedger].
+  ///
+  /// History-import rows are excluded: they mirror the SAP report itself (or
+  /// a synthetic balance), so overlaying them would count SAP twice.
+  Future<List<Map<String, dynamic>>> getLocalLedgerRows({
+    required List<String> teamIds,
+    required String fromBusinessDate,
+    required String toBusinessDate,
+    String? shiftId,
+  }) async {
+    final scope = await _resolveTeamScopeIds(teamIds);
+    if (scope.isEmpty) return const [];
+    final db = await _database;
+    final shift = shiftId?.trim() ?? '';
+    final placeholders = List.filled(scope.length, '?').join(',');
+    List<Object?> args() => [
+      fromBusinessDate,
+      toBusinessDate,
+      if (shift.isNotEmpty) shift,
+      ...scope,
+      historyImportedAssignmentNote,
+    ];
+    String recordQuery(String table, String kind) =>
+        '''
+        SELECT '$kind' AS kind, a.nhan_vien_id AS worker_id,
+               e.ma_nv AS worker_code, t.quantity,
+               ${table == 'production_records' ? 't.defect_quantity' : '0'} AS defect_quantity,
+               COALESCE(t.unit_of_measure, a.unit_of_measure) AS unit_of_measure,
+               t.sync_status, t.sap_id, t.idempotency_key
+        FROM $table t
+        JOIN assignments a ON a.id = t.phan_cong_id
+        LEFT JOIN employees e ON e.id = a.nhan_vien_id
+        WHERE COALESCE(a.sync_status, '') != 'FAILED'
+          AND t.business_date >= ? AND t.business_date <= ?
+          ${shift.isEmpty ? '' : 'AND t.shift_id = ?'}
+          AND a.to_id IN ($placeholders)
+          AND COALESCE(t.note, '') != ?
+          AND t.idempotency_key NOT LIKE 'history-%'
+        ''';
+    final rows = await db.rawQuery(
+      '''
+      SELECT 'ASSIGN' AS kind, a.nhan_vien_id AS worker_id,
+             e.ma_nv AS worker_code, a.assigned_quantity AS quantity,
+             0 AS defect_quantity,
+             a.unit_of_measure, a.sync_status, a.sap_id, a.idempotency_key
+      FROM assignments a
+      LEFT JOIN employees e ON e.id = a.nhan_vien_id
+      WHERE COALESCE(a.sync_status, '') != 'FAILED'
+        AND a.business_date >= ? AND a.business_date <= ?
+        ${shift.isEmpty ? '' : 'AND a.shift_id = ?'}
+        AND a.to_id IN ($placeholders)
+        AND COALESCE(a.note, '') != ?
+        AND a.idempotency_key NOT LIKE 'history-%'
+      UNION ALL
+      ${recordQuery('production_records', 'CONFIRM')}
+      UNION ALL
+      ${recordQuery('recall_records', 'RECALL')}
+      ''',
+      [...args(), ...args(), ...args()],
+    );
+    return _rows(rows);
+  }
+
+  /// [getLocalLedgerRows], re-run on every assignment, confirmation or recall
+  /// write — including a queue item turning SYNCED.
+  Stream<List<Map<String, dynamic>>> watchLocalLedgerRows({
+    required List<String> teamIds,
+    required String fromBusinessDate,
+    required String toBusinessDate,
+    String? shiftId,
+  }) {
+    return _watchTicks(
+      () => _ticksAny([
+        _assignmentController,
+        _productionController,
+        _recallController,
+      ]),
+      () => getLocalLedgerRows(
+        teamIds: teamIds,
+        fromBusinessDate: fromBusinessDate,
+        toBusinessDate: toBusinessDate,
+        shiftId: shiftId,
+      ),
+    );
+  }
+
   // ─── Recall Record Queries ────────────────────────────────────────
   Stream<List<Map<String, dynamic>>> watchRecallHistory(
     String employeeId, {
@@ -1654,12 +2442,14 @@ class CaslaDatabase {
         await db.rawQuery(
           '''
         SELECT r.*, a.to_id AS work_context_id,
-               o.plant, o.work_center, o.production_order, o.operation
+               o.plant, o.work_center, o.production_order, o.operation,
+               o.operation_name, o.ten_sp, o.ma_sp
         FROM recall_records r
         JOIN assignments a ON a.id = r.phan_cong_id
         LEFT JOIN orders o ON o.id = a.don_hang_id
         WHERE a.nhan_vien_id = ? AND r.business_date >= ?
           AND r.business_date <= ?
+          AND COALESCE(r.note, '') != ?
           ${shift.isEmpty ? '' : 'AND r.shift_id = ?'}
         ORDER BY r.occurred_at_utc DESC, r.id DESC
       ''',
@@ -1667,6 +2457,7 @@ class CaslaDatabase {
             employeeId,
             fromBusinessDate,
             toBusinessDate,
+            historyImportedAssignmentNote,
             if (shift.isNotEmpty) shift,
           ],
         ),
@@ -1724,7 +2515,7 @@ class CaslaDatabase {
       }
 
       final completedRows = await txn.rawQuery(
-        'SELECT COALESCE(SUM(quantity), 0) AS total '
+        'SELECT COALESCE(SUM(quantity + defect_quantity), 0) AS total '
         "FROM production_records WHERE phan_cong_id = ? "
         "AND COALESCE(sync_status, 'PENDING') != 'FAILED'",
         [assignmentId],
@@ -1859,6 +2650,8 @@ class CaslaDatabase {
             LENGTH(COALESCE(transaction_uuid, ''))
             + LENGTH(COALESCE(worker_id, '')) + LENGTH(COALESCE(worker_name, ''))
             + LENGTH(COALESCE(production_order, '')) + LENGTH(COALESCE(operation, ''))
+            + LENGTH(COALESCE(sales_order, ''))
+            + LENGTH(COALESCE(sales_order_item, ''))
             + LENGTH(COALESCE(plant, '')) + LENGTH(COALESCE(work_center, ''))
             + LENGTH(COALESCE(transaction_type, ''))
             + LENGTH(COALESCE(unit_of_measure, ''))
@@ -1925,7 +2718,7 @@ class CaslaDatabase {
       );
     }
     return db.transaction((txn) async {
-      final filterClause = switch (filter) {
+      final baseFilterClause = switch (filter) {
         SyncFeedFilter.all => '1 = 1',
         SyncFeedFilter.pending => "q.status = 'PENDING'",
         SyncFeedFilter.verification =>
@@ -1934,6 +2727,17 @@ class CaslaDatabase {
           "q.status = 'FAILED' AND (q.last_error_code IS NULL OR "
               "q.last_error_code != 'WORKER_AUTH_FAILED')",
       };
+      final failedCutoffUtc =
+          DateTime.now().toUtc().millisecondsSinceEpoch -
+          syncFailureVisibilityDuration.inMilliseconds;
+      // Worker-auth failures are actionable verification items and must remain
+      // visible. Other terminal FAILED records expire from this feed after the
+      // retention window, while their queue rows stay on disk.
+      final visibilityClause =
+          "(q.status != 'FAILED' OR q.last_error_code = 'WORKER_AUTH_FAILED' "
+          'OR COALESCE(q.updated_at_utc, q.created_at_utc) > ?)';
+      final filterClause = '($baseFilterClause) AND $visibilityClause';
+      final filterArgs = <Object?>[failedCutoffUtc];
       final cursorClause = beforeCreatedAtUtc != null && beforeId != null
           ? ' AND (q.created_at_utc < ? OR '
                 '(q.created_at_utc = ? AND q.id < ?))'
@@ -1946,7 +2750,7 @@ class CaslaDatabase {
         actorId: actorId,
         teamIds: teamIds,
         queueWhere: '($filterClause)$cursorClause',
-        queueWhereArgs: cursorArgs,
+        queueWhereArgs: [...filterArgs, ...cursorArgs],
         orderBy: 'q.created_at_utc DESC, q.id DESC',
         limit: safePageSize + 1,
       );
@@ -1967,6 +2771,8 @@ class CaslaDatabase {
                     AND q.last_error_code != 'WORKER_AUTH_FAILED'
                    THEN 1 ELSE 0 END) AS failed_count
         ''',
+        queueWhere: visibilityClause,
+        queueWhereArgs: filterArgs,
       );
       final summary = summaryRows.single;
       final filteredSummaryRows = await _queryScopedSyncQueue(
@@ -1975,6 +2781,7 @@ class CaslaDatabase {
         teamIds: teamIds,
         select: 'COUNT(*) AS filtered_count',
         queueWhere: filterClause,
+        queueWhereArgs: filterArgs,
       );
       return SyncFeedPage(
         items: items,
@@ -2117,6 +2924,45 @@ class CaslaDatabase {
       final db = await _database;
       return _rows(await db.rawQuery('SELECT COUNT(*) AS c FROM sync_queue'));
     }).map((rows) => rows.first['c'] as int);
+  }
+
+  /// Count the records that are currently actionable in the sync screen.
+  ///
+  /// Terminal failures remain on disk for audit and retry decisions, but the
+  /// feed intentionally hides them after the ten-minute visibility window.
+  /// Navigation must use the same window; otherwise the tab can show a stale
+  /// red badge while the screen itself correctly says there are no records.
+  Stream<int> watchVisibleSyncCount({String? actorId, List<String>? teamIds}) {
+    int cutoff() =>
+        DateTime.now().toUtc().millisecondsSinceEpoch -
+        syncFailureVisibilityDuration.inMilliseconds;
+    final where =
+        "q.status != 'FAILED' OR q.last_error_code = 'WORKER_AUTH_FAILED' "
+        'OR COALESCE(q.updated_at_utc, q.created_at_utc) > ?';
+    if (_scopeWasRequested(actorId, teamIds)) {
+      if (!_hasUsableSyncScope(actorId, teamIds)) return Stream<int>.value(0);
+      return _watch(_syncQueueController, () async {
+        final db = await _database;
+        final rows = await _queryScopedSyncQueue(
+          db,
+          actorId: actorId!,
+          teamIds: teamIds!,
+          select: 'COUNT(*) AS c',
+          queueWhere: where,
+          queueWhereArgs: [cutoff()],
+        );
+        return rows;
+      }).map((rows) => (rows.single['c'] as num).toInt());
+    }
+    return _watch(_syncQueueController, () async {
+      final db = await _database;
+      return _rows(
+        await db.rawQuery(
+          'SELECT COUNT(*) AS c FROM sync_queue q WHERE ($where)',
+          [cutoff()],
+        ),
+      );
+    }).map((rows) => (rows.single['c'] as num).toInt());
   }
 
   /// Pending items older than [olderThan], which Spec 4.7 requires be surfaced
@@ -2286,10 +3132,119 @@ class CaslaDatabase {
     return _rows(rows);
   }
 
-  Future<void> deleteSyncQueueItem(String id) async {
+  /// Empties the queue without touching source rows. Test setup only: the
+  /// production path never drops pending work ([deleteSyncQueueItem] only
+  /// dismisses FAILED / NEEDS_VERIFICATION items).
+  @visibleForTesting
+  Future<void> clearSyncQueueForTesting() async {
     final db = await _database;
-    await db.delete('sync_queue', where: 'id = ?', whereArgs: [id]);
+    await db.delete('sync_queue');
     _notifySyncQueue();
+  }
+
+  /// Permanently removes a FAILED / NEEDS_VERIFICATION queue item and the
+  /// transaction it would have posted. The operator confirms a warning first;
+  /// there is no undo, and nothing of it is kept on the device afterwards.
+  ///
+  /// Removing an assignment also removes the confirmations and recalls entered
+  /// against it (and their queue items): they can never be posted without it.
+  /// Removing a confirmation or recall reopens the balance of its assignment.
+  /// Pending or synced items are never touched. Returns false when the item is
+  /// gone or no longer in a state that may be removed.
+  ///
+  /// [allowPending] is only for rolling back a transaction the operator just
+  /// entered and SAP refused on the spot (see `isLiveRejectionDiscarded`):
+  /// a child waiting behind its refused parent is still PENDING.
+  Future<bool> deleteSyncQueueItem(
+    String id, {
+    bool allowPending = false,
+  }) async {
+    final db = await _database;
+    var deleted = false;
+    await db.transaction((txn) async {
+      final queueRows = await txn.query(
+        'sync_queue',
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      if (queueRows.isEmpty) return;
+
+      final queueItem = queueRows.single;
+      final queueStatus = queueItem['status']?.toString();
+      final errorCode = queueItem['last_error_code']?.toString();
+      if (queueStatus != 'FAILED' &&
+          queueStatus != 'NEEDS_VERIFICATION' &&
+          errorCode != 'WORKER_AUTH_FAILED' &&
+          !(allowPending && queueStatus == 'PENDING')) {
+        return;
+      }
+      final entityType = queueItem['entity_type']?.toString() ?? '';
+      final entityId = queueItem['entity_id']?.toString() ?? '';
+      final table = _entitySourceTables[entityType];
+
+      Future<void> dropQueueFor(List<String> entityIds) async {
+        if (entityIds.isEmpty) return;
+        await txn.delete(
+          'sync_queue',
+          where:
+              'entity_id IN (${List.filled(entityIds.length, '?').join(',')})',
+          whereArgs: entityIds,
+        );
+      }
+
+      if (table == 'assignments' && entityId.isNotEmpty) {
+        final children = <String, List<String>>{};
+        for (final childTable in const [
+          'production_records',
+          'recall_records',
+        ]) {
+          final rows = await txn.query(
+            childTable,
+            columns: ['id'],
+            where: 'phan_cong_id = ?',
+            whereArgs: [entityId],
+          );
+          children[childTable] = [for (final row in rows) row['id'].toString()];
+        }
+        await dropQueueFor([
+          entityId,
+          for (final ids in children.values) ...ids,
+        ]);
+        for (final entry in children.entries) {
+          await txn.delete(
+            entry.key,
+            where: 'phan_cong_id = ?',
+            whereArgs: [entityId],
+          );
+        }
+        await txn.delete('assignments', where: 'id = ?', whereArgs: [entityId]);
+      } else if (table != null && entityId.isNotEmpty) {
+        // Leave the record out of its assignment's totals first, so the
+        // assignment's OPEN/COMPLETED status is recomputed without it.
+        await txn.update(
+          table,
+          {'sync_status': 'FAILED'},
+          where: 'id = ?',
+          whereArgs: [entityId],
+        );
+        await _restoreAssignmentStatusAfterRejectedTransaction(
+          txn,
+          entityType: entityType,
+          entityId: entityId,
+        );
+        await dropQueueFor([entityId]);
+        await txn.delete(table, where: 'id = ?', whereArgs: [entityId]);
+      }
+      await txn.delete('sync_queue', where: 'id = ?', whereArgs: [id]);
+      deleted = true;
+    });
+    if (!deleted) return false;
+    _notifySyncQueue();
+    _notifyAssignments();
+    _notifyProduction();
+    _notifyRecalls();
+    return true;
   }
 
   /// Marks a queue item's push attempt as failed.
@@ -2395,7 +3350,7 @@ class CaslaDatabase {
     final assigned = _toDouble(assignmentRows.single['assigned_quantity']);
 
     final completedRows = await txn.rawQuery(
-      "SELECT COALESCE(SUM(quantity), 0) AS total "
+      "SELECT COALESCE(SUM(quantity + defect_quantity), 0) AS total "
       "FROM production_records WHERE phan_cong_id = ? "
       "AND COALESCE(sync_status, 'PENDING') != 'FAILED'",
       [assignmentId],
@@ -2454,6 +3409,7 @@ class CaslaDatabase {
     _notifyAssignments();
     _notifyProduction();
     _notifyRecalls();
+    _emit(_remotePostingController);
   }
 
   Future<bool> retrySyncItem(String id) async {
@@ -2522,8 +3478,34 @@ class CaslaDatabase {
   Stream<List<Map<String, dynamic>>> _watch(
     StreamController<void> controller,
     Future<List<Map<String, dynamic>>> Function() query,
+  ) => _watchTicks(() => _ticks(controller), query);
+
+  Stream<List<Map<String, dynamic>>> _watchTicks(
+    Stream<void> Function() ticks,
+    Future<List<Map<String, dynamic>>> Function() query,
   ) {
-    return _ticks(controller).asyncMap((_) => query());
+    // A watcher may be temporarily mounted twice while a list item is being
+    // rebuilt or kept alive. Share one upstream subscription while listeners
+    // are present, then cancel it when the last listener leaves. A fresh
+    // `_ticks` stream is created on the next listen, so remounting still gets
+    // its initial snapshot and does not retain obsolete queries.
+    // ignore: close_sinks
+    late StreamController<List<Map<String, dynamic>>> result;
+    // ignore: cancel_subscriptions
+    StreamSubscription<List<Map<String, dynamic>>>? upstream;
+    result = StreamController<List<Map<String, dynamic>>>.broadcast(
+      onListen: () {
+        if (upstream != null) return;
+        final source = ticks().asyncMap((_) => query());
+        upstream = source.listen(result.add, onError: result.addError);
+      },
+      onCancel: () async {
+        final subscription = upstream;
+        upstream = null;
+        await subscription?.cancel();
+      },
+    );
+    return result.stream;
   }
 
   /// One tick now, then one per write.
@@ -2536,6 +3518,30 @@ class CaslaDatabase {
   Stream<void> _ticks(StreamController<void> controller) async* {
     yield null;
     yield* controller.stream;
+  }
+
+  /// [_ticks] over several tables: one tick now, then one per write to any.
+  Stream<void> _ticksAny(List<StreamController<void>> controllers) {
+    final subscriptions = <StreamSubscription<void>>[];
+    // Single-subscription and owned by its listener; cancelling ends it.
+    // ignore: close_sinks
+    late final StreamController<void> ticks;
+    ticks = StreamController<void>(
+      onListen: () {
+        ticks.add(null);
+        for (final controller in controllers) {
+          subscriptions.add(controller.stream.listen(ticks.add));
+        }
+      },
+      onCancel: () async {
+        final active = List.of(subscriptions);
+        subscriptions.clear();
+        for (final subscription in active) {
+          await subscription.cancel();
+        }
+      },
+    );
+    return ticks.stream;
   }
 
   // ─── Audit Log ────────────────────────────────────────────────────
@@ -2561,6 +3567,7 @@ class CaslaDatabase {
     await _syncQueueController.close();
     await _productionController.close();
     await _recallController.close();
+    await _remotePostingController.close();
     try {
       await (await _database).close();
     } catch (_) {

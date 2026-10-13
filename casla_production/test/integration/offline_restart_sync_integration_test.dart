@@ -126,7 +126,12 @@ void main() {
       // Simulate background sync processing for each item
       for (final item in pendingItems) {
         // Simulate successful SAP POST transaction
-        await db.deleteSyncQueueItem(item['id']);
+        await db.markSyncItemSynced(
+          item['id'] as String,
+          entityType: item['entity_type'] as String,
+          entityId: item['entity_id'] as String,
+          sapId: 'SAP-${item['id']}',
+        );
       }
 
       final remainingPending = await db.watchPendingCount().first;

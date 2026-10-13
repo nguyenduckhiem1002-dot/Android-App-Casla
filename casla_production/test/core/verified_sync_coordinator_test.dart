@@ -18,9 +18,7 @@ void main() {
     CaslaDatabase.resetForTesting();
     db = CaslaDatabase.instance;
     await db.ready;
-    for (final item in await db.watchSyncQueue().first) {
-      await db.deleteSyncQueueItem(item['id'] as String);
-    }
+    await db.clearSyncQueueForTesting();
   });
 
   Future<({String assignmentQueueId, String productionQueueId})>
@@ -201,6 +199,7 @@ void main() {
         );
 
     expect(report.outcome, VerifiedSyncOutcome.rejected);
+    expect(report.failedQueueItemId, chain.assignmentQueueId);
     expect(calls, ['ASSIGNMENT']);
     expect(await db.getSyncQueueItemById(chain.productionQueueId), isNotNull);
   });

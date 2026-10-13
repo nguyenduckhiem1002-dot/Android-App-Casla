@@ -125,30 +125,26 @@ void main() {
       );
     });
 
-    test('rejects a quantity above the remaining ceiling', () async {
+    test('accepts a quantity above what is left and closes the lot', () async {
       final before = await db.getCompletedQuantity(seededAssignmentId);
 
-      await expectLater(
-        productionRepo.recordProduction(
-          assignmentId: seededAssignmentId,
-          quantity: seededRemaining + 1,
-          businessDate: '2026-08-14',
-          shiftId: 'SHIFT_1',
-          createdBy: 'MNV00100',
-        ),
-        throwsA(
-          isA<Exception>().having(
-            (e) => e.toString(),
-            'message',
-            contains('vượt quá'),
-          ),
-        ),
+      await productionRepo.recordProduction(
+        assignmentId: seededAssignmentId,
+        quantity: seededRemaining + 1,
+        businessDate: '2026-08-14',
+        shiftId: 'SHIFT_1',
+        createdBy: 'MNV00100',
       );
 
-      // The rejected write must not have landed.
       expect(
         await db.getCompletedQuantity(seededAssignmentId),
-        closeTo(before, 0.001),
+        closeTo(before + seededRemaining + 1, 0.001),
+      );
+      // Nothing is left, never a negative balance.
+      expect(await db.getRemaining(seededAssignmentId), 0);
+      expect(
+        (await db.getAssignmentById(seededAssignmentId))!['status'],
+        'COMPLETED',
       );
     });
 
@@ -167,6 +163,43 @@ void main() {
       );
     });
 
+    test('rejects a remaining-mode write when its preview is stale', () async {
+      // The supervisor opened the sheet while 214 remained. Another write
+      // lands before worker verification finishes, so the old preview must
+      // not be converted into a new completion quantity.
+      await productionRepo.recordProduction(
+        assignmentId: seededAssignmentId,
+        quantity: 10.0,
+        businessDate: '2026-08-14',
+        shiftId: 'SHIFT_1',
+        createdBy: 'MNV00100',
+      );
+      final completedBefore = await db.getCompletedQuantity(seededAssignmentId);
+
+      await expectLater(
+        productionRepo.recordProduction(
+          assignmentId: seededAssignmentId,
+          quantity: 20.0,
+          businessDate: '2026-08-14',
+          shiftId: 'SHIFT_1',
+          createdBy: 'MNV00100',
+          expectedRemaining: seededRemaining,
+        ),
+        throwsA(
+          isA<Exception>().having(
+            (e) => e.toString(),
+            'message',
+            contains('Số lượng còn lại đã thay đổi'),
+          ),
+        ),
+      );
+
+      expect(
+        await db.getCompletedQuantity(seededAssignmentId),
+        closeTo(completedBefore, 0.001),
+      );
+    });
+
     test('rejects an unknown assignment', () async {
       await expectLater(
         productionRepo.recordProduction(
@@ -180,31 +213,37 @@ void main() {
       );
     });
 
-    test('serializes concurrent records so the ceiling cannot be exceeded',
-        () async {
-      Future<bool> attempt() async {
-        try {
-          await productionRepo.recordProduction(
-            assignmentId: seededAssignmentId,
-            quantity: 200.0,
-            businessDate: '2026-08-14',
-            shiftId: 'SHIFT_1',
-            createdBy: 'MNV00100',
-          );
-          return true;
-        } catch (_) {
-          return false;
+    test(
+      'serializes concurrent records made from the same open form',
+      () async {
+        // There is no ceiling to stop the second write any more; the balance
+        // the form was opened with is what tells a repeat from a new entry.
+        final before = await db.getCompletedQuantity(seededAssignmentId);
+        Future<bool> attempt() async {
+          try {
+            await productionRepo.recordProduction(
+              assignmentId: seededAssignmentId,
+              quantity: 200.0,
+              businessDate: '2026-08-14',
+              shiftId: 'SHIFT_1',
+              createdBy: 'MNV00100',
+              expectedRemaining: seededRemaining,
+            );
+            return true;
+          } catch (_) {
+            return false;
+          }
         }
-      }
 
-      final outcomes = await Future.wait([attempt(), attempt()]);
+        final outcomes = await Future.wait([attempt(), attempt()]);
 
-      expect(outcomes.where((outcome) => outcome), hasLength(1));
-      expect(
-        await db.getCompletedQuantity(seededAssignmentId),
-        lessThanOrEqualTo(650.0),
-      );
-    });
+        expect(outcomes.where((outcome) => outcome), hasLength(1));
+        expect(
+          await db.getCompletedQuantity(seededAssignmentId),
+          closeTo(before + 200.0, 0.001),
+        );
+      },
+    );
   });
 
   group('Recall assignment', () {
@@ -288,32 +327,34 @@ void main() {
       );
     });
 
-    test('serializes concurrent recalls so the ceiling cannot be exceeded',
-        () async {
-      Future<bool> attempt() async {
-        try {
-          await recallRepo.recallAssignment(
-            assignmentId: seededAssignmentId,
-            quantity: 150.0,
-            reasonCode: RecallReason.planChange.code,
-            businessDate: '2026-08-14',
-            shiftId: 'SHIFT_1',
-            createdBy: 'MNV00100',
-          );
-          return true;
-        } catch (_) {
-          return false;
+    test(
+      'serializes concurrent recalls so the ceiling cannot be exceeded',
+      () async {
+        Future<bool> attempt() async {
+          try {
+            await recallRepo.recallAssignment(
+              assignmentId: seededAssignmentId,
+              quantity: 150.0,
+              reasonCode: RecallReason.planChange.code,
+              businessDate: '2026-08-14',
+              shiftId: 'SHIFT_1',
+              createdBy: 'MNV00100',
+            );
+            return true;
+          } catch (_) {
+            return false;
+          }
         }
-      }
 
-      final outcomes = await Future.wait([attempt(), attempt()]);
+        final outcomes = await Future.wait([attempt(), attempt()]);
 
-      expect(outcomes.where((outcome) => outcome), hasLength(1));
-      expect(
-        await db.getRecalledQuantity(seededAssignmentId),
-        lessThanOrEqualTo(seededRemaining),
-      );
-    });
+        expect(outcomes.where((outcome) => outcome), hasLength(1));
+        expect(
+          await db.getRecalledQuantity(seededAssignmentId),
+          lessThanOrEqualTo(seededRemaining),
+        );
+      },
+    );
   });
 
   group('Assignment projection', () {

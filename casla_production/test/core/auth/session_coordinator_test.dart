@@ -24,7 +24,10 @@ void main() {
     final coordinator = SessionCoordinator((_) => gate.future);
     final generation = coordinator.beginLogin();
     expect(
-      coordinator.completeLogin(generation: generation, session: session('user-a')),
+      coordinator.completeLogin(
+        generation: generation,
+        session: session('user-a'),
+      ),
       isTrue,
     );
 
@@ -67,7 +70,10 @@ void main() {
       return gate.future;
     });
     final generation = coordinator.beginLogin();
-    coordinator.completeLogin(generation: generation, session: session('user-a'));
+    coordinator.completeLogin(
+      generation: generation,
+      session: session('user-a'),
+    );
 
     final first = coordinator.refresh();
     final second = coordinator.refresh();

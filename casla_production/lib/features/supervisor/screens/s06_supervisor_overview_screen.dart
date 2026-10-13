@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -9,23 +11,31 @@ import '../../../domain/entities/entities.dart';
 import '../../../domain/entities/enums.dart';
 import '../../../domain/entities/work_history.dart';
 import '../../../domain/policies/history_work_context.dart';
+import '../../../domain/policies/worker_summary_merge.dart';
+import '../../../domain/policies/local_history_overlay.dart';
 import '../../../core/utils/quantity_formatter.dart';
 import '../../../main.dart';
+import '../../../presentation/widgets/account_avatar_button.dart';
 import '../../../presentation/widgets/status_chip.dart';
 import '../../../presentation/widgets/active_shift_context_card.dart';
 import '../../../presentation/widgets/casla_empty_state.dart';
 import '../../../presentation/widgets/casla_skeleton.dart';
+import '../../../presentation/widgets/stale_history_banner.dart';
 
 class _WorkerOverviewData {
   final String id;
   final String code;
   final String name;
   final String department;
+  final String workId;
   final double assignedQty;
   final double completedQty;
+
+  /// Defective output, counted apart from [completedQty].
+  final double defectQty;
+  final double recalledQty;
   final double remainingQty;
   final String uom;
-  final List<WorkHistoryEntry> sapEntries;
   final List<Assignment> localAssignments;
 
   const _WorkerOverviewData({
@@ -33,16 +43,21 @@ class _WorkerOverviewData {
     required this.code,
     required this.name,
     required this.department,
+    this.workId = '',
     required this.assignedQty,
     required this.completedQty,
+    this.defectQty = 0,
+    this.recalledQty = 0,
     required this.remainingQty,
     required this.uom,
-    this.sapEntries = const [],
     this.localAssignments = const [],
   });
 
+  /// Given minus recalled: what the worker is actually expected to finish.
+  double get effectiveQty => assignedQty - recalledQty;
+
   double get completionRate =>
-      assignedQty > 0 ? (completedQty / assignedQty).clamp(0.0, 1.0) : 0.0;
+      effectiveQty > 0 ? (completedQty / effectiveQty).clamp(0.0, 1.0) : 0.0;
 }
 
 class _TeamFilterOption {
@@ -77,23 +92,60 @@ class _S06SupervisorOverviewScreenState
   late Stream<WorkHistoryResult> _historyStream;
   late Stream<List<Assignment>> _assignmentStream;
   String _historyContextKey = '';
+  String _activeBusinessDateKey = '';
   String? _historyShiftId;
   String _historyShiftLabel = 'Tất cả ca';
   Future<List<SapShift>>? _historyShiftsFuture;
   String _historyShiftsKey = '';
   bool _historyDataReady = false;
   WorkHistoryResult? _lastHistoryResult;
+  StreamSubscription<List<Map<String, dynamic>>>? _ledgerSubscription;
+  List<LocalLedgerRow> _ledgerRows = const [];
 
   @override
   void initState() {
     super.initState();
     final appState = ref.read(appStateProvider);
+    // The date chosen together with the active shift is the initial history
+    // filter. This keeps the overview aligned with the setup screen instead
+    // of silently falling back to the device's calendar date.
+    _selectedDate = _dateOnly(appState.activeBusinessDate);
+    _activeBusinessDateKey = DateFormat('yyyy-MM-dd').format(_selectedDate);
     _historyContextKey = _currentHistoryContextKey(appState);
+    _bindActiveWorkContextFilter(appState);
+    _historyShiftId = appState.activeShift?.shiftId;
+    _historyShiftLabel = _shiftFilterLabel(appState.activeShift);
     _replaceHistoryStream();
   }
 
   String _currentHistoryContextKey(AppState appState) =>
-      appState.activeWorkContext?.workId ?? '';
+      '${appState.activeWorkContext?.workId ?? ''}|${appState.activeShift?.shiftId ?? ''}';
+
+  String _shiftFilterLabel(SapShift? shift) {
+    if (shift == null) return 'Tất cả ca';
+    final name = shift.shiftName.trim();
+    return name.isNotEmpty ? name : shift.shiftId;
+  }
+
+  /// The work context selected in setup is the scope the supervisor is
+  /// currently operating in. Use it as the initial team filter so the
+  /// overview does not silently load every authorized department.
+  void _bindActiveWorkContextFilter(AppState appState) {
+    final active = appState.activeWorkContext;
+    final workId = active?.workId.trim() ?? '';
+    if (workId.isEmpty) {
+      _selectedTeamId = 'ALL';
+      _selectedTeamLabel = 'Tất cả bộ phận';
+      _selectedTeamScopeIds = null;
+      return;
+    }
+
+    _selectedTeamId = workId;
+    _selectedTeamLabel = active!.workName.trim().isNotEmpty
+        ? active.workName.trim()
+        : workId;
+    _selectedTeamScopeIds = {workId};
+  }
 
   Stream<WorkHistoryResult> _watchHistory() {
     return ref
@@ -107,6 +159,7 @@ class _S06SupervisorOverviewScreenState
           dateFrom: _rangeFrom,
           dateTo: _rangeTo,
           shiftId: _historyShiftId,
+          workId: _selectedTeamId == 'ALL' ? null : _selectedTeamId,
         )
         .asyncMap(_ensureHistoryEmployees);
   }
@@ -120,6 +173,7 @@ class _S06SupervisorOverviewScreenState
           dateFrom: _rangeFrom,
           dateTo: _rangeTo,
           shiftId: _historyShiftId,
+          workId: _selectedTeamId == 'ALL' ? null : _selectedTeamId,
           forceRefresh: forceRefresh,
         );
     return _ensureHistoryEmployees(result);
@@ -128,18 +182,20 @@ class _S06SupervisorOverviewScreenState
   Future<WorkHistoryResult> _ensureHistoryEmployees(
     WorkHistoryResult result,
   ) async {
-    for (final worker in result.workers) {
-      await ref
-          .read(appStateProvider)
-          .db
-          .ensureEmployeeExists(
-            id: worker.workerId,
-            maNv: worker.workerId,
-            name: worker.workerName.isNotEmpty
-                ? worker.workerName
-                : worker.workerId,
-          );
-    }
+    final appState = ref.read(appStateProvider);
+    // Keep the local employee catalogue authoritative for membership. The
+    // history response now carries WorkID/BoPhan for the transaction window;
+    // the card reads that snapshot directly instead of overwriting a worker's
+    // multi-team `to_ids` with whichever filter is currently selected.
+    await appState.db.upsertEmployeesBatch([
+      for (final worker in result.workers)
+        {
+          'worker_id': worker.workerId,
+          'worker_name': worker.workerName.isNotEmpty
+              ? worker.workerName
+              : worker.workerId,
+        },
+    ]);
     return result;
   }
 
@@ -154,23 +210,75 @@ class _S06SupervisorOverviewScreenState
       toBusinessDate: DateFormat('yyyy-MM-dd').format(_rangeTo),
       shiftId: _historyShiftId,
     );
+    _watchLocalLedger(appState);
+  }
+
+  /// Local writes SAP has not reported yet, for the same window and scope as
+  /// the history stream. SAP-reported workers show these on top of the report
+  /// so a confirmation made here is visible at once, including offline.
+  void _watchLocalLedger(AppState appState) {
+    unawaited(_ledgerSubscription?.cancel());
+    _ledgerRows = const [];
+    final teamIds =
+        _selectedTeamScopeIds?.toList(growable: false) ??
+        appState.currentSession?.toIds ??
+        const <String>[];
+    _ledgerSubscription = appState.db
+        .watchLocalLedgerRows(
+          teamIds: teamIds,
+          fromBusinessDate: DateFormat('yyyy-MM-dd').format(_rangeFrom),
+          toBusinessDate: DateFormat('yyyy-MM-dd').format(_rangeTo),
+          shiftId: _historyShiftId,
+        )
+        .listen(
+          (rows) {
+            if (!mounted) return;
+            setState(() {
+              _ledgerRows = rows.map(LocalLedgerRow.fromMap).toList();
+            });
+          },
+          onError: (Object _) {
+            // SAP totals remain correct on their own; only the overlay is lost.
+          },
+        );
   }
 
   Future<void> _refresh() async {
+    // Employee rows can be changed by QR acceptance or another sync while the
+    // selected team stays the same. Drop this scope's Future so pull-to-refresh
+    // actually re-reads the local catalogue.
+    if (mounted) {
+      setState(() {
+        _employeesFuture = null;
+        _employeeScopeKey = '';
+        _historyShiftsFuture = null;
+        _historyShiftsKey = '';
+      });
+    }
     try {
       await _fetchHistory(forceRefresh: true);
-    } catch (_) {}
+    } catch (_) {
+      if (!mounted || _lastHistoryResult == null) return;
+      // With a snapshot on screen the list gives no sign that it is old.
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(StaleHistoryBanner.message),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   @override
   void dispose() {
+    unawaited(_ledgerSubscription?.cancel());
     _searchController.dispose();
     super.dispose();
   }
 
   // Filter States
   String _selectedTeamId = 'ALL';
-  String _selectedTeamLabel = 'Tất cả tổ';
+  String _selectedTeamLabel = 'Tất cả bộ phận';
   Set<String>? _selectedTeamScopeIds;
 
   DateTime _selectedDate = DateTime.now();
@@ -328,7 +436,7 @@ class _S06SupervisorOverviewScreenState
 
   String _allTeamsLabel(UserSession? session) {
     final count = _sessionTeamOptions(session).length;
-    return count > 1 ? 'Tất cả tổ ($count)' : 'Tất cả tổ';
+    return count > 1 ? 'Tất cả bộ phận ($count)' : 'Tất cả bộ phận';
   }
 
   String _scopeSummary(UserSession? session) {
@@ -397,14 +505,26 @@ class _S06SupervisorOverviewScreenState
 
   Future<List<SapShift>> _loadHistoryShifts() {
     final appState = ref.read(appStateProvider);
-    final plant = appState.activeWorkContext?.plant.trim() ?? '';
+    final workCenter = appState.activeWorkContext?.workCenter.trim() ?? '';
     final date = _rangeFrom;
-    final key = '$plant|${DateFormat('yyyy-MM-dd').format(date)}';
+    final key = '$workCenter|${DateFormat('yyyy-MM-dd').format(date)}';
     if (_historyShiftsFuture == null || _historyShiftsKey != key) {
       _historyShiftsKey = key;
-      _historyShiftsFuture = plant.isEmpty
+      final future = workCenter.isEmpty
           ? Future<List<SapShift>>.value(const [])
-          : appState.shiftController.getShifts(plant: plant, onDate: date);
+          : appState.shiftController.getShifts(
+              workCenter: workCenter,
+              onDate: date,
+            );
+      _historyShiftsFuture = future;
+      // Never memoize a failure: the next open of the filter must retry.
+      future.catchError((Object _) {
+        if (identical(_historyShiftsFuture, future)) {
+          _historyShiftsFuture = null;
+          _historyShiftsKey = '';
+        }
+        return const <SapShift>[];
+      });
     }
     return _historyShiftsFuture!;
   }
@@ -524,7 +644,7 @@ class _S06SupervisorOverviewScreenState
                 const Padding(
                   padding: EdgeInsets.fromLTRB(18, 18, 18, 10),
                   child: Text(
-                    'Lọc theo tổ sản xuất',
+                    'Lọc theo bộ phận',
                     style: TextStyle(
                       fontFamily: 'Manrope',
                       fontWeight: FontWeight.w800,
@@ -847,16 +967,27 @@ class _S06SupervisorOverviewScreenState
   Widget build(BuildContext context) {
     final appState = ref.watch(appStateProvider);
     final historyContextKey = _currentHistoryContextKey(appState);
-    if (historyContextKey != _historyContextKey) {
+    final activeBusinessDate = _dateOnly(appState.activeBusinessDate);
+    final activeBusinessDateKey = DateFormat(
+      'yyyy-MM-dd',
+    ).format(activeBusinessDate);
+    if (historyContextKey != _historyContextKey ||
+        activeBusinessDateKey != _activeBusinessDateKey) {
       _historyContextKey = historyContextKey;
-      _historyShiftId = null;
-      _historyShiftLabel = 'Tất cả ca';
+      _activeBusinessDateKey = activeBusinessDateKey;
+      _bindActiveWorkContextFilter(appState);
+      _historyRange = HistoryRange.day;
+      _selectedDate = activeBusinessDate;
+      _historyShiftId = appState.activeShift?.shiftId;
+      _historyShiftLabel = _shiftFilterLabel(appState.activeShift);
       _historyShiftsFuture = null;
       _historyShiftsKey = '';
       _replaceHistoryStream();
     }
     final emp = appState.currentSession;
     final supervisorName = emp?.userName ?? 'Supervisor';
+    final canViewEmployeeDetail =
+        emp?.hasPermission(Permission.viewEmployeeHistory) == true;
 
     final effectiveTeamIds =
         _selectedTeamScopeIds?.toList(growable: false) ??
@@ -915,90 +1046,55 @@ class _S06SupervisorOverviewScreenState
                   ],
                 )
               : Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
+                    // Account sits first, next to the name it belongs to; the
+                    // tools for the list below stay on the right.
+                    const AccountAvatarButton(leading: true),
                     Expanded(
-                      child: Row(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Container(
-                            width: 44,
-                            height: 44,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF26305C),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            alignment: Alignment.center,
-                            child: Text(
-                              supervisorName.isNotEmpty
-                                  ? supervisorName
-                                        .split(' ')
-                                        .last[0]
-                                        .toUpperCase()
-                                  : 'B',
-                              style: const TextStyle(
-                                fontFamily: 'Manrope',
-                                fontWeight: FontWeight.w800,
-                                fontSize: 18,
-                                color: Colors.white,
-                              ),
+                          Text(
+                            supervisorName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontFamily: 'Manrope',
+                              fontWeight: FontWeight.w800,
+                              fontSize: 18,
+                              color: Colors.white,
                             ),
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Text(
-                                  'Tổng quan',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontFamily: 'Manrope',
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 17,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  '$supervisorName · ${emp?.teamName.isNotEmpty == true ? emp!.teamName : 'Phạm vi được phân quyền'}',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontFamily: 'Inter',
-                                    fontSize: 12.5,
-                                    fontWeight: FontWeight.w500,
-                                    color: CaslaColors.identityMeta,
-                                  ),
-                                ),
-                              ],
+                          const SizedBox(height: 2),
+                          Text(
+                            [
+                              emp?.maNv ?? '',
+                              emp?.teamName.isNotEmpty == true
+                                  ? emp!.teamName
+                                  : 'Phạm vi được phân quyền',
+                            ].where((part) => part.isNotEmpty).join(' · '),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontFamily: 'Inter',
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w500,
+                              color: CaslaColors.identityMeta,
                             ),
                           ),
                         ],
                       ),
                     ),
-                    Row(
-                      children: [
-                        IconButton(
-                          icon: const Icon(
-                            Icons.qr_code_scanner,
-                            color: Colors.white,
-                          ),
-                          tooltip: 'Quét thẻ/QR công nhân',
-                          onPressed: () =>
-                              context.push('/supervisor/confirm_scan'),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.search, color: Colors.white),
-                          tooltip: 'Tìm kiếm nhân viên',
-                          onPressed: () {
-                            setState(() {
-                              _isSearching = true;
-                            });
-                          },
-                        ),
-                      ],
+                    // Scanning a worker lives in the Xác nhận tab.
+                    IconButton(
+                      icon: const Icon(Icons.search, color: Colors.white),
+                      tooltip: 'Tìm kiếm nhân viên',
+                      onPressed: () {
+                        setState(() {
+                          _isSearching = true;
+                        });
+                      },
                     ),
                   ],
                 ),
@@ -1087,6 +1183,7 @@ class _S06SupervisorOverviewScreenState
                             sapResult,
                             plant: selected?.plant ?? '',
                             workCenter: selected?.workCenter ?? '',
+                            workId: selected?.workId,
                           );
                         } on FormatException catch (error) {
                           return ListView(
@@ -1099,7 +1196,11 @@ class _S06SupervisorOverviewScreenState
                                     TextButton(
                                       onPressed: () => setState(() {
                                         _selectedTeamId = 'ALL';
+                                        _selectedTeamLabel = 'Tất cả bộ phận';
                                         _selectedTeamScopeIds = null;
+                                        // The SAP request itself was scoped
+                                        // to the old WorkID.
+                                        _replaceHistoryStream();
                                       }),
                                       child: const Text('Xem tất cả tổ'),
                                     ),
@@ -1110,24 +1211,25 @@ class _S06SupervisorOverviewScreenState
                           );
                         }
                       }
-                      final sapWorkers =
-                          scopedResult?.workers ?? const <WorkHistorySummary>[];
-                      final sapEntries =
-                          scopedResult?.entries ?? const <WorkHistoryEntry>[];
-                      final uoms = sapWorkers
-                          .map((worker) => worker.unitOfMeasure.trim())
-                          .where((unit) => unit.isNotEmpty)
-                          .toSet();
-                      final overviewUom = uoms.length == 1
-                          ? uoms.single
-                          : uoms.length > 1
-                          ? 'nhiều ĐVT'
-                          : null;
+                      // One row per worker and unit: SAP splits a worker by
+                      // WorkID too (e.g. a carried-over REASSIGN kept on
+                      // yesterday's position beside today's assignment).
+                      final sapWorkers = mergeWorkerSummaries(
+                        scopedResult?.workers ?? const <WorkHistorySummary>[],
+                      );
+                      final unitsPerWorker = <String, int>{};
+                      for (final sw in sapWorkers) {
+                        final id = sw.workerId.trim().toUpperCase();
+                        unitsPerWorker[id] = (unitsPerWorker[id] ?? 0) + 1;
+                      }
 
                       // Process Local data
                       final rawAssignments =
                           assignmentSnapshot.data ?? const <Assignment>[];
                       final localAssignments = rawAssignments.where((a) {
+                        if (a.note == historyImportedAssignmentNote) {
+                          return false;
+                        }
                         if (_selectedTeamScopeIds != null &&
                             !_selectedTeamScopeIds!.contains(a.teamId)) {
                           return false;
@@ -1142,20 +1244,76 @@ class _S06SupervisorOverviewScreenState
 
                       final rawEmployees = empSnapshot.data ?? [];
 
+                      // Build lookup maps once. The previous per-worker
+                      // firstWhere/where scans made this section quadratic as
+                      // the team and history grew.
+                      final employeesByKey = <String, Map<String, dynamic>>{};
+                      for (final employee in rawEmployees) {
+                        final id = employee['id']?.toString().trim() ?? '';
+                        final code = employee['ma_nv']?.toString().trim() ?? '';
+                        if (id.isNotEmpty) employeesByKey[id] = employee;
+                        if (code.isNotEmpty) employeesByKey[code] = employee;
+                      }
+
                       // BUILD UNIFIED WORKER MAP
+                      final cachedWorkDepartments = <String, String>{};
+                      for (final work
+                          in appState.currentSession?.workContexts ??
+                              const <UserWorkContext>[]) {
+                        final name = work.workName.trim().isNotEmpty
+                            ? work.workName.trim()
+                            : work.boPhan.trim();
+                        final location = work.location.trim();
+                        final label = name.isEmpty
+                            ? work.workId.trim()
+                            : (location.isEmpty ? name : '$name ($location)');
+                        if (label.isEmpty) continue;
+                        for (final key in [
+                          work.workId,
+                          work.workName,
+                          work.workCenter,
+                        ]) {
+                          final normalized = key.trim().toUpperCase();
+                          if (normalized.isNotEmpty) {
+                            cachedWorkDepartments[normalized] ??= label;
+                          }
+                        }
+                      }
+
+                      String resolveWorkerDepartment(
+                        String? rawDept, {
+                        String? workName,
+                        String? workId,
+                        Iterable<String> workIds = const <String>[],
+                      }) {
+                        for (final key in [...workIds, workId ?? '']) {
+                          final mapped =
+                              cachedWorkDepartments[key.trim().toUpperCase()];
+                          if (mapped?.isNotEmpty == true) return mapped!;
+                        }
+                        final dept = rawDept?.trim();
+                        if (dept != null &&
+                            dept.isNotEmpty &&
+                            dept != 'Công nhân sản xuất') {
+                          return dept;
+                        }
+                        final resolvedWorkName = workName?.trim();
+                        if (resolvedWorkName != null &&
+                            resolvedWorkName.isNotEmpty) {
+                          return resolvedWorkName;
+                        }
+                        return 'Chưa xác định tổ';
+                      }
+
                       final workerMap = <String, _WorkerOverviewData>{};
+                      final pendingLedger = buildLocalPendingLedger(
+                        sap: scopedResult,
+                        rows: _ledgerRows,
+                      );
 
                       // 1. Add from SAP workers
                       for (final sw in sapWorkers) {
-                        final localEmp = rawEmployees
-                            .cast<Map<String, dynamic>?>()
-                            .firstWhere(
-                              (e) =>
-                                  e != null &&
-                                  (e['ma_nv'] == sw.workerId ||
-                                      e['id'] == sw.workerId),
-                              orElse: () => null,
-                            );
+                        final localEmp = employeesByKey[sw.workerId];
 
                         final matchingLocal =
                             byWorkerLocal[sw.workerId] ??
@@ -1164,25 +1322,52 @@ class _S06SupervisorOverviewScreenState
                                 : null) ??
                             const <Assignment>[];
 
-                        final matchingSapEntries = sapEntries
-                            .where((e) => e.workerId == sw.workerId)
-                            .toList();
+                        final totals = overlayWorkerSummary(
+                          sw,
+                          pendingLedger.forWorker([
+                            sw.workerId,
+                            localEmp?['id']?.toString(),
+                            localEmp?['ma_nv']?.toString(),
+                          ]),
+                        );
 
-                        workerMap[sw.workerId] = _WorkerOverviewData(
+                        // Different units cannot be added together, so a
+                        // worker with two units gets one card per unit.
+                        final mapKey =
+                            (unitsPerWorker[sw.workerId.trim().toUpperCase()] ??
+                                    1) >
+                                1
+                            ? '${sw.workerId}|${sw.unitOfMeasure}'
+                            : sw.workerId;
+                        workerMap[mapKey] = _WorkerOverviewData(
                           id: localEmp?['id'] as String? ?? sw.workerId,
                           code: sw.workerId,
                           name: sw.workerName.isNotEmpty
                               ? sw.workerName
                               : (localEmp?['ten'] ?? sw.workerId),
-                          department:
-                              localEmp?['bo_phan'] ?? 'Công nhân sản xuất',
-                          assignedQty: sw.assignedQuantity,
-                          completedQty: sw.completedQuantity,
-                          remainingQty: sw.remainingQuantity,
+                          department: resolveWorkerDepartment(
+                            sw.boPhan.isNotEmpty
+                                ? sw.boPhan
+                                : localEmp?['bo_phan'] as String?,
+                            workName: sw.workName,
+                            workId: sw.workId,
+                            workIds: [
+                              if (localEmp?['to_ids'] is List)
+                                ...(localEmp!['to_ids'] as List).map(
+                                  (value) => value.toString(),
+                                ),
+                              ...matchingLocal.map((a) => a.teamId),
+                            ],
+                          ),
+                          workId: sw.workId,
+                          assignedQty: totals.assigned,
+                          completedQty: totals.completed,
+                          defectQty: totals.defect,
+                          recalledQty: totals.recalled,
+                          remainingQty: totals.remaining,
                           uom: sw.unitOfMeasure.isNotEmpty
                               ? sw.unitOfMeasure
                               : 'ST',
-                          sapEntries: matchingSapEntries,
                           localAssignments: matchingLocal,
                         );
                       }
@@ -1193,7 +1378,13 @@ class _S06SupervisorOverviewScreenState
                         final empCode = emp['ma_nv'] as String? ?? '';
 
                         if (workerMap.containsKey(empCode) ||
-                            workerMap.containsKey(empId)) {
+                            workerMap.containsKey(empId) ||
+                            unitsPerWorker.containsKey(
+                              empCode.trim().toUpperCase(),
+                            ) ||
+                            unitsPerWorker.containsKey(
+                              empId.trim().toUpperCase(),
+                            )) {
                           continue;
                         }
 
@@ -1204,15 +1395,19 @@ class _S06SupervisorOverviewScreenState
 
                         double workerAssigned = 0.0;
                         double completedQty = 0.0;
+                        double defectQty = 0.0;
                         double recalledQty = 0.0;
                         for (final a in matchingLocal) {
                           workerAssigned += a.assignedQuantity;
                           completedQty += a.completedQuantity;
+                          defectQty += a.defectQuantity;
                           recalledQty += a.recalledQuantity;
                         }
 
                         final effectiveQty = workerAssigned - recalledQty;
-                        final remainingQty = effectiveQty - completedQty;
+                        // Defective pieces use up what was given too.
+                        final remainingQty =
+                            effectiveQty - completedQty - defectQty;
 
                         workerMap[empCode.isNotEmpty
                             ? empCode
@@ -1220,14 +1415,27 @@ class _S06SupervisorOverviewScreenState
                           id: empId,
                           code: empCode,
                           name: emp['ten'] ?? 'Nhân viên',
-                          department: emp['bo_phan'] ?? 'Công nhân sản xuất',
-                          assignedQty: effectiveQty,
+                          department: resolveWorkerDepartment(
+                            emp['bo_phan'] as String?,
+                            workIds: [
+                              if (emp['to_ids'] is List)
+                                ...(emp['to_ids'] as List).map(
+                                  (value) => value.toString(),
+                                ),
+                              ...matchingLocal.map((a) => a.teamId),
+                            ],
+                          ),
+                          workId: '',
+                          // Gross, like SAP's AssignedQuantity: recalls have
+                          // their own column now.
+                          assignedQty: workerAssigned,
                           completedQty: completedQty,
+                          defectQty: defectQty,
+                          recalledQty: recalledQty,
                           remainingQty: remainingQty,
                           uom: matchingLocal.isNotEmpty
                               ? matchingLocal.first.uom
                               : 'cái',
-                          sapEntries: const [],
                           localAssignments: matchingLocal,
                         );
                       }
@@ -1238,12 +1446,22 @@ class _S06SupervisorOverviewScreenState
                       int assignedWorkerCount = 0;
                       int openCount = 0;
 
+                      // Count people, not cards: a worker with two units has
+                      // two cards.
+                      final assignedWorkers = <String>{};
+                      final openWorkers = <String>{};
                       for (final w in workerMap.values) {
-                        totalEffective += w.assignedQty;
+                        // "Giao hiệu lực": given minus recalled.
+                        totalEffective += w.effectiveQty;
                         totalCompleted += w.completedQty;
-                        if (w.assignedQty > 0) assignedWorkerCount++;
-                        if (w.remainingQty > 0) openCount++;
+                        final person = w.code.trim().toUpperCase();
+                        if (w.assignedQty > 0) assignedWorkers.add(person);
+                        if (hasRemainingQuantity(w.remainingQty, uom: w.uom)) {
+                          openWorkers.add(person);
+                        }
                       }
+                      assignedWorkerCount = assignedWorkers.length;
+                      openCount = openWorkers.length;
 
                       // Filter workers by search query
                       final allWorkers = workerMap.values.toList();
@@ -1273,12 +1491,13 @@ class _S06SupervisorOverviewScreenState
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
+                                  if (historySnapshot.hasError)
+                                    const StaleHistoryBanner(),
                                   _buildOverviewKpiPanel(
                                     totalEffective: totalEffective,
                                     totalCompleted: totalCompleted,
                                     assignedWorkerCount: assignedWorkerCount,
                                     openCount: openCount,
-                                    uom: overviewUom,
                                   ),
 
                                   const SizedBox(height: 16),
@@ -1323,7 +1542,7 @@ class _S06SupervisorOverviewScreenState
                                     icon: Icons.people_outline_rounded,
                                     title: 'Không có nhân viên phù hợp',
                                     message:
-                                        'Không tìm thấy nhân viên nào phù hợp. Thử đổi ngày, tổ sản xuất hoặc từ khóa tìm kiếm.',
+                                        'Không tìm thấy nhân viên nào phù hợp. Thử đổi ngày, bộ phận hoặc từ khóa tìm kiếm.',
                                   ),
                                 )
                               : SliverPadding(
@@ -1337,8 +1556,21 @@ class _S06SupervisorOverviewScreenState
                                     itemCount: filteredWorkers.length,
                                     itemBuilder: (context, index) {
                                       final worker = filteredWorkers[index];
-                                      final (status, statusLabel) =
-                                          _workerStatusBadge(worker);
+                                      final (progressStatus, progressLabel) =
+                                          _workerProgressBadge(worker);
+                                      final progressBar = _workerProgressBar(
+                                        progressStatus,
+                                        worker,
+                                      );
+                                      final progressShares =
+                                          _workerProgressShares(
+                                            progressStatus,
+                                            worker,
+                                            progressBar.$1,
+                                          );
+                                      final syncBadge = _workerSyncBadge(
+                                        worker,
+                                      );
 
                                       return Container(
                                         margin: const EdgeInsets.only(
@@ -1350,34 +1582,39 @@ class _S06SupervisorOverviewScreenState
                                             12,
                                           ),
                                           child: InkWell(
-                                            onTap: () {
-                                              context.push(
-                                                '/supervisor/employee_detail',
-                                                extra: {
-                                                  'id': worker.id,
-                                                  'ma_nv': worker.code,
-                                                  'ten': worker.name,
-                                                  'bo_phan': worker.department,
-                                                  'sap_entries':
-                                                      worker.sapEntries,
-                                                  'assigned_qty':
-                                                      worker.assignedQty,
-                                                  'completed_qty':
-                                                      worker.completedQty,
-                                                  'remaining_qty':
-                                                      worker.remainingQty,
-                                                  'uom': worker.uom,
-                                                  'date': _rangeFrom,
-                                                  'date_from': _rangeFrom,
-                                                  'date_to': _rangeTo,
-                                                  'shift_id': _historyShiftId,
-                                                  'work_context_id':
-                                                      _selectedTeamId == 'ALL'
-                                                      ? null
-                                                      : _selectedTeamId,
-                                                },
-                                              );
-                                            },
+                                            // Without the permission the
+                                            // router would bounce the push to
+                                            // /supervisor, stacking a second
+                                            // shell on top of this one.
+                                            onTap: !canViewEmployeeDetail
+                                                ? null
+                                                : () {
+                                                    context.push(
+                                                      '/supervisor/employee_detail',
+                                                      extra: {
+                                                        'id': worker.id,
+                                                        'ma_nv': worker.code,
+                                                        'ten': worker.name,
+                                                        'bo_phan':
+                                                            worker.department,
+                                                        'uom': worker.uom,
+                                                        'date': _rangeFrom,
+                                                        'date_from': _rangeFrom,
+                                                        'date_to': _rangeTo,
+                                                        'shift_id':
+                                                            _historyShiftId,
+                                                        'work_context_id':
+                                                            worker
+                                                                .workId
+                                                                .isNotEmpty
+                                                            ? worker.workId
+                                                            : (_selectedTeamId ==
+                                                                      'ALL'
+                                                                  ? null
+                                                                  : _selectedTeamId),
+                                                      },
+                                                    );
+                                                  },
                                             borderRadius: BorderRadius.circular(
                                               12,
                                             ),
@@ -1445,34 +1682,37 @@ class _S06SupervisorOverviewScreenState
                                                         ),
                                                       ),
                                                       const SizedBox(width: 8),
-                                                      StatusChip(
-                                                        status: status,
-                                                        label: statusLabel,
+                                                      Wrap(
+                                                        alignment:
+                                                            WrapAlignment.end,
+                                                        spacing: 6,
+                                                        runSpacing: 6,
+                                                        children: [
+                                                          StatusChip(
+                                                            status:
+                                                                progressStatus,
+                                                            label:
+                                                                progressLabel,
+                                                          ),
+                                                          if (syncBadge != null)
+                                                            StatusChip(
+                                                              status:
+                                                                  syncBadge.$1,
+                                                              label:
+                                                                  syncBadge.$2,
+                                                            ),
+                                                        ],
                                                       ),
                                                     ],
                                                   ),
                                                   const SizedBox(height: 12),
 
                                                   // Progress bar
-                                                  ClipRRect(
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                          8,
-                                                        ),
-                                                    child: LinearProgressIndicator(
-                                                      value:
-                                                          worker.completionRate,
-                                                      minHeight: 7,
-                                                      backgroundColor:
-                                                          CaslaColors.muted100,
-                                                      valueColor:
-                                                          const AlwaysStoppedAnimation<
-                                                            Color
-                                                          >(
-                                                            CaslaColors
-                                                                .accentGold,
-                                                          ),
-                                                    ),
+                                                  _WorkerProgressBar(
+                                                    completed:
+                                                        progressShares.$1,
+                                                    defect: progressShares.$2,
+                                                    color: progressBar.$2,
                                                   ),
                                                   const SizedBox(height: 10),
 
@@ -1484,15 +1724,38 @@ class _S06SupervisorOverviewScreenState
                                                     children: [
                                                       _buildStatItem(
                                                         'Giao',
-                                                        '${formatQuantity(worker.assignedQty)} ${worker.uom}',
+                                                        formatQuantity(
+                                                          worker.assignedQty,
+                                                          uom: worker.uom,
+                                                        ),
+                                                      ),
+                                                      _buildStatItem(
+                                                        'Thu hồi',
+                                                        formatQuantity(
+                                                          worker.recalledQty,
+                                                          uom: worker.uom,
+                                                        ),
                                                       ),
                                                       _buildStatItem(
                                                         'H.thành',
-                                                        '${formatQuantity(worker.completedQty)} ${worker.uom}',
+                                                        formatQuantity(
+                                                          worker.completedQty,
+                                                          uom: worker.uom,
+                                                        ),
+                                                      ),
+                                                      _buildStatItem(
+                                                        'Phế',
+                                                        formatQuantity(
+                                                          worker.defectQty,
+                                                          uom: worker.uom,
+                                                        ),
                                                       ),
                                                       _buildStatItem(
                                                         'Còn lại',
-                                                        '${formatQuantity(worker.remainingQty)} ${worker.uom}',
+                                                        formatQuantity(
+                                                          worker.remainingQty,
+                                                          uom: worker.uom,
+                                                        ),
                                                       ),
                                                     ],
                                                   ),
@@ -1620,7 +1883,8 @@ class _S06SupervisorOverviewScreenState
   }
 
   Future<void> _showOverviewFiltersSheet() async {
-    final session = ref.read(appStateProvider).currentSession;
+    final appState = ref.read(appStateProvider);
+    final session = appState.currentSession;
     final teams = await _loadTeamFilterOptions();
     List<SapShift> shifts;
     try {
@@ -1710,6 +1974,11 @@ class _S06SupervisorOverviewScreenState
               : teams.any((team) => team.id == draftTeamId)
               ? draftTeamId
               : 'ALL';
+          final selectedShiftValue =
+              draftShiftId == null ||
+                  shifts.any((shift) => shift.shiftId == draftShiftId)
+              ? (draftShiftId ?? 'ALL')
+              : 'ALL';
 
           return SafeArea(
             top: false,
@@ -1727,249 +1996,287 @@ class _S06SupervisorOverviewScreenState
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
                   child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Center(
-                      child: Container(
-                        width: 34,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: CaslaColors.line,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        const Expanded(
-                          child: Text(
-                            'Lọc dữ liệu',
-                            style: TextStyle(
-                              color: CaslaColors.primaryNavy,
-                              fontSize: 20,
-                              fontWeight: FontWeight.w800,
-                            ),
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Center(
+                        child: Container(
+                          width: 34,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: CaslaColors.line,
+                            borderRadius: BorderRadius.circular(4),
                           ),
                         ),
-                        IconButton(
-                          tooltip: 'Đóng bộ lọc',
-                          onPressed: () => Navigator.pop(sheetContext),
-                          icon: const Icon(Icons.close),
-                        ),
-                      ],
-                    ),
-                    const Text(
-                      'Chỉ thay đổi dữ liệu tra cứu. Không đổi ca đang làm của bạn.',
-                      style: TextStyle(
-                        color: CaslaColors.muted,
-                        fontSize: 12.5,
-                        height: 1.4,
                       ),
-                    ),
-                    const SizedBox(height: 18),
-                    const Text(
-                      'Thời gian',
-                      style: TextStyle(fontWeight: FontWeight.w800),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        _buildDraftPeriodButton(
-                          label: 'Hôm nay',
-                          selected:
-                              draftRange == HistoryRange.day &&
-                              _dateOnly(draftSelectedDate) ==
-                                  _dateOnly(DateTime.now()),
-                          onTap: () => setModalState(() {
-                            draftRange = HistoryRange.day;
-                            draftSelectedDate = _dateOnly(DateTime.now());
-                          }),
-                        ),
-                        const SizedBox(width: 6),
-                        _buildDraftPeriodButton(
-                          label: 'Tuần này',
-                          selected: draftRange == HistoryRange.week,
-                          onTap: () => setModalState(
-                            () => draftRange = HistoryRange.week,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        _buildDraftPeriodButton(
-                          label: 'Tháng này',
-                          selected: draftRange == HistoryRange.month,
-                          onTap: () => setModalState(
-                            () => draftRange = HistoryRange.month,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    OutlinedButton.icon(
-                      style: OutlinedButton.styleFrom(
-                        minimumSize: const Size.fromHeight(48),
-                        alignment: Alignment.centerLeft,
-                        side: const BorderSide(color: CaslaColors.line),
-                        foregroundColor: CaslaColors.primaryNavy,
-                      ),
-                      onPressed: () => pickDraftRange(setModalState),
-                      icon: const Icon(Icons.date_range_outlined, size: 18),
-                      label: Text(
-                        customLabel,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton.icon(
-                        onPressed: () async {
-                          final today = _dateOnly(DateTime.now());
-                          final picked = await showDatePicker(
-                            context: context,
-                            initialDate: draftSelectedDate,
-                            firstDate: DateTime(today.year - 2, 1, 1),
-                            lastDate: today,
-                            helpText: 'CHỌN NGÀY',
-                            cancelText: 'HỦY',
-                            confirmText: 'CHỌN',
-                          );
-                          if (picked == null) return;
-                          setModalState(() {
-                            draftRange = HistoryRange.day;
-                            draftSelectedDate = _dateOnly(picked);
-                          });
-                        },
-                        icon: const Icon(Icons.event_outlined, size: 17),
-                        label: const Text('Chọn một ngày khác, ví dụ Hôm qua'),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    DropdownButtonFormField<String>(
-                      initialValue: selectedTeamValue,
-                      isExpanded: true,
-                      decoration: const InputDecoration(
-                        labelText: 'Tổ sản xuất',
-                        prefixIcon: Icon(Icons.groups_outlined),
-                      ),
-                      items: [
-                        DropdownMenuItem(
-                          value: 'ALL',
-                          child: Text(_allTeamsLabel(session)),
-                        ),
-                        for (final team in teams)
-                          DropdownMenuItem(
-                            value: team.id,
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          const Expanded(
                             child: Text(
-                              team.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+                              'Lọc dữ liệu',
+                              style: TextStyle(
+                                color: CaslaColors.primaryNavy,
+                                fontSize: 20,
+                                fontWeight: FontWeight.w800,
+                              ),
                             ),
                           ),
-                      ],
-                      onChanged: (value) {
-                        if (value == null) return;
-                        setModalState(() {
-                          draftTeamId = value;
-                          if (value == 'ALL') {
-                            draftTeamLabel = _allTeamsLabel(session);
-                            draftTeamScopeIds = null;
-                          } else {
-                            final team = teams.firstWhere(
-                              (item) => item.id == value,
-                            );
-                            draftTeamLabel = team.name;
-                            draftTeamScopeIds = team.scopeIds;
-                          }
-                        });
-                      },
-                    ),
-                    const SizedBox(height: 12),
-                    DropdownButtonFormField<String>(
-                      initialValue: draftShiftId ?? 'ALL',
-                      isExpanded: true,
-                      decoration: const InputDecoration(
-                        labelText: 'Ca tra cứu',
-                        prefixIcon: Icon(Icons.schedule_outlined),
+                          IconButton(
+                            tooltip: 'Đóng bộ lọc',
+                            onPressed: () => Navigator.pop(sheetContext),
+                            icon: const Icon(Icons.close),
+                          ),
+                        ],
                       ),
-                      items: [
-                        const DropdownMenuItem(
-                          value: 'ALL',
-                          child: Text('Tất cả ca'),
+                      const Text(
+                        'Chỉ thay đổi dữ liệu tra cứu. Không đổi ca đang làm của bạn.',
+                        style: TextStyle(
+                          color: CaslaColors.muted,
+                          fontSize: 12.5,
+                          height: 1.4,
                         ),
-                        for (final shift in shifts)
-                          DropdownMenuItem(
-                            value: shift.shiftId,
-                            child: Text(
-                              '${shift.shiftName.isEmpty ? shift.shiftId : shift.shiftName} · ${shift.timeLabel}',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                      ],
-                      onChanged: (value) {
-                        if (value == null) return;
-                        setModalState(() {
-                          draftShiftId = value == 'ALL' ? null : value;
-                          final shift = shifts
-                              .where((item) => item.shiftId == value)
-                              .firstOrNull;
-                          draftShiftLabel = shift == null
-                              ? 'Tất cả ca'
-                              : (shift.shiftName.isEmpty
-                                    ? shift.shiftId
-                                    : shift.shiftName);
-                        });
-                      },
-                    ),
-                    const SizedBox(height: 18),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: () => setModalState(() {
-                              draftTeamId = 'ALL';
-                              draftTeamLabel = _allTeamsLabel(session);
-                              draftTeamScopeIds = null;
-                              draftShiftId = null;
-                              draftShiftLabel = 'Tất cả ca';
+                      ),
+                      const SizedBox(height: 18),
+                      const Text(
+                        'Thời gian',
+                        style: TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          _buildDraftPeriodButton(
+                            label: 'Hôm nay',
+                            selected:
+                                draftRange == HistoryRange.day &&
+                                _dateOnly(draftSelectedDate) ==
+                                    _dateOnly(DateTime.now()),
+                            onTap: () => setModalState(() {
                               draftRange = HistoryRange.day;
                               draftSelectedDate = _dateOnly(DateTime.now());
-                              draftDateFrom = null;
-                              draftDateTo = null;
                             }),
-                            child: const Text('Đặt lại'),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          flex: 2,
-                          child: FilledButton(
-                            style: FilledButton.styleFrom(
-                              backgroundColor: CaslaColors.primaryNavy,
-                              minimumSize: const Size.fromHeight(48),
+                          const SizedBox(width: 6),
+                          _buildDraftPeriodButton(
+                            label: 'Tuần này',
+                            selected: draftRange == HistoryRange.week,
+                            onTap: () => setModalState(
+                              () => draftRange = HistoryRange.week,
                             ),
-                            onPressed: () {
-                              setState(() {
-                                _selectedTeamId = draftTeamId;
-                                _selectedTeamLabel = draftTeamLabel;
-                                _selectedTeamScopeIds = draftTeamScopeIds;
-                                _historyShiftId = draftShiftId;
-                                _historyShiftLabel = draftShiftLabel;
-                                _historyRange = draftRange;
-                                _selectedDate = draftSelectedDate;
-                                _customDateFrom = draftDateFrom;
-                                _customDateTo = draftDateTo;
-                                _replaceHistoryStream();
-                              });
-                              Navigator.pop(sheetContext);
-                            },
-                            child: const Text('Áp dụng bộ lọc'),
+                          ),
+                          const SizedBox(width: 6),
+                          _buildDraftPeriodButton(
+                            label: 'Tháng này',
+                            selected: draftRange == HistoryRange.month,
+                            onTap: () => setModalState(
+                              () => draftRange = HistoryRange.month,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size.fromHeight(48),
+                          alignment: Alignment.centerLeft,
+                          side: const BorderSide(color: CaslaColors.line),
+                          foregroundColor: CaslaColors.primaryNavy,
+                        ),
+                        onPressed: () => pickDraftRange(setModalState),
+                        icon: const Icon(Icons.date_range_outlined, size: 18),
+                        label: Text(
+                          customLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          onPressed: () async {
+                            final today = _dateOnly(DateTime.now());
+                            final picked = await showDatePicker(
+                              context: context,
+                              initialDate: draftSelectedDate,
+                              firstDate: DateTime(today.year - 2, 1, 1),
+                              lastDate: today,
+                              helpText: 'CHỌN NGÀY',
+                              cancelText: 'HỦY',
+                              confirmText: 'CHỌN',
+                            );
+                            if (picked == null) return;
+                            setModalState(() {
+                              draftRange = HistoryRange.day;
+                              draftSelectedDate = _dateOnly(picked);
+                            });
+                          },
+                          icon: const Icon(Icons.event_outlined, size: 17),
+                          label: const Text(
+                            'Chọn một ngày khác, ví dụ Hôm qua',
                           ),
                         ),
-                      ],
-                    ),
-                  ],
+                      ),
+                      const SizedBox(height: 8),
+                      DropdownButtonFormField<String>(
+                        initialValue: selectedTeamValue,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Bộ phận',
+                          prefixIcon: Icon(Icons.groups_outlined),
+                        ),
+                        items: [
+                          DropdownMenuItem(
+                            value: 'ALL',
+                            child: Text(_allTeamsLabel(session)),
+                          ),
+                          for (final team in teams)
+                            DropdownMenuItem(
+                              value: team.id,
+                              child: Text(
+                                team.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                        ],
+                        onChanged: (value) {
+                          if (value == null) return;
+                          setModalState(() {
+                            draftTeamId = value;
+                            if (value == 'ALL') {
+                              draftTeamLabel = _allTeamsLabel(session);
+                              draftTeamScopeIds = null;
+                            } else {
+                              final team = teams.firstWhere(
+                                (item) => item.id == value,
+                              );
+                              draftTeamLabel = team.name;
+                              draftTeamScopeIds = team.scopeIds;
+                            }
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<String>(
+                        initialValue: selectedShiftValue,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Ca tra cứu',
+                          prefixIcon: Icon(Icons.schedule_outlined),
+                        ),
+                        items: [
+                          const DropdownMenuItem(
+                            value: 'ALL',
+                            child: Text('Tất cả ca'),
+                          ),
+                          for (final shift in shifts)
+                            DropdownMenuItem(
+                              value: shift.shiftId,
+                              child: Text(
+                                '${shift.shiftName.isEmpty ? shift.shiftId : shift.shiftName} · ${shift.timeLabel}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                        ],
+                        onChanged: (value) {
+                          if (value == null) return;
+                          setModalState(() {
+                            draftShiftId = value == 'ALL' ? null : value;
+                            final shift = shifts
+                                .where((item) => item.shiftId == value)
+                                .firstOrNull;
+                            draftShiftLabel = shift == null
+                                ? 'Tất cả ca'
+                                : (shift.shiftName.isEmpty
+                                      ? shift.shiftId
+                                      : shift.shiftName);
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 18),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => setModalState(() {
+                                final activeWork = appState.activeWorkContext;
+                                final activeWorkId =
+                                    activeWork?.workId.trim() ?? '';
+                                draftTeamId = activeWorkId.isEmpty
+                                    ? 'ALL'
+                                    : activeWorkId;
+                                draftTeamLabel = activeWorkId.isEmpty
+                                    ? _allTeamsLabel(session)
+                                    : (activeWork!.workName.trim().isNotEmpty
+                                          ? activeWork.workName.trim()
+                                          : activeWorkId);
+                                draftTeamScopeIds = activeWorkId.isEmpty
+                                    ? null
+                                    : {activeWorkId};
+                                draftShiftId = appState.activeShift?.shiftId;
+                                draftShiftLabel = _shiftFilterLabel(
+                                  appState.activeShift,
+                                );
+                                draftRange = HistoryRange.day;
+                                draftSelectedDate = _dateOnly(
+                                  appState.activeBusinessDate,
+                                );
+                                draftDateFrom = null;
+                                draftDateTo = null;
+                              }),
+                              child: const Text('Đặt lại'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            flex: 2,
+                            child: FilledButton(
+                              style: FilledButton.styleFrom(
+                                backgroundColor: CaslaColors.primaryNavy,
+                                minimumSize: const Size.fromHeight(48),
+                              ),
+                              onPressed: () {
+                                final appliedTeamId =
+                                    draftTeamId == 'ALL' ||
+                                        teams.any(
+                                          (team) => team.id == draftTeamId,
+                                        )
+                                    ? draftTeamId
+                                    : 'ALL';
+                                final appliedShiftId =
+                                    draftShiftId == null ||
+                                        shifts.any(
+                                          (shift) =>
+                                              shift.shiftId == draftShiftId,
+                                        )
+                                    ? draftShiftId
+                                    : null;
+                                setState(() {
+                                  _selectedTeamId = appliedTeamId;
+                                  _selectedTeamLabel = appliedTeamId == 'ALL'
+                                      ? _allTeamsLabel(session)
+                                      : draftTeamLabel;
+                                  _selectedTeamScopeIds = appliedTeamId == 'ALL'
+                                      ? null
+                                      : draftTeamScopeIds;
+                                  _historyShiftId = appliedShiftId;
+                                  _historyShiftLabel = appliedShiftId == null
+                                      ? 'Tất cả ca'
+                                      : draftShiftLabel;
+                                  _historyRange = draftRange;
+                                  _selectedDate = draftSelectedDate;
+                                  _customDateFrom = draftDateFrom;
+                                  _customDateTo = draftDateTo;
+                                  _replaceHistoryStream();
+                                });
+                                Navigator.pop(sheetContext);
+                              },
+                              child: const Text('Áp dụng bộ lọc'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -2023,7 +2330,6 @@ class _S06SupervisorOverviewScreenState
     required double totalCompleted,
     required int assignedWorkerCount,
     required int openCount,
-    required String? uom,
   }) {
     Widget metric(String label, String value) {
       return Expanded(
@@ -2056,20 +2362,6 @@ class _S06SupervisorOverviewScreenState
                     ),
                   ),
                 ),
-                if (uom != null) ...[
-                  const SizedBox(width: 3),
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 2),
-                    child: Text(
-                      uom,
-                      style: const TextStyle(
-                        color: CaslaColors.muted,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ],
               ],
             ),
           ],
@@ -2216,16 +2508,35 @@ class _S06SupervisorOverviewScreenState
     );
   }
 
-  /// Derives the worker's sync badge from their assignments' real sync state.
-  ///
-  /// Returns (chip status, chip label). The failed count leads, because that is
-  /// what a supervisor has to act on.
-  (String, String) _workerStatusBadge(_WorkerOverviewData worker) {
+  (String, String) _workerProgressBadge(_WorkerOverviewData worker) {
+    if (worker.assignedQty == 0) return ('OPEN', 'CHƯA GIAO');
+    if (!hasRemainingQuantity(worker.remainingQty, uom: worker.uom)) {
+      // Nothing left, yet nothing was finished: all of it came back.
+      if (worker.completedQty <= 0 && worker.recalledQty > 0) {
+        return ('RECALLED', 'THU HỒI HOÀN TOÀN');
+      }
+      return ('COMPLETED', 'HOÀN THÀNH');
+    }
+    return ('PENDING', 'ĐANG THỰC HIỆN');
+  }
+
+  /// Bar value and colour matching the badge: a closed-out worker reads
+  /// full — green when finished, red when everything was recalled.
+  (double, Color) _workerProgressBar(
+    String status,
+    _WorkerOverviewData worker,
+  ) => switch (status) {
+    'COMPLETED' => (1.0, CaslaColors.success),
+    'RECALLED' => (1.0, CaslaColors.danger),
+    _ => (worker.completionRate, CaslaColors.accentGold),
+  };
+
+  (String, String)? _workerSyncBadge(_WorkerOverviewData worker) {
     if (worker.localAssignments.isNotEmpty) {
       final failed = worker.localAssignments
           .where((a) => a.syncStatus == SyncStatus.failed)
           .length;
-      if (failed > 0) return ('FAILED', '$failed LỖI');
+      if (failed > 0) return ('FAILED', '$failed LỖI GỬI');
 
       final needsVerification = worker.localAssignments
           .where((a) => a.syncStatus == SyncStatus.needsVerification)
@@ -2233,41 +2544,120 @@ class _S06SupervisorOverviewScreenState
       if (needsVerification > 0) {
         return ('NEEDS_VERIFICATION', '$needsVerification CẦN XÁC MINH');
       }
-
+      final syncing = worker.localAssignments
+          .where((a) => a.syncStatus == SyncStatus.syncing)
+          .length;
+      if (syncing > 0) return ('SYNCING', '$syncing ĐANG GỬI');
       final pending = worker.localAssignments
           .where((a) => a.syncStatus == SyncStatus.pending)
           .length;
-      if (pending > 0) return ('PENDING', '$pending ĐANG CHỜ');
+      if (pending > 0) return ('PENDING', '$pending CHỜ GỬI');
     }
-
-    if (worker.assignedQty == 0) return ('OPEN', 'CHƯA GIAO');
-    if (worker.remainingQty <= 0) return ('COMPLETED', 'HOÀN THÀNH');
-    if (worker.completedQty > 0) return ('PENDING', 'ĐANG LÀM');
-    return ('OPEN', 'CHƯA LÀM');
+    return null;
   }
 
+  /// How much of the bar is good output and how much is scrap. A recalled
+  /// worker keeps the single full bar; otherwise both are measured against
+  /// what the worker is expected to finish, or against what was made once
+  /// that is more.
+  (double, double) _workerProgressShares(
+    String status,
+    _WorkerOverviewData worker,
+    double fallback,
+  ) {
+    final made = worker.completedQty + worker.defectQty;
+    final whole = status == 'COMPLETED' || made > worker.effectiveQty
+        ? made
+        : worker.effectiveQty;
+    if (status == 'RECALLED' || whole <= 0 || worker.defectQty <= 0) {
+      return (fallback, 0);
+    }
+    return (
+      (worker.completedQty / whole).clamp(0.0, 1.0),
+      (worker.defectQty / whole).clamp(0.0, 1.0),
+    );
+  }
+
+  /// One of five equal columns (Giao · Thu hồi · H.thành · Phế · Còn lại).
+  /// Sized down so a 5-digit quantity still fits a phone width.
   Widget _buildStatItem(String label, String value) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: const TextStyle(
-            fontSize: 11,
-            color: CaslaColors.muted,
-            fontWeight: FontWeight.w600,
+    return Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            maxLines: 1,
+            style: const TextStyle(
+              fontSize: 12,
+              color: CaslaColors.muted,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 2),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              value,
+              maxLines: 1,
+              style: const TextStyle(
+                fontFamily: 'Manrope',
+                fontWeight: FontWeight.w800,
+                fontSize: 17,
+                color: CaslaColors.primaryNavy,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A worker's progress: good output in [color], then scrap, on one track.
+class _WorkerProgressBar extends StatelessWidget {
+  /// Shares of the whole track, 0 to 1.
+  final double completed;
+  final double defect;
+  final Color color;
+
+  const _WorkerProgressBar({
+    required this.completed,
+    required this.defect,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // Integer flex; thousandths keep a small share of scrap visible.
+    final scrap = defect <= 0 ? 0 : (defect * 1000).ceil().clamp(1, 1000);
+    final done = (completed * 1000).round().clamp(0, 1000 - scrap);
+    final rest = 1000 - done - scrap;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: SizedBox(
+        height: 7,
+        child: ColoredBox(
+          color: CaslaColors.muted100,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (done > 0)
+                Expanded(
+                  flex: done,
+                  child: ColoredBox(color: color),
+                ),
+              if (scrap > 0)
+                Expanded(
+                  flex: scrap,
+                  child: const ColoredBox(color: CaslaColors.scrap),
+                ),
+              if (rest > 0) Spacer(flex: rest),
+            ],
           ),
         ),
-        Text(
-          value,
-          style: const TextStyle(
-            fontFamily: 'Manrope',
-            fontWeight: FontWeight.w800,
-            fontSize: 15,
-            color: CaslaColors.primaryNavy,
-          ),
-        ),
-      ],
+      ),
     );
   }
 }

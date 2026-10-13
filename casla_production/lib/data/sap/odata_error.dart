@@ -44,10 +44,56 @@ String? odataErrorMessage(DioException error) {
   if (errorNode is! Map) return null;
 
   final message = errorNode['message'];
-  if (message is String && message.trim().isNotEmpty) return message.trim();
+  String? raw;
+  if (message is String && message.trim().isNotEmpty) raw = message.trim();
   if (message is Map) {
     final value = message['value'];
-    if (value is String && value.trim().isNotEmpty) return value.trim();
+    if (value is String && value.trim().isNotEmpty) raw = value.trim();
+  }
+  // RAP can put the actionable `%msg` in `details`/`innererror` while the
+  // top-level message remains the generic `SABP_BEHV/100` text. Recover the
+  // stable machine code from nested reported/failed entries as well.
+  final nestedCode = _findNestedBusinessCode(errorNode);
+  if (nestedCode != null) return nestedCode;
+  if (raw == null) return null;
+
+  // SAP business codes are returned as the complete message. Do not extract
+  // an uppercase suffix: ordinary text often ends with words such as `SAP`
+  // or field names such as `WorkerID`.
+  return raw;
+}
+
+String? _findNestedBusinessCode(Map<dynamic, dynamic> errorNode) {
+  Object? walk(Object? value, {bool root = false}) {
+    if (value is Map) {
+      for (final entry in value.entries) {
+        final key = entry.key?.toString().toLowerCase() ?? '';
+        final child = entry.value;
+        if (!root && (key == 'code' || key == 'message' || key == '%msg')) {
+          final text = child is Map ? child['value'] : child;
+          if (text is String &&
+              RegExp(r'^[A-Z][A-Z0-9_]{2,80}$').hasMatch(text.trim())) {
+            return text.trim();
+          }
+        }
+        final found = walk(child);
+        if (found is String) return found;
+      }
+    } else if (value is Iterable) {
+      for (final child in value) {
+        final found = walk(child);
+        if (found is String) return found;
+      }
+    }
+    return null;
+  }
+
+  // Skip the top-level `error.code` (usually `SABP_BEHV/100`) and inspect its
+  // reported/failed details for the business code.
+  for (final entry in errorNode.entries) {
+    if (entry.key?.toString().toLowerCase() == 'code') continue;
+    final found = walk(entry.value);
+    if (found is String) return found;
   }
   return null;
 }
@@ -124,8 +170,9 @@ class SapBusinessError implements Exception {
   final String code;
 
   final int? httpStatus;
+  final String? message;
 
-  const SapBusinessError(this.code, {this.httpStatus});
+  const SapBusinessError(this.code, {this.httpStatus, this.message});
 
   @override
   String toString() => 'SapBusinessError($code, http $httpStatus)';
@@ -150,8 +197,16 @@ Never rethrowAsBusinessError(DioException error) {
       httpStatus: error.response?.statusCode,
     );
   }
-  if (code != null) {
+  if (code != null && RegExp(r'^[A-Z][A-Z0-9_]{2,80}$').hasMatch(code)) {
     throw SapBusinessError(code, httpStatus: error.response?.statusCode);
+  }
+  if (code != null) {
+    throw SapBusinessError(
+      _odataErrorCode(error) ??
+          'SAP_HTTP_${error.response?.statusCode ?? 'ERROR'}',
+      httpStatus: error.response?.statusCode,
+      message: code,
+    );
   }
   throw error;
 }

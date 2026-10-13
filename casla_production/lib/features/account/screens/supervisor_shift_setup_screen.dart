@@ -14,7 +14,14 @@ const _skipSupervisorSetupExtra = 'skip-supervisor-setup';
 class SupervisorShiftSetupScreen extends ConsumerStatefulWidget {
   final bool returnToPrevious;
 
-  const SupervisorShiftSetupScreen({super.key, this.returnToPrevious = false});
+  /// Where the operator was headed when the router sent them here.
+  final String? next;
+
+  const SupervisorShiftSetupScreen({
+    super.key,
+    this.returnToPrevious = false,
+    this.next,
+  });
 
   @override
   ConsumerState<SupervisorShiftSetupScreen> createState() =>
@@ -23,12 +30,14 @@ class SupervisorShiftSetupScreen extends ConsumerStatefulWidget {
 
 class _SupervisorShiftSetupScreenState
     extends ConsumerState<SupervisorShiftSetupScreen> {
-  String? _selectedPlant;
+  /// Selected Xưởng (SAP Work Center). Shifts are configured per Work Center.
+  String? _selectedWorkCenter;
   UserWorkContext? _work;
   SapShift? _shift;
   DateTime _date = DateTime.now();
   List<SapShift> _shifts = const [];
   bool _loading = true;
+  bool _initializing = true;
   bool _saving = false;
   String? _error;
   int _loadGeneration = 0;
@@ -36,26 +45,45 @@ class _SupervisorShiftSetupScreenState
   @override
   void initState() {
     super.initState();
+    _initialize();
+  }
+
+  Future<void> _initialize() async {
     final appState = ref.read(appStateProvider);
-    final session = appState.currentSession;
-    final contexts = session?.workContexts ?? const <UserWorkContext>[];
+    var session = appState.currentSession;
+    var contexts = session?.workContexts ?? const <UserWorkContext>[];
+    if (session != null &&
+        session.refreshToken.trim().isNotEmpty &&
+        (contexts.isEmpty ||
+            contexts.any((context) => context.workCenter.trim().isEmpty))) {
+      await appState.refreshWorkContexts();
+      if (!mounted) return;
+      session = appState.currentSession;
+      contexts = session?.workContexts ?? const <UserWorkContext>[];
+    }
+    if (!mounted) return;
     final savedWorkId = appState.activeWorkContext?.workId;
     _work =
         _findWorkContext(contexts, savedWorkId) ??
-        (contexts.isEmpty ? null : contexts.first);
-    _selectedPlant = _work?.plant;
+        contexts
+            .where((context) => context.workCenter.trim().isNotEmpty)
+            .firstOrNull;
+    _selectedWorkCenter = _work?.workCenter.trim();
     _date = appState.activeBusinessDate;
     _shift = appState.activeShift;
-    _loadShifts();
+    setState(() => _initializing = false);
+    await _loadShifts();
   }
 
   Future<void> _loadShifts() async {
     final requestGeneration = ++_loadGeneration;
-    final work = _work;
-    if (work == null) {
+    final workCenter = _selectedWorkCenter;
+    if (workCenter == null || workCenter.isEmpty) {
       setState(() {
         _loading = false;
-        _error = 'Tài khoản chưa được cấp vị trí làm việc trên SAP.';
+        _shifts = const [];
+        _shift = null;
+        _error = 'Tài khoản chưa được cấp Xưởng làm việc trên SAP.';
       });
       return;
     }
@@ -67,7 +95,7 @@ class _SupervisorShiftSetupScreenState
       final shifts = await ref
           .read(appStateProvider)
           .shiftController
-          .getShifts(plant: work.plant, onDate: _date);
+          .getShifts(workCenter: workCenter, onDate: _date);
       if (!mounted || requestGeneration != _loadGeneration) return;
       setState(() {
         _shifts = shifts;
@@ -98,46 +126,53 @@ class _SupervisorShiftSetupScreenState
     return null;
   }
 
-  List<String> _plants(List<UserWorkContext> contexts) {
-    final plants = contexts
-        .map((context) => context.plant.trim())
-        .where((plant) => plant.isNotEmpty)
+  List<String> _workCenters(List<UserWorkContext> contexts) {
+    final workCenters = contexts
+        .map((context) => context.workCenter.trim())
+        .where((workCenter) => workCenter.isNotEmpty)
         .toSet()
         .toList();
-    plants.sort();
-    return plants;
+    workCenters.sort();
+    return workCenters;
   }
 
-  List<UserWorkContext> _workCentersFor(
+  String _workCenterLabel(String workCenter, List<UserWorkContext> contexts) {
+    final name = contexts
+        .where((context) => context.workCenter.trim() == workCenter)
+        .map((context) => context.workCenterDisplayName)
+        .firstWhere((value) => value.isNotEmpty, orElse: () => '');
+    return name.isEmpty ? workCenter : '$workCenter ($name)';
+  }
+
+  List<UserWorkContext> _departmentsFor(
     List<UserWorkContext> contexts,
-    String? plant,
-  ) => plant == null
+    String? workCenter,
+  ) => workCenter == null
       ? const []
       : contexts
-            .where((context) => context.plant == plant)
+            .where((context) => context.workCenter.trim() == workCenter)
             .toList(growable: false);
 
-  void _selectPlant(String? plant) {
-    if (plant == null || plant == _selectedPlant) return;
-    // Invalidates an in-flight request for the previous plant immediately.
-    _loadGeneration++;
+  void _selectWorkCenter(String? workCenter) {
+    if (workCenter == null || workCenter == _selectedWorkCenter) return;
+    final departments = _departmentsFor(
+      ref.read(appStateProvider).currentSession?.workContexts ?? const [],
+      workCenter,
+    );
     setState(() {
-      _selectedPlant = plant;
-      _work = null;
+      _selectedWorkCenter = workCenter;
+      // A Xưởng with a single Bộ phận needs no second pick.
+      _work = departments.length == 1 ? departments.single : null;
       _shift = null;
       _shifts = const [];
-      _loading = false;
-      _error = null;
-    });
-  }
-
-  void _selectWorkCenter(UserWorkContext? work) {
-    if (work == null) return;
-    setState(() {
-      _work = work;
-      _shift = null;
     });
     _loadShifts();
+  }
+
+  // Bộ phận of the same Xưởng share its shifts: keep the list and the choice.
+  void _selectDepartment(UserWorkContext? work) {
+    if (work == null) return;
+    setState(() => _work = work);
   }
 
   Future<void> _pickDate() async {
@@ -192,16 +227,17 @@ class _SupervisorShiftSetupScreenState
       context.pop();
       return;
     }
-    context.go(
-      '/supervisor',
-      extra: allowIncompleteSetup ? _skipSupervisorSetupExtra : null,
-    );
+    if (allowIncompleteSetup) {
+      context.go('/supervisor', extra: _skipSupervisorSetupExtra);
+      return;
+    }
+    context.go(widget.next ?? '/supervisor');
   }
 
   @override
   Widget build(BuildContext context) {
     final contexts =
-        ref.read(appStateProvider).currentSession?.workContexts ??
+        ref.watch(appStateProvider).currentSession?.workContexts ??
         const <UserWorkContext>[];
     final currentWork = _findWorkContext(contexts, _work?.workId);
     if (_work != null && currentWork == null) {
@@ -209,10 +245,10 @@ class _SupervisorShiftSetupScreenState
       _shift = null;
     } else if (currentWork != null && !identical(currentWork, _work)) {
       _work = currentWork;
-      _selectedPlant = currentWork.plant;
+      _selectedWorkCenter ??= currentWork.workCenter.trim();
     }
-    final plants = _plants(contexts);
-    final workCenters = _workCentersFor(contexts, _selectedPlant);
+    final workCenters = _workCenters(contexts);
+    final departments = _departmentsFor(contexts, _selectedWorkCenter);
     return Scaffold(
       backgroundColor: CaslaColors.background,
       appBar: AppBar(
@@ -252,45 +288,47 @@ class _SupervisorShiftSetupScreenState
               const _SetupSection(
                 number: '01',
                 title: 'Nơi làm việc',
-                subtitle: 'Work Center được lọc theo nhà máy đã chọn.',
+                subtitle: 'Bộ phận được lọc theo Xưởng đã chọn.',
               ),
               const SizedBox(height: 16),
               DropdownButtonFormField<String>(
-                initialValue: _selectedPlant,
+                initialValue: _selectedWorkCenter,
                 isExpanded: true,
-                decoration: const InputDecoration(labelText: 'Nhà máy'),
+                isDense: false,
+                itemHeight: null,
+                decoration: const InputDecoration(labelText: 'Xưởng'),
                 items: [
-                  for (final plant in plants)
-                    DropdownMenuItem(value: plant, child: Text(plant)),
+                  for (final workCenter in workCenters)
+                    DropdownMenuItem(
+                      value: workCenter,
+                      child: Text(_workCenterLabel(workCenter, contexts)),
+                    ),
                 ],
-                onChanged: _saving ? null : _selectPlant,
+                onChanged: _initializing || _saving ? null : _selectWorkCenter,
               ),
               const SizedBox(height: 16),
               DropdownButtonFormField<UserWorkContext>(
                 initialValue: _work,
                 isExpanded: true,
+                isDense: false,
+                itemHeight: null,
                 decoration: InputDecoration(
-                  labelText: 'Work Center',
-                  helperText: _selectedPlant == null
-                      ? 'Chọn Nhà máy trước.'
-                      : 'Chỉ hiển thị Work Center thuộc Nhà máy đã chọn.',
+                  labelText: 'Bộ phận',
+                  helperText: _selectedWorkCenter == null
+                      ? 'Chọn Xưởng trước.'
+                      : 'Chỉ hiển thị Bộ phận thuộc Xưởng đã chọn.',
                 ),
                 items: [
-                  for (final item in workCenters)
+                  for (final item in departments)
                     DropdownMenuItem(
                       value: item,
-                      child: Text(
-                        item.workName.isEmpty
-                            ? item.workCenter
-                            : '${item.workCenter} · ${item.workName}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                      child: Text(item.departmentLabel),
                     ),
                 ],
-                onChanged: _saving || _selectedPlant == null
+                onChanged:
+                    _initializing || _saving || _selectedWorkCenter == null
                     ? null
-                    : _selectWorkCenter,
+                    : _selectDepartment,
               ),
               const SizedBox(height: 16),
               const _SetupSection(
@@ -300,7 +338,7 @@ class _SupervisorShiftSetupScreenState
               ),
               const SizedBox(height: 16),
               InkWell(
-                onTap: _saving ? null : _pickDate,
+                onTap: _initializing || _saving ? null : _pickDate,
                 borderRadius: BorderRadius.circular(8),
                 child: InputDecorator(
                   decoration: const InputDecoration(labelText: 'Ngày làm việc'),
@@ -332,7 +370,7 @@ class _SupervisorShiftSetupScreenState
                 ),
               ] else if (_shifts.isEmpty)
                 const Text(
-                  'Chưa có ca phù hợp. Hãy chọn Work Center và kiểm tra ngày làm việc.',
+                  'Chưa có ca phù hợp. Hãy kiểm tra Xưởng và ngày làm việc.',
                   style: TextStyle(color: CaslaColors.muted),
                 )
               else
@@ -360,7 +398,11 @@ class _SupervisorShiftSetupScreenState
                 width: double.infinity,
                 child: ElevatedButton(
                   onPressed:
-                      _shift == null || _loading || _saving || _error != null
+                      _work == null ||
+                          _shift == null ||
+                          _loading ||
+                          _saving ||
+                          _error != null
                       ? null
                       : _continue,
                   child: _saving

@@ -14,12 +14,16 @@ class VerifiedSyncReport {
   final int syncedCount;
   final int totalCount;
   final String message;
+  final String? failedQueueItemId;
+  final String? failureCode;
 
   const VerifiedSyncReport({
     required this.outcome,
     required this.syncedCount,
     required this.totalCount,
     required this.message,
+    this.failedQueueItemId,
+    this.failureCode,
   });
 }
 
@@ -216,6 +220,8 @@ class VerifiedSyncCoordinator {
           syncedCount: synced,
           totalCount: items.length,
           message: failure.message,
+          failedQueueItemId: item['id'] as String,
+          failureCode: failure.code,
         );
       }
 

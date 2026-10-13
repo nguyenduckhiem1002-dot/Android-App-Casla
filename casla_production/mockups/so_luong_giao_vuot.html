@@ -1,0 +1,491 @@
+<title>Số lượng vượt còn lại</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=Inter:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: review canvas — live PDA prototype of Tạo phân công and Xác nhận sản lượng on the left, switched above the device; on the right the change, quick cases, a before/after of the quantity block and the points to settle. Stacks on phones. */
+:root {
+  --pg-bg: #ECEEF3; --pg-card: #FFFFFF; --pg-fg: #16234A; --pg-muted: #596274; --pg-line: #D8DCE5;
+  --pg-accent: #7A5A18; --pg-accent-bg: #F6EAD2; --pg-chip: #E4E8F1; --bezel: #0E1730;
+
+  /* Device screen: the Casla app has a light theme only */
+  --navy: #16234A; --navy-700: #1D2E5C; --navy-900: #0E1730; --navy-100: #EDF1F5;
+  --gold: #C9A24B; --gold-100: #F6EAD2;
+  --app-bg: #F5F6F8; --surface: #FFFFFF; --line: #E7E9EE; --muted: #626A78; --id-meta: #B9C2E4;
+  --success: #2E7D32; --success-bg: #E5F2E6; --danger: #C62828; --danger-bg: #FBEAEA; --danger-line: #EBB4B4;
+  --pending: #85601A; --pending-bg: #FBF1DD; --on-navy: #FFFFFF; --scrim: rgba(14, 23, 48, .55);
+
+  --f-display: "Manrope", "Segoe UI", system-ui, sans-serif;
+  --f-body: "Inter", "Segoe UI", system-ui, sans-serif;
+  --r-sm: 8px; --r-md: 12px; --r-lg: 16px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --pg-bg: #0B1022; --pg-card: #131A31; --pg-fg: #E5E9F5; --pg-muted: #A0A9C6; --pg-line: #273153;
+    --pg-accent: #E0BE6E; --pg-accent-bg: #2A2413; --pg-chip: #1C2542; --bezel: #020409; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --pg-bg: #0B1022; --pg-card: #131A31; --pg-fg: #E5E9F5; --pg-muted: #A0A9C6; --pg-line: #273153;
+  --pg-accent: #E0BE6E; --pg-accent-bg: #2A2413; --pg-chip: #1C2542; --bezel: #020409; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--f-body); font-size: 15px; line-height: 1.5; padding-inline: 16px; }
+button { font: inherit; color: inherit; cursor: pointer; touch-action: manipulation; }
+:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+.page { max-width: 1120px; margin: 0 auto; padding-block: 28px 48px; display: grid; grid-template-columns: 404px minmax(0, 1fr); gap: 40px; align-items: start; }
+@media (max-width: 920px) { .page { grid-template-columns: minmax(0, 1fr); gap: 28px; } }
+
+/* ---------- device ---------- */
+.device-col { display: grid; justify-items: center; gap: 12px; }
+@media (min-width: 921px) and (min-height: 860px) { .device-col { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 20px); } }
+.device { width: 404px; max-width: 100%; height: 800px; padding: 12px; border-radius: 48px; background: var(--bezel); box-shadow: 0 30px 60px -30px rgba(14, 23, 48, .55); }
+.screen { position: relative; height: 100%; border-radius: 37px; overflow: hidden; background: var(--app-bg); color: var(--navy); display: flex; flex-direction: column; font-size: 14px; }
+@media (max-width: 460px) {
+  .device { padding: 0; border-radius: 22px; height: 760px; box-shadow: none; background: transparent; }
+  .screen { border-radius: 22px; border: 1px solid var(--pg-line); }
+}
+.device-caption { font-size: 13px; color: var(--pg-muted); text-align: center; max-width: 42ch; }
+.statusbar { background: var(--navy); color: var(--on-navy); display: flex; justify-content: space-between; padding: 10px 26px 4px; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.appbar { background: var(--navy); color: var(--on-navy); padding: 6px 8px 12px 16px; display: flex; align-items: center; gap: 8px; }
+.appbar .t { flex: 1; min-width: 0; }
+.appbar h1 { margin: 0; font-family: var(--f-display); font-weight: 800; font-size: 20px; line-height: 1.25; }
+.appbar .sub { font-size: 12px; color: var(--id-meta); }
+.avatar { width: 36px; height: 36px; margin: 4px; border-radius: 50%; border: 2px solid var(--gold); background: var(--navy-700); color: var(--on-navy); font-family: var(--f-display); font-weight: 800; font-size: 13px; display: grid; place-items: center; flex: none; }
+.strip { display: flex; gap: 8px; align-items: center; padding: 8px 16px; font-size: 12.5px; font-weight: 600; background: var(--success-bg); color: var(--success); }
+.strip svg { width: 16px; height: 16px; }
+.body { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 14px; }
+.field { display: grid; gap: 6px; }
+.label { font-size: 12.5px; font-weight: 700; color: var(--navy); }
+.req { color: var(--danger); }
+
+.slot { background: var(--success-bg); border: 1.2px solid var(--success); border-radius: var(--r-md); }
+.slot.tight { background: var(--pending-bg); border-color: var(--pending); }
+.slot-row { display: flex; align-items: center; padding: 8px 12px; gap: 10px; min-height: 52px; }
+.slot-row > svg { width: 22px; height: 22px; color: var(--success); }
+.slot.tight .slot-row > svg { color: var(--pending); }
+.slot-main { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.slot-main b { font-size: 14px; font-weight: 700; overflow-wrap: anywhere; }
+.slot-main small { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ops { display: grid; gap: 8px; }
+.kv { display: flex; flex-wrap: wrap; column-gap: 10px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.kv small { font-size: 12.5px; font-weight: 600; color: var(--muted); margin-right: 4px; }
+
+/* quantity */
+.qty { display: grid; gap: 6px; }
+.remain { display: flex; justify-content: space-between; gap: 8px; padding: 9px 12px; border-radius: var(--r-sm); background: var(--pending-bg); color: var(--pending); font-weight: 700; font-variant-numeric: tabular-nums; }
+.tightest { font-size: 12px; font-weight: 600; color: var(--pending); }
+.qty-input { display: flex; align-items: center; gap: 8px; border: 1.5px solid var(--line); border-radius: var(--r-sm); background: var(--surface); padding: 0 14px; min-height: 52px; }
+.qty-input:focus-within { border-color: var(--navy); }
+.qty-input.over { border-color: var(--pending); }
+.qty-input.bad { border-color: var(--danger); }
+.qty-input input { flex: 1; min-width: 0; border: 0; outline: 0; font: 800 18px var(--f-display); color: var(--navy); background: transparent; font-variant-numeric: tabular-nums; }
+.qty-input span { color: var(--muted); font-weight: 600; }
+.over-line { display: flex; gap: 6px; align-items: flex-start; font-size: 12.5px; font-weight: 600; color: var(--pending); line-height: 1.35; }
+.over-line svg { width: 15px; height: 15px; margin-top: 1px; }
+.each { font-size: 12.5px; color: var(--muted); }
+.old-box { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border-radius: var(--r-sm); background: var(--danger-bg); border: 1px solid var(--danger-line); color: var(--danger); font-size: 12.5px; font-weight: 700; line-height: 1.35; }
+.old-box svg { width: 17px; height: 17px; }
+
+.cta { background: var(--surface); border-top: 1px solid var(--line); padding: 10px 14px 16px; }
+.btn { min-height: 52px; width: 100%; border-radius: var(--r-md); border: 1.5px solid var(--gold); background: var(--gold); color: var(--navy-900); font-weight: 700; font-size: 15px; display: flex; align-items: center; justify-content: center; gap: 8px; }
+.btn.blocked { opacity: .45; }
+.snack { position: absolute; left: 14px; right: 14px; bottom: 92px; background: var(--navy-900); color: var(--on-navy); border-radius: var(--r-md); padding: 12px 14px; font-size: 13px; font-weight: 600; line-height: 1.4; box-shadow: 0 12px 24px -12px var(--scrim); }
+
+/* ---------- notes ---------- */
+.notes { display: grid; gap: 22px; min-width: 0; }
+.eyebrow { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--pg-accent); }
+.notes h2 { margin: 2px 0 8px; font-family: var(--f-display); font-weight: 800; font-size: 26px; line-height: 1.2; text-wrap: balance; }
+.notes h3 { margin: 0 0 10px; font-family: var(--f-display); font-weight: 800; font-size: 16px; }
+.lead { margin: 0; color: var(--pg-muted); max-width: 62ch; }
+.panel { background: var(--pg-card); border: 1px solid var(--pg-line); border-radius: var(--r-lg); padding: 16px 18px; }
+.cases { display: flex; flex-wrap: wrap; gap: 8px; }
+.case { border: 1px solid var(--pg-line); background: var(--pg-chip); color: var(--pg-fg); border-radius: 99px; padding: 0 14px; min-height: 40px; font-size: 13.5px; font-weight: 600; }
+.case[aria-pressed="true"] { background: var(--pg-accent-bg); border-color: var(--pg-accent); color: var(--pg-accent); }
+.hint { margin: 10px 0 0; font-size: 13px; color: var(--pg-muted); }
+.compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+@media (max-width: 620px) { .compare { grid-template-columns: minmax(0, 1fr); } }
+.cmp { display: grid; gap: 8px; align-content: start; min-width: 0; }
+.cmp-tag { font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--pg-muted); }
+.cmp-tag.new { color: var(--pg-accent); }
+/* a cut-out of the device screen, so it keeps the app's light palette */
+.cut { background: var(--app-bg); color: var(--navy); border-radius: var(--r-md); padding: 12px; display: grid; gap: 8px; font-size: 14px; }
+.cmp p { margin: 0; font-size: 13.5px; color: var(--pg-muted); }
+.list { margin: 0; padding-left: 18px; display: grid; gap: 6px; max-width: 66ch; }
+.list b { font-weight: 700; }
+</style>
+
+<style>
+/* additions for the confirmation screen and the screen switcher */
+.switch { display: inline-flex; padding: 4px; gap: 4px; border-radius: 99px; background: var(--pg-chip); border: 1px solid var(--pg-line); }
+.switch button { border: 0; background: transparent; color: var(--pg-muted); border-radius: 99px; min-height: 40px; padding: 0 18px; font-weight: 700; font-size: 14px; }
+.switch button[aria-pressed="true"] { background: var(--pg-card); color: var(--pg-fg); box-shadow: 0 1px 3px rgba(14, 23, 48, .18); }
+.view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.back { width: 40px; height: 40px; display: grid; place-items: center; margin-left: -8px; }
+.op-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px; display: flex; gap: 12px; align-items: center; }
+.op-card .main { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.op-card .main b { font-family: var(--f-display); font-size: 15px; overflow-wrap: anywhere; }
+.op-card .main small { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.op-card .now { text-align: right; font-variant-numeric: tabular-nums; }
+.op-card .now b { display: block; font-family: var(--f-display); font-size: 17px; }
+.op-card .now small { font-size: 11.5px; color: var(--muted); }
+.rows { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); padding: 4px 12px; }
+.rows div { display: flex; justify-content: space-between; gap: 8px; padding: 7px 0; font-size: 13px; font-variant-numeric: tabular-nums; }
+.rows div + div { border-top: 1px solid var(--line); }
+.rows span { color: var(--muted); }
+.rows b { font-weight: 700; }
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: var(--r-sm); background: var(--navy-100); font-size: 13px; font-weight: 700; text-align: center; }
+.seg span { padding: 8px 4px; border-radius: 6px; color: var(--muted); }
+.seg span.on { background: var(--surface); color: var(--navy); }
+.sub-label { font-size: 12px; font-weight: 600; color: var(--muted); }
+.bar { height: 8px; border-radius: 99px; background: var(--navy-100); overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--success); border-radius: 99px; }
+.bar-note { display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: .92em; overflow-wrap: anywhere; }
+.steps { margin: 0; padding-left: 20px; display: grid; gap: 8px; max-width: 68ch; }
+</style>
+
+<div class="page">
+  <div class="device-col">
+    <div class="switch" role="group" aria-label="Màn hình demo">
+      <button type="button" id="tab-assign" aria-pressed="true">Phân công</button>
+      <button type="button" id="tab-confirm" aria-pressed="false">Xác nhận</button>
+    </div>
+    <div class="device">
+      <div class="screen">
+        <div class="statusbar"><span>09:41</span><span>Ca 1 · 12/10</span></div>
+
+        <!-- ───────── Phân công ───────── -->
+        <div class="view" id="view-assign">
+          <div class="appbar">
+            <div class="t"><h1>Tạo phân công</h1><div class="sub">XM2.001 · MAY MIỆNG-XM2</div></div>
+            <div class="avatar" aria-hidden="true">HA</div>
+          </div>
+          <div class="strip"><svg class="i" viewBox="0 0 24 24"><path d="M4 7V5h2M18 5h2v2M4 17v2h2M18 19h2v-2M8 9v6M12 9v6M16 9v6"/></svg>Đầu đọc sẵn sàng</div>
+          <div class="body">
+            <div class="field">
+              <div class="label">Công đoạn <span class="req">*</span></div>
+              <div class="ops" id="ops"></div>
+            </div>
+            <div class="field">
+              <div class="label">Công nhân <span class="req">*</span></div>
+              <div class="slot"><div class="slot-row">
+                <svg class="i" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
+                <div class="slot-main"><b>Nguyễn Thị Thắm</b><small>CL400096 · MAY MIỆNG-XM2</small></div>
+              </div></div>
+            </div>
+            <div class="field">
+              <div class="label">Vị trí / mã máy</div>
+              <div class="slot"><div class="slot-row">
+                <svg class="i" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
+                <div class="kv"><span><small>Mã vị trí:</small>G05</span><span><small>Mã máy:</small>M105</span></div>
+              </div></div>
+            </div>
+            <div class="field qty">
+              <label class="label" for="qty">Số lượng giao <span class="req">*</span></label>
+              <div class="remain"><span>Còn lại</span><span id="remain"></span></div>
+              <div class="tightest" id="tightest" hidden></div>
+              <div class="qty-input" id="qty-box">
+                <input id="qty" inputmode="decimal" autocomplete="off" value="450" aria-describedby="qty-note">
+                <span>CHC</span>
+              </div>
+              <div id="qty-note" aria-live="polite"></div>
+            </div>
+          </div>
+          <div class="cta"><button class="btn" id="submit" type="button">Tạo phân công</button></div>
+        </div>
+
+        <!-- ───────── Xác nhận ───────── -->
+        <div class="view" id="view-confirm" hidden>
+          <div class="appbar">
+            <div class="back" aria-hidden="true"><svg class="i" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></div>
+            <div class="t"><h1>Xác nhận sản lượng</h1><div class="sub">Nguyễn Thị Thắm · CL400096 · MAY MIỆNG-XM2</div></div>
+          </div>
+          <div class="body">
+            <div class="op-card">
+              <div class="main"><b>May miệng túi</b><small>LSX 100000000123 · CĐ 0010</small></div>
+              <div class="now"><b>300 CHC</b><small>còn lại hiện tại</small></div>
+            </div>
+            <div class="rows">
+              <div><span>Đã giao</span><b>500 CHC</b></div>
+              <div><span>Đã xác nhận</span><b>200 CHC</b></div>
+            </div>
+            <div class="field qty">
+              <div class="label">Nhập số lượng xác nhận</div>
+              <div class="seg" aria-hidden="true"><span class="on">Nhập số hoàn thành</span><span>Nhập số còn lại</span></div>
+              <label class="sub-label" for="cqty">Số vừa hoàn thành</label>
+              <div class="qty-input" id="cqty-box">
+                <input id="cqty" inputmode="decimal" autocomplete="off" value="350" aria-describedby="cqty-note">
+                <span>CHC</span>
+              </div>
+              <div id="cqty-note" aria-live="polite"></div>
+              <div class="bar"><i id="cbar"></i></div>
+              <div class="bar-note"><span id="cpct"></span><span id="cleft"></span></div>
+            </div>
+            <div class="rows">
+              <div><span>Ghi nhận hoàn thành</span><b id="cgain"></b></div>
+              <div><span>Còn lại sau xác nhận</span><b id="cafter"></b></div>
+            </div>
+          </div>
+          <div class="cta"><button class="btn" id="csubmit" type="button">Xác nhận</button></div>
+        </div>
+
+        <div class="snack" id="snack" role="status" hidden></div>
+      </div>
+    </div>
+    <p class="device-caption">Gõ thử vào ô số lượng rồi bấm nút gửi. Số liệu trên màn hình là ví dụ.</p>
+  </div>
+
+  <div class="notes">
+    <div>
+      <div class="eyebrow">Phân công và Xác nhận</div>
+      <h2>Nhập vượt số còn lại: cảnh báo một dòng, không chặn</h2>
+      <p class="lead">Ô số lượng ở cả hai màn hình nhận mọi số dương. Khi số nhập lớn hơn số còn lại, ngay dưới ô hiện một dòng cảnh báo màu vàng. Nút gửi vẫn bấm được và đi tiếp sang bước xác minh công nhân như mọi lần khác.</p>
+    </div>
+
+    <div class="panel">
+      <h3>Thử nhanh</h3>
+      <div class="cases" id="cases-assign" role="group" aria-label="Trường hợp mẫu, Phân công">
+        <button class="case" type="button" data-qty="200" data-ops="1">Trong giới hạn · 200</button>
+        <button class="case" type="button" data-qty="450" data-ops="1">Vượt · 450</button>
+        <button class="case" type="button" data-qty="200" data-ops="2">2 công đoạn · vượt công đoạn ít nhất</button>
+      </div>
+      <div class="cases" id="cases-confirm" role="group" aria-label="Trường hợp mẫu, Xác nhận" hidden>
+        <button class="case" type="button" data-cqty="250">Trong giới hạn · 250</button>
+        <button class="case" type="button" data-cqty="300">Vừa hết · 300</button>
+        <button class="case" type="button" data-cqty="350">Vượt · 350</button>
+      </div>
+      <p class="hint" id="hint"></p>
+    </div>
+
+    <div class="panel">
+      <h3>Trước và sau</h3>
+      <div class="compare">
+        <div class="cmp">
+          <div class="cmp-tag">Hiện tại</div>
+          <div class="cut">
+            <div class="qty-input bad"><input id="old-qty" value="450" readonly aria-label="Số lượng, bản hiện tại"><span>CHC</span></div>
+            <div class="old-box"><svg class="i" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01M10.3 3.9 2.6 17a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg><span id="old-text"></span></div>
+            <button class="btn blocked" type="button" disabled id="old-btn">Tạo phân công</button>
+          </div>
+          <p id="old-note"></p>
+        </div>
+        <div class="cmp">
+          <div class="cmp-tag new">Sau khi sửa</div>
+          <div class="cut">
+            <div class="qty-input over"><input id="new-qty" value="450" readonly aria-label="Số lượng, bản mới"><span>CHC</span></div>
+            <div class="over-line"><svg class="i" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01M10.3 3.9 2.6 17a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg><span>Vượt số còn lại 300 CHC.</span></div>
+            <button class="btn" type="button" disabled id="new-btn">Tạo phân công</button>
+          </div>
+          <p>Một dòng chữ vàng, viền ô vàng. Bấm nút là gửi, không có hộp hỏi lại.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" id="keep-assign">
+      <h3>Phân công: giữ nguyên</h3>
+      <ul class="list">
+        <li>Số trống, bằng 0, số âm hoặc số lẻ với đơn vị đếm nguyên vẫn báo lỗi đỏ và không gửi.</li>
+        <li>Dòng Còn lại và dòng “Theo công đoạn còn ít nhất” khi giao nhiều công đoạn.</li>
+        <li>Các ô khác trên màn hình không đổi.</li>
+      </ul>
+    </div>
+
+    <div class="panel" id="keep-confirm" hidden>
+      <h3>Xác nhận: cách tớ định làm</h3>
+      <ul class="list">
+        <li><b>Số vừa hoàn thành</b> được nhập lớn hơn số còn lại. Số lỗi cũng vậy: tổng hoàn thành và lỗi vượt thì chỉ hiện dòng vàng.</li>
+        <li><b>Còn lại sau xác nhận</b> hiện 0 khi vượt, không hiện số âm. Phân công chuyển sang đã xong.</li>
+        <li><b>Chế độ “Nhập số còn lại”</b> vẫn chỉ nhận từ 0 đến số còn lại, vì số còn lại không thể âm.</li>
+        <li><b>Thu hồi lượt này</b> khi đã vượt là 0, không thu hồi được.</li>
+        <li><b>Xác nhận nhiều công đoạn</b> dùng cùng dòng cảnh báo, có tên công đoạn còn ít nhất, giống trường hợp “2 công đoạn” bên Phân công.</li>
+        <li><b>Gộp nhiều lần giao</b> của cùng công đoạn: phần vượt ghi vào lần giao mới nhất.</li>
+      </ul>
+    </div>
+
+    <div class="panel">
+      <h3>ABAP đang chặn ở đâu</h3>
+      <ol class="steps" id="abap-assign">
+        <li><b>Action <span class="code">initialAssign</span></b> trong <span class="code">ZBP_R_PP_OPALLOC</span>: khối <span class="code">IF allocated_quantity + input-Quantity &gt; operation-OperationQuantity</span> trả <span class="code">OPERATION_QUANTITY_EXCEEDED</span>. Đây là chỗ duy nhất.</li>
+      </ol>
+      <ol class="steps" id="abap-confirm" hidden>
+        <li><b><span class="code">validate_worker_balance</span></b> trong <span class="code">ZBP_R_PP_OPALLOC</span>: <span class="code">remaining_qty &lt; quantity</span> trả <span class="code">CONFIRM_QUANTITY_EXCEEDED</span>.</li>
+        <li><b><span class="code">ZCL_PP_ALLOC_LINEAGE=&gt;confirmation_error</span></b>: <span class="code">quantity &gt; lineage-usable_quantity</span> trả <span class="code">CONFIRM_ORIGINAL_QUANTITY_EXCEEDED</span>.</li>
+        <li><b>Validation <span class="code">validateBalance</span></b> lúc lưu: <span class="code">expected_remaining &lt; 0</span> làm hỏng lần lưu với thông báo “Số lượng còn lại không khớp với sổ phân bổ”.</li>
+      </ol>
+    </div>
+
+    <div class="panel">
+      <h3>Cần cậu chốt</h3>
+      <ul class="list" id="ask-assign">
+        <li><b>Bấm gửi khi đang vượt:</b> demo gửi thẳng. Nếu cậu muốn thêm bước hỏi lại “Vẫn giao” như cảnh báo bộ phận thì nói tớ.</li>
+      </ul>
+      <ul class="list" id="ask-confirm" hidden>
+        <li><b>Số còn lại trên SAP sau khi xác nhận vượt:</b> để âm (đã giao 500, xác nhận 550 thì còn −50) hay ghi 0? Công thức hiện tại của ABAP sẽ ra số âm. App thì luôn hiện 0.</li>
+        <li><b>Số lỗi:</b> tổng hoàn thành và lỗi vượt số còn lại cũng chỉ cảnh báo, đúng ý cậu chưa?</li>
+        <li><b>Thu hồi:</b> tớ giữ giới hạn như cũ, vì không thể thu hồi nhiều hơn số đang giữ.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var OPS = [
+    { no: '0010', name: 'May miệng túi', remain: 300 },
+    { no: '0020', name: 'May thân sau', remain: 120 }
+  ];
+  var CONFIRM_REMAIN = 300;
+  var state = { screen: 'assign', ops: 1 };
+  var $ = function (id) { return document.getElementById(id); };
+  var WARN = '<svg class="i" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01M10.3 3.9 2.6 17a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>';
+  var CHECK = '<svg class="i" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>';
+
+  function fmt(n) { return n.toLocaleString('vi-VN'); }
+  function parse(text) {
+    var t = String(text).trim().replace(/\./g, '').replace(',', '.');
+    return t === '' || isNaN(Number(t)) ? null : Number(t);
+  }
+  function chosen() { return OPS.slice(0, state.ops); }
+  function limit() {
+    return chosen().reduce(function (a, b) { return b.remain < a.remain ? b : a; });
+  }
+  function setNote(note, kind, html) {
+    note.className = kind === 'each' ? 'each' : kind ? 'over-line' : '';
+    note.style.color = kind === 'bad' ? 'var(--danger)' : '';
+    note.innerHTML = html || '';
+  }
+
+  /* ── Phân công ── */
+  function renderOps() {
+    var lim = limit();
+    $('ops').innerHTML = chosen().map(function (op) {
+      var tight = state.ops > 1 && op === lim;
+      return '<div class="slot' + (tight ? ' tight' : '') + '"><div class="slot-row">' + CHECK +
+        '<div class="slot-main"><b>' + op.name + '</b><small>LSX 100000000123 · ' + op.no +
+        ' · Còn lại ' + fmt(op.remain) + ' CHC</small></div></div></div>';
+    }).join('');
+    $('remain').textContent = fmt(lim.remain) + ' CHC';
+    $('tightest').hidden = state.ops < 2;
+    $('tightest').textContent = 'Theo công đoạn còn ít nhất: ' + lim.name;
+  }
+  function renderQty() {
+    var lim = limit();
+    var raw = $('qty').value;
+    var qty = parse(raw);
+    var invalid = raw.trim() !== '' && (qty === null || qty <= 0);
+    var over = qty !== null && qty > lim.remain;
+    $('qty-box').className = 'qty-input' + (invalid ? ' bad' : over ? ' over' : '');
+    if (invalid) setNote($('qty-note'), 'bad', 'Số lượng giao phải là một số dương hợp lệ.');
+    else if (over) setNote($('qty-note'), 'warn', WARN + '<span>' + (state.ops > 1
+      ? 'Vượt số còn lại của ' + lim.name + ' (' + fmt(lim.remain) + ' CHC).'
+      : 'Vượt số còn lại ' + fmt(lim.remain) + ' CHC.') + '</span>');
+    else if (state.ops > 1 && qty) setNote($('qty-note'), 'each',
+      'Mỗi công đoạn giao ' + fmt(qty) + ' CHC · ' + state.ops + ' công đoạn.');
+    else setNote($('qty-note'), '', '');
+    document.querySelectorAll('#cases-assign .case').forEach(function (b) {
+      b.setAttribute('aria-pressed',
+        String(Number(b.dataset.ops) === state.ops && parse(b.dataset.qty) === qty));
+    });
+  }
+
+  /* ── Xác nhận ── */
+  function renderConfirm() {
+    var raw = $('cqty').value;
+    var qty = parse(raw);
+    var invalid = raw.trim() !== '' && (qty === null || qty <= 0);
+    var over = qty !== null && qty > CONFIRM_REMAIN;
+    var done = invalid || qty === null ? 0 : qty;
+    var left = Math.max(0, CONFIRM_REMAIN - done);
+    $('cqty-box').className = 'qty-input' + (invalid ? ' bad' : over ? ' over' : '');
+    if (invalid) setNote($('cqty-note'), 'bad', 'Nhập số lượng hợp lệ');
+    else if (over) setNote($('cqty-note'), 'warn',
+      WARN + '<span>Vượt số còn lại ' + fmt(CONFIRM_REMAIN) + ' CHC.</span>');
+    else setNote($('cqty-note'), '', '');
+    var pct = Math.min(100, Math.round(done / CONFIRM_REMAIN * 100));
+    $('cbar').style.width = pct + '%';
+    $('cpct').textContent = pct + '% hoàn thành';
+    $('cleft').textContent = 'còn ' + fmt(left) + ' CHC';
+    $('cgain').textContent = '+' + fmt(done) + ' CHC';
+    $('cafter').textContent = fmt(left) + ' CHC';
+    document.querySelectorAll('#cases-confirm .case').forEach(function (b) {
+      b.setAttribute('aria-pressed', String(parse(b.dataset.cqty) === qty));
+    });
+  }
+
+  /* ── notes that follow the chosen screen ── */
+  function renderScreen() {
+    var confirm = state.screen === 'confirm';
+    $('view-assign').hidden = confirm;
+    $('view-confirm').hidden = !confirm;
+    $('tab-assign').setAttribute('aria-pressed', String(!confirm));
+    $('tab-confirm').setAttribute('aria-pressed', String(confirm));
+    ['cases', 'keep', 'abap', 'ask'].forEach(function (name) {
+      $(name + '-assign').hidden = confirm;
+      $(name + '-confirm').hidden = !confirm;
+    });
+    $('hint').textContent = confirm
+      ? 'Phân công mẫu: đã giao 500 CHC, đã xác nhận 200, còn lại 300.'
+      : 'Công đoạn mẫu: May miệng túi còn 300 CHC, May thân sau còn 120 CHC.';
+    $('old-qty').value = $('new-qty').value = confirm ? '350' : '450';
+    $('old-btn').textContent = $('new-btn').textContent = confirm ? 'Xác nhận' : 'Tạo phân công';
+    $('old-text').textContent = confirm
+      ? 'Số lượng vượt quá số lượng còn lại (300)'
+      : 'Số lượng giao vượt số lượng còn lại: 300 CHC.';
+    $('old-note').textContent = confirm
+      ? 'Chữ đỏ dưới ô và nút Xác nhận bị khoá, không gửi được.'
+      : 'Khung đỏ, và bấm Tạo phân công thì hiện hộp lỗi, không gửi được.';
+    $('snack').hidden = true;
+  }
+
+  var snackTimer;
+  function snack(text) {
+    var el = $('snack');
+    el.textContent = text;
+    el.hidden = false;
+    clearTimeout(snackTimer);
+    snackTimer = setTimeout(function () { el.hidden = true; }, 3200);
+  }
+
+  $('qty').addEventListener('input', renderQty);
+  $('cqty').addEventListener('input', renderConfirm);
+  $('submit').addEventListener('click', function () {
+    var qty = parse($('qty').value);
+    if (qty === null || qty <= 0) { snack('Chưa gửi: số lượng giao phải là một số dương.'); return; }
+    snack((qty > limit().remain ? 'Vượt số còn lại nhưng vẫn gửi. ' : '') +
+      'Sang bước nhập mật khẩu công nhân, giao ' + fmt(qty) + ' CHC' +
+      (state.ops > 1 ? ' cho mỗi công đoạn.' : '.'));
+  });
+  $('csubmit').addEventListener('click', function () {
+    var qty = parse($('cqty').value);
+    if (qty === null || qty <= 0) { snack('Chưa gửi: nhập số lượng hợp lệ.'); return; }
+    snack((qty > CONFIRM_REMAIN ? 'Vượt số còn lại nhưng vẫn gửi. ' : '') +
+      'Sang bước nhập mật khẩu công nhân, xác nhận ' + fmt(qty) + ' CHC.');
+  });
+  document.querySelectorAll('#cases-assign .case').forEach(function (b) {
+    b.addEventListener('click', function () {
+      state.ops = Number(b.dataset.ops);
+      $('qty').value = b.dataset.qty;
+      renderOps();
+      renderQty();
+    });
+  });
+  document.querySelectorAll('#cases-confirm .case').forEach(function (b) {
+    b.addEventListener('click', function () {
+      $('cqty').value = b.dataset.cqty;
+      renderConfirm();
+    });
+  });
+  $('tab-assign').addEventListener('click', function () { state.screen = 'assign'; renderScreen(); });
+  $('tab-confirm').addEventListener('click', function () { state.screen = 'confirm'; renderScreen(); });
+
+  if (location.hash === '#xac-nhan') state.screen = 'confirm';
+  renderOps();
+  renderQty();
+  renderConfirm();
+  renderScreen();
+})();
+</script>

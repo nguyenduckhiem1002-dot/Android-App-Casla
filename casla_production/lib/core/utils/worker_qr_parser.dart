@@ -1,4 +1,4 @@
-import 'dart:convert';
+import 'scanned_json.dart';
 
 /// Parsed employee identifier from an untrusted QR payload.
 class WorkerQrResult {
@@ -62,18 +62,17 @@ class WorkerQrParser {
       return WorkerQrResult.invalid();
     }
 
-    final input = rawCode.trim();
+    final input = ScannedJson.normalizeText(rawCode.trim());
     if (input.isEmpty) return WorkerQrResult.invalid();
 
-    if (input.startsWith('{') && input.endsWith('}')) {
-      try {
-        final decoded = jsonDecode(input);
-        if (decoded is Map) {
-          return _fromFields(decoded);
-        }
-      } on FormatException {
-        return WorkerQrResult.invalid();
-      }
+    final json = ScannedJson.decodeObject(input);
+    if (json.fields != null) return _fromFields(json.fields!);
+    if (json.isDamaged) {
+      // Never fall through to the bare-token fallbacks with a broken object:
+      // a fragment of it could pass as an employee code.
+      return WorkerQrResult.invalid(
+        'Mã QR bị đọc thiếu hoặc sai định dạng. Hãy quét lại.',
+      );
     }
 
     final keyedFields = <String, String>{};

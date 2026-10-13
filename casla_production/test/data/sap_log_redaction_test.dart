@@ -5,7 +5,30 @@
 // therefore missed the filter and printed the password in full.
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:casla_production/core/config/app_config.dart';
 import 'package:casla_production/data/sap/sap_odata_client.dart';
+
+class _MissingCsrfClient extends SapODataClient {
+  _MissingCsrfClient()
+    : super(
+        baseUrl: 'https://contract.invalid/',
+        transportAuthMode: SapTransportAuthMode.gateway,
+      );
+
+  @override
+  Future<String?> fetchCsrfToken() async => null;
+}
+
+class _ValidCsrfClient extends SapODataClient {
+  _ValidCsrfClient()
+    : super(
+        baseUrl: 'https://contract.invalid/',
+        transportAuthMode: SapTransportAuthMode.gateway,
+      );
+
+  @override
+  Future<String?> fetchCsrfToken() async => 'test-csrf';
+}
 
 void main() {
   group('SapODataClient.redactSecrets', () {
@@ -125,6 +148,19 @@ void main() {
         ),
         'login',
       );
+    });
+  });
+
+  group('SapODataClient.requireCsrfToken', () {
+    test('blocks a mutation when fetching the token fails', () async {
+      await expectLater(
+        _MissingCsrfClient().requireCsrfToken(),
+        throwsA(isA<SapCsrfException>()),
+      );
+    });
+
+    test('returns the token supplied by the fetch', () async {
+      expect(await _ValidCsrfClient().requireCsrfToken(), 'test-csrf');
     });
   });
 }

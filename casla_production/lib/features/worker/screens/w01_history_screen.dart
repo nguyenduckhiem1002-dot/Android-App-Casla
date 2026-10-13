@@ -12,6 +12,7 @@ import 'package:intl/intl.dart';
 import '../../../app/theme/casla_colors.dart';
 import '../../../core/sync/sync_failure.dart';
 import '../../../core/utils/quantity_formatter.dart';
+import '../../../data/sap/sap_shift_controller.dart';
 import '../../../domain/entities/work_history.dart';
 import '../../../main.dart';
 import '../../../presentation/widgets/casla_skeleton.dart';
@@ -23,21 +24,91 @@ class W01HistoryScreen extends ConsumerStatefulWidget {
   ConsumerState<W01HistoryScreen> createState() => _W01HistoryScreenState();
 }
 
+class _WorkerHistoryGroupData {
+  final String key;
+  DateTime date;
+  String productionOrder;
+  String operation;
+  String operationName;
+  String productName;
+  String productCode;
+  String salesOrder;
+  String salesOrderItem;
+  final List<WorkHistoryEntry> entries = [];
+
+  _WorkerHistoryGroupData({
+    required this.key,
+    required this.date,
+    required this.productionOrder,
+    required this.operation,
+    required this.operationName,
+    required this.productName,
+    required this.productCode,
+    required this.salesOrder,
+    required this.salesOrderItem,
+  });
+}
+
 class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
   static const int _historyEntryPageSize = 50;
 
   HistoryRange _range = HistoryRange.month;
   DateTime? _customDateFrom;
   DateTime? _customDateTo;
+  String? _historyShiftId;
+  String _historyShiftLabel = 'Tất cả ca';
+  Future<List<SapShift>>? _historyShiftsFuture;
+  String _historyShiftsKey = '';
   late Stream<WorkHistoryResult> _historyStream;
   int _visibleEntryCount = _historyEntryPageSize;
+  String _activeContextKey = '';
   bool _historyDataReady = false;
   WorkHistoryResult? _lastHistoryResult;
 
   @override
   void initState() {
     super.initState();
+    _syncActiveContext();
     _replaceHistoryStream();
+  }
+
+  bool _syncActiveContext() {
+    final state = ref.read(appStateProvider);
+    final date = state.activeBusinessDate;
+    final key =
+        '${DateFormat('yyyy-MM-dd').format(date)}|'
+        '${state.activeShift?.shiftId ?? ''}|${state.activeWorkContext?.workId ?? ''}';
+    if (key == _activeContextKey) return false;
+    _activeContextKey = key;
+    if (state.activeShift != null) {
+      _range = HistoryRange.custom;
+      _customDateFrom = DateTime(date.year, date.month, date.day);
+      _customDateTo = _customDateFrom;
+      _historyShiftId = state.activeShift!.shiftId;
+      _historyShiftLabel = state.activeShift!.shiftName;
+    } else {
+      _historyShiftId = null;
+      _historyShiftLabel = 'Tất cả ca';
+    }
+    _historyShiftsFuture = null;
+    _historyShiftsKey = '';
+    return true;
+  }
+
+  DateTime get _filterTo {
+    if (_range == HistoryRange.custom) return _customDateTo!;
+    final now = DateTime.now();
+    return DateTime(now.year, now.month, now.day);
+  }
+
+  DateTime get _filterFrom {
+    final to = _filterTo;
+    return switch (_range) {
+      HistoryRange.day => to,
+      HistoryRange.week => to.subtract(Duration(days: to.weekday - 1)),
+      HistoryRange.month => DateTime(to.year, to.month, 1),
+      HistoryRange.custom => _customDateFrom!,
+    };
   }
 
   void _replaceHistoryStream() {
@@ -47,24 +118,30 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
   }
 
   Stream<WorkHistoryResult> _watchHistory() {
+    final workId = ref.read(appStateProvider).activeWorkContext?.workId;
     return ref
         .read(appStateProvider)
         .workHistoryRepo
         .watchWorkHistory(
           range: _range,
-          dateFrom: _range == HistoryRange.custom ? _customDateFrom : null,
-          dateTo: _range == HistoryRange.custom ? _customDateTo : null,
+          dateFrom: _filterFrom,
+          dateTo: _filterTo,
+          shiftId: _historyShiftId,
+          workId: workId,
         );
   }
 
   Future<WorkHistoryResult> _load({bool forceRefresh = false}) {
+    final workId = ref.read(appStateProvider).activeWorkContext?.workId;
     return ref
         .read(appStateProvider)
         .workHistoryRepo
         .getWorkHistory(
           range: _range,
-          dateFrom: _range == HistoryRange.custom ? _customDateFrom : null,
-          dateTo: _range == HistoryRange.custom ? _customDateTo : null,
+          dateFrom: _filterFrom,
+          dateTo: _filterTo,
+          shiftId: _historyShiftId,
+          workId: workId,
           forceRefresh: forceRefresh,
         );
   }
@@ -78,6 +155,9 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
     setState(() {
       _range = range;
       _visibleEntryCount = _historyEntryPageSize;
+      _historyShiftId = null;
+      _historyShiftLabel = 'Tất cả ca';
+      _historyShiftsKey = '';
       _replaceHistoryStream();
     });
   }
@@ -138,6 +218,9 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
       _customDateFrom = DateTime(picked.year, picked.month, picked.day);
       _customDateTo = DateTime(picked.year, picked.month, picked.day);
       _visibleEntryCount = _historyEntryPageSize;
+      _historyShiftId = null;
+      _historyShiftLabel = 'Tất cả ca';
+      _historyShiftsKey = '';
       _replaceHistoryStream();
     });
   }
@@ -212,8 +295,142 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
         picked.end.day,
       );
       _visibleEntryCount = _historyEntryPageSize;
+      _historyShiftId = null;
+      _historyShiftLabel = 'Tất cả ca';
+      _historyShiftsKey = '';
       _replaceHistoryStream();
     });
+  }
+
+  DateTime get _shiftReferenceDate {
+    if (_range == HistoryRange.custom && _customDateFrom != null) {
+      return _customDateFrom!;
+    }
+    final now = DateTime.now();
+    return DateTime(now.year, now.month, now.day);
+  }
+
+  Future<List<SapShift>> _loadHistoryShifts() {
+    final appState = ref.read(appStateProvider);
+    final workCenter = appState.activeWorkContext?.workCenter.trim() ?? '';
+    final date = _shiftReferenceDate;
+    final key = '$workCenter|${DateFormat('yyyy-MM-dd').format(date)}';
+    if (_historyShiftsFuture == null || _historyShiftsKey != key) {
+      _historyShiftsKey = key;
+      _historyShiftsFuture = workCenter.isEmpty
+          ? Future<List<SapShift>>.value(const [])
+          : appState.shiftController.getShifts(
+              workCenter: workCenter,
+              onDate: date,
+            );
+    }
+    return _historyShiftsFuture!;
+  }
+
+  Future<void> _showHistoryShiftSheet() async {
+    List<SapShift> shifts;
+    try {
+      shifts = await _loadHistoryShifts();
+    } catch (_) {
+      _historyShiftsFuture = null;
+      _historyShiftsKey = '';
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Không tải được danh sách ca để tra cứu.'),
+          backgroundColor: CaslaColors.danger,
+        ),
+      );
+      return;
+    }
+    if (!mounted) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(12, 16, 12, 20),
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(8, 0, 8, 10),
+              child: Text(
+                'Lọc lịch sử theo ca',
+                style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w800,
+                  color: CaslaColors.primaryNavy,
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+              child: Text(
+                'Danh sách ca theo ngày ${DateFormat('dd/MM/yyyy').format(_shiftReferenceDate)}',
+                style: const TextStyle(fontSize: 12, color: CaslaColors.muted),
+              ),
+            ),
+            Material(
+              color: Colors.transparent,
+              child: ListTile(
+                minTileHeight: 52,
+                leading: const Icon(Icons.all_inclusive),
+                title: const Text('Tất cả ca'),
+                selected: _historyShiftId == null,
+                trailing: _historyShiftId == null
+                    ? const Icon(Icons.check)
+                    : null,
+                onTap: () {
+                  setState(() {
+                    _historyShiftId = null;
+                    _historyShiftLabel = 'Tất cả ca';
+                    _replaceHistoryStream();
+                  });
+                  Navigator.pop(sheetContext);
+                },
+              ),
+            ),
+            for (final shift in shifts)
+              Material(
+                color: Colors.transparent,
+                child: ListTile(
+                  minTileHeight: 58,
+                  leading: const Icon(Icons.schedule_outlined),
+                  title: Text(
+                    shift.shiftName.isEmpty ? shift.shiftId : shift.shiftName,
+                  ),
+                  subtitle: Text('${shift.shiftId} · ${shift.timeLabel}'),
+                  selected: _historyShiftId == shift.shiftId,
+                  trailing: _historyShiftId == shift.shiftId
+                      ? const Icon(Icons.check)
+                      : null,
+                  onTap: () {
+                    setState(() {
+                      _historyShiftId = shift.shiftId;
+                      _historyShiftLabel = shift.shiftName.isEmpty
+                          ? shift.shiftId
+                          : shift.shiftName;
+                      _replaceHistoryStream();
+                    });
+                    Navigator.pop(sheetContext);
+                  },
+                ),
+              ),
+            if (shifts.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Text(
+                  'Chưa có ca phù hợp với ngày đang chọn.',
+                  style: TextStyle(color: CaslaColors.muted),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _showCustomDatePickerSheet() {
@@ -356,6 +573,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
   @override
   Widget build(BuildContext context) {
     final session = ref.watch(appStateProvider).currentSession;
+    if (_syncActiveContext()) _replaceHistoryStream();
 
     return Scaffold(
       backgroundColor: CaslaColors.background,
@@ -526,6 +744,30 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
             ),
           ),
         ],
+        const SizedBox(height: 10),
+        SizedBox(
+          height: 44,
+          child: OutlinedButton.icon(
+            onPressed: _showHistoryShiftSheet,
+            icon: const Icon(Icons.schedule_outlined, size: 17),
+            label: Expanded(
+              child: Text(
+                'Ca tra cứu: $_historyShiftLabel',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            style: OutlinedButton.styleFrom(
+              alignment: Alignment.centerLeft,
+              foregroundColor: CaslaColors.primaryNavy,
+              side: const BorderSide(color: CaslaColors.line),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -747,43 +989,14 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
         ),
       );
     } else {
+      final visibleEntries = result.entries
+          .take(visibleEntryCount)
+          .toList(growable: false);
+      final groups = _groupHistoryEntries(visibleEntries);
       slivers.add(
-        SliverPadding(
+        _boxSliver(
+          _buildHistoryGroups(groups),
           padding: const EdgeInsets.symmetric(horizontal: 18),
-          sliver: SliverList(
-            delegate: SliverChildBuilderDelegate((context, index) {
-              final isLast = index == visibleEntryCount - 1;
-              return DecoratedBox(
-                decoration: BoxDecoration(
-                  color: CaslaColors.surface,
-                  border: Border(
-                    left: const BorderSide(color: CaslaColors.line),
-                    right: const BorderSide(color: CaslaColors.line),
-                    top: index == 0
-                        ? const BorderSide(color: CaslaColors.line)
-                        : BorderSide.none,
-                    bottom: BorderSide(color: CaslaColors.line),
-                  ),
-                  borderRadius: index == 0 || isLast
-                      ? BorderRadius.vertical(
-                          top: index == 0
-                              ? const Radius.circular(14)
-                              : Radius.zero,
-                          bottom: isLast
-                              ? const Radius.circular(14)
-                              : Radius.zero,
-                        )
-                      : null,
-                ),
-                child: Column(
-                  children: [
-                    _buildEntryTile(result.entries[index]),
-                    if (!isLast) const Divider(height: 1),
-                  ],
-                ),
-              );
-            }, childCount: visibleEntryCount),
-          ),
         ),
       );
     }
@@ -816,6 +1029,350 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
     }
 
     return slivers;
+  }
+
+  List<_WorkerHistoryGroupData> _groupHistoryEntries(
+    List<WorkHistoryEntry> entries,
+  ) {
+    final grouped = <String, _WorkerHistoryGroupData>{};
+    for (final entry in entries) {
+      // The shift's business day: night-shift work posted after midnight
+      // belongs to the day the shift started.
+      final date = entry.workDate;
+      final productionOrder = entry.productionOrder.trim().isEmpty
+          ? 'Chưa có LSX'
+          : entry.productionOrder.trim();
+      final operation = entry.operation.trim().isEmpty
+          ? 'Chưa có mã CĐ'
+          : entry.operation.trim();
+      final key =
+          '${DateFormat('yyyy-MM-dd').format(date)}|$productionOrder|$operation';
+      final group = grouped.putIfAbsent(
+        key,
+        () => _WorkerHistoryGroupData(
+          key: key,
+          date: date,
+          productionOrder: productionOrder,
+          operation: operation,
+          operationName: entry.operationName.trim(),
+          productName: entry.productName.trim(),
+          productCode: entry.productCode.trim(),
+          salesOrder: entry.salesOrder.trim(),
+          salesOrderItem: entry.salesOrderItem.trim(),
+        ),
+      );
+      if (group.operationName.isEmpty &&
+          entry.operationName.trim().isNotEmpty) {
+        group.operationName = entry.operationName.trim();
+      }
+      if (group.productName.isEmpty && entry.productName.trim().isNotEmpty) {
+        group.productName = entry.productName.trim();
+      }
+      if (group.productCode.isEmpty && entry.productCode.trim().isNotEmpty) {
+        group.productCode = entry.productCode.trim();
+      }
+      if (group.salesOrder.isEmpty && entry.salesOrder.trim().isNotEmpty) {
+        group.salesOrder = entry.salesOrder.trim();
+      }
+      if (group.salesOrderItem.isEmpty &&
+          entry.salesOrderItem.trim().isNotEmpty) {
+        group.salesOrderItem = entry.salesOrderItem.trim();
+      }
+      group.entries.add(entry);
+    }
+
+    final result = grouped.values.toList();
+    for (final group in result) {
+      group.entries.sort((a, b) => b.executionDate.compareTo(a.executionDate));
+    }
+    result.sort((a, b) {
+      final dateOrder = b.date.compareTo(a.date);
+      if (dateOrder != 0) return dateOrder;
+      return a.key.compareTo(b.key);
+    });
+    return result;
+  }
+
+  Widget _buildHistoryGroups(List<_WorkerHistoryGroupData> groups) {
+    final children = <Widget>[];
+    DateTime? lastDate;
+    for (final group in groups) {
+      if (lastDate == null || !group.date.isAtSameMomentAs(lastDate)) {
+        children.add(
+          Padding(
+            padding: const EdgeInsets.only(top: 2, bottom: 8),
+            child: Text(
+              DateFormat('dd/MM/yyyy').format(group.date),
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                color: CaslaColors.primaryNavy,
+              ),
+            ),
+          ),
+        );
+        lastDate = group.date;
+      }
+      children.add(
+        Container(
+          margin: const EdgeInsets.only(bottom: 10),
+          decoration: BoxDecoration(
+            color: CaslaColors.surface,
+            border: Border.all(color: CaslaColors.line),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Material(
+            color: CaslaColors.surface,
+            clipBehavior: Clip.antiAlias,
+            child: Theme(
+              data: Theme.of(context).copyWith(
+                dividerColor: Colors.transparent,
+                splashColor: CaslaColors.navy100,
+              ),
+              child: ExpansionTile(
+                initiallyExpanded: true,
+                tilePadding: const EdgeInsets.fromLTRB(14, 6, 10, 6),
+                childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+                leading: const Icon(
+                  Icons.account_tree_outlined,
+                  color: CaslaColors.primaryNavy,
+                  size: 20,
+                ),
+                title: _buildHistoryGroupSummary(group),
+                children: [
+                  for (final entry in group.entries) _buildHistoryChild(entry),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    return Column(children: children);
+  }
+
+  Widget _buildHistoryGroupSummary(_WorkerHistoryGroupData group) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 5, bottom: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            group.operationName.isEmpty
+                ? 'Chưa có tên công đoạn'
+                : group.operationName,
+            style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w800,
+              color: CaslaColors.primaryNavy,
+              height: 1.25,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'LSX ${group.productionOrder}  ·  CĐ ${group.operation}',
+            maxLines: 1,
+            overflow: TextOverflow.clip,
+            style: const TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: CaslaColors.muted,
+            ),
+          ),
+          if (group.productName.isNotEmpty ||
+              group.productCode.isNotEmpty ||
+              group.salesOrder.isNotEmpty ||
+              group.salesOrderItem.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: CaslaColors.navy100,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: CaslaColors.line),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildHistoryInfoLine(
+                    'Tên hàng',
+                    group.productName.isEmpty ? '—' : group.productName,
+                  ),
+                  const SizedBox(height: 5),
+                  _buildHistoryInfoLine(
+                    'Mã hàng',
+                    group.productCode.isEmpty ? '—' : group.productCode,
+                    monospace: true,
+                  ),
+                  if (group.salesOrder.isNotEmpty ||
+                      group.salesOrderItem.isNotEmpty) ...[
+                    const SizedBox(height: 5),
+                    Text(
+                      'SO ${group.salesOrder.isEmpty ? '—' : group.salesOrder}'
+                      '  ·  Item ${group.salesOrderItem.isEmpty ? '—' : group.salesOrderItem}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w700,
+                        color: CaslaColors.muted,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHistoryInfoLine(
+    String label,
+    String value, {
+    bool monospace = false,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 58,
+          child: Text(
+            label,
+            style: const TextStyle(
+              fontSize: 10.5,
+              color: CaslaColors.muted,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            value,
+            maxLines: 2,
+            overflow: TextOverflow.clip,
+            style: TextStyle(
+              fontFamily: monospace ? 'monospace' : 'Manrope',
+              fontSize: 11,
+              color: CaslaColors.navy900,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildHistoryChild(WorkHistoryEntry entry) {
+    final isNegative =
+        entry.transactionType == 'RECALL' || entry.transactionType == 'REVERSE';
+    final status = _historyStatusLabel(
+      entry.transactionStatus.toUpperCase(),
+      isNegative: isNegative,
+    );
+    // Carried-over balance reads in gold, apart from work given today.
+    final isCarryOver = entry.transactionType == 'REASSIGN';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Row(
+        children: [
+          if (isCarryOver) ...[
+            const Icon(Icons.push_pin, size: 13, color: CaslaColors.carryOver),
+            const SizedBox(width: 4),
+          ],
+          Expanded(
+            child: Text(
+              '${_transactionTypeLabel(entry.transactionType)}: '
+              '${isNegative ? '-' : ''}${formatQuantity(entry.quantity, uom: entry.unitOfMeasure)} ${entry.unitOfMeasure}',
+              style: TextStyle(
+                fontFamily: 'Manrope',
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+                color: isCarryOver
+                    ? CaslaColors.carryOver
+                    : isNegative
+                    ? CaslaColors.danger
+                    : CaslaColors.primaryNavy,
+              ),
+            ),
+          ),
+          _buildHistoryStatusBadge(
+            label: status,
+            isNegative: isNegative,
+            isCarryOver: isCarryOver,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            DateFormat('HH:mm').format(entry.executionDate),
+            style: const TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 11,
+              color: CaslaColors.muted,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHistoryStatusBadge({
+    required String label,
+    required bool isNegative,
+    bool isCarryOver = false,
+  }) {
+    final foreground = isCarryOver
+        ? CaslaColors.carryOver
+        : isNegative
+        ? CaslaColors.danger
+        : CaslaColors.success;
+    final background = isCarryOver
+        ? CaslaColors.carryOverBg
+        : isNegative
+        ? CaslaColors.dangerBg
+        : CaslaColors.successBg;
+    return Container(
+      constraints: const BoxConstraints(minHeight: 28),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      decoration: BoxDecoration(
+        color: background,
+        border: Border.all(color: foreground.withValues(alpha: 0.25)),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.circle, size: 6, color: foreground),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: foreground,
+              fontSize: 10.5,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.2,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _historyStatusLabel(String status, {bool isNegative = false}) {
+    return switch (status) {
+      'POSTED' || 'SYNCED' => isNegative ? 'ĐÃ THU HỒI' : 'ĐÃ GHI SỔ',
+      'PENDING' => 'CHỜ ĐỒNG BỘ',
+      'NEEDS_VERIFICATION' => 'CẦN XÁC MINH',
+      'FAILED' => 'SAP TỪ CHỐI',
+      _ => status.isEmpty ? (isNegative ? 'THU HỒI' : 'HOÀN THÀNH') : status,
+    };
   }
 
   Widget _buildSummary(List<WorkHistorySummary> summaries) {
@@ -861,7 +1418,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
         child: Column(
           children: [
             Text(
-              formatQuantity(value),
+              formatQuantity(value, uom: uom),
               style: TextStyle(
                 fontWeight: FontWeight.w800,
                 fontSize: 18,
@@ -880,99 +1437,24 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
     );
   }
 
-  Widget _buildEntryTile(WorkHistoryEntry entry) {
-    final label = _transactionTypeLabel(entry.transactionType);
-    final isNegative =
-        entry.transactionType == 'RECALL' || entry.transactionType == 'REVERSE';
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      child: Row(
-        children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: CaslaColors.muted100,
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(
-              _transactionTypeIcon(entry.transactionType),
-              size: 18,
-              color: CaslaColors.primaryNavy,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '$label · ${entry.productionOrder}-${entry.operation}',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12.5,
-                    color: CaslaColors.primaryNavy,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  DateFormat('dd/MM/yyyy').format(entry.executionDate),
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: CaslaColors.muted,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Text(
-            '${isNegative ? '-' : '+'}${formatQuantity(entry.quantity)} ${entry.unitOfMeasure}',
-            style: TextStyle(
-              fontWeight: FontWeight.w700,
-              fontSize: 13,
-              color: isNegative ? CaslaColors.danger : CaslaColors.success,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   static String _transactionTypeLabel(String type) {
     switch (type) {
       case 'INITIAL_ASSIGN':
-        return 'Giao việc';
+        return 'Giao';
+      case 'REASSIGN':
+        return 'Tồn chuyển từ ngày trước';
       case 'TRANSFER':
         return 'Điều chuyển';
       case 'RECALL':
         return 'Thu hồi';
       case 'CONFIRM':
-        return 'Xác nhận hoàn thành';
+        return 'Hoàn thành';
       case 'REVERSE':
         return 'Đảo giao dịch';
       case 'CORRECTION':
         return 'Điều chỉnh';
       default:
         return type;
-    }
-  }
-
-  static IconData _transactionTypeIcon(String type) {
-    switch (type) {
-      case 'INITIAL_ASSIGN':
-      case 'TRANSFER':
-        return Icons.assignment_outlined;
-      case 'RECALL':
-        return Icons.undo;
-      case 'CONFIRM':
-        return Icons.check_circle_outline;
-      case 'REVERSE':
-        return Icons.replay;
-      case 'CORRECTION':
-        return Icons.edit_outlined;
-      default:
-        return Icons.receipt_long_outlined;
     }
   }
 }

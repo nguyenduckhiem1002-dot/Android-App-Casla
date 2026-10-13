@@ -359,9 +359,7 @@ void main() {
 }
 
 Future<void> _clearQueue(CaslaDatabase db) async {
-  for (final item in await db.watchSyncQueue().first) {
-    await db.deleteSyncQueueItem(item['id'] as String);
-  }
+  await db.clearSyncQueueForTesting();
 }
 
 /// Writes a production record plus its queue entry, the way

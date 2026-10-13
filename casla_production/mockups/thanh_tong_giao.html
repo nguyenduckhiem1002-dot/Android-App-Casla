@@ -1,0 +1,276 @@
+<title>Thanh tổng giao</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=Inter:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: review canvas. A sample-data switch on top, then two groups (thẻ tổng hợp ở màn chi tiết, thẻ công nhân ở Tổng quan); each sets today's card beside the proposed one at phone width and wraps to one column on a phone. */
+:root {
+  --pg-bg: #ECEEF3; --pg-card: #FFFFFF; --pg-fg: #16234A; --pg-muted: #596274; --pg-line: #D8DCE5;
+  --pg-accent: #7A5A18; --pg-accent-bg: #F6EAD2; --pg-chip: #E4E8F1;
+
+  /* App surfaces: the Casla app has a light theme only, so the cards keep it */
+  --navy: #16234A; --gold: #C9A24B;
+  --app-bg: #F5F6F8; --surface: #FFFFFF; --line: #E7E9EE; --muted: #626A78; --muted-100: #EEF0F3; --track: #DDE1E8;
+  --success: #2E7D32; --success-bg: #E5F2E6; --danger: #C62828; --scrap: #9A6B00;
+  --pending: #85601A; --pending-bg: #FBF1DD;
+
+  --f-display: "Manrope", "Segoe UI", system-ui, sans-serif;
+  --f-body: "Inter", "Segoe UI", system-ui, sans-serif;
+  --f-mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --r-sm: 8px; --r-md: 12px; --r-lg: 16px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --pg-bg: #0B1022; --pg-card: #131A31; --pg-fg: #E5E9F5; --pg-muted: #A0A9C6; --pg-line: #273153;
+    --pg-accent: #E0BE6E; --pg-accent-bg: #2A2413; --pg-chip: #1C2542; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --pg-bg: #0B1022; --pg-card: #131A31; --pg-fg: #E5E9F5; --pg-muted: #A0A9C6; --pg-line: #273153;
+  --pg-accent: #E0BE6E; --pg-accent-bg: #2A2413; --pg-chip: #1C2542; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--f-body); font-size: 15px; line-height: 1.5; padding-inline: 16px; }
+button { font: inherit; color: inherit; cursor: pointer; touch-action: manipulation; }
+:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+
+.page { max-width: 1180px; margin: 0 auto; padding-block: 28px 56px; display: grid; gap: 36px; }
+.intro { display: grid; gap: 14px; }
+.intro h1 { margin: 0; font-family: var(--f-display); font-weight: 800; font-size: 28px; line-height: 1.2; text-wrap: balance; }
+.lead { margin: 0; color: var(--pg-muted); max-width: 66ch; }
+.switch { display: inline-flex; flex-wrap: wrap; padding: 4px; gap: 4px; border-radius: 99px; background: var(--pg-chip); border: 1px solid var(--pg-line); justify-self: start; }
+.switch button { border: 0; background: transparent; color: var(--pg-muted); border-radius: 99px; min-height: 40px; padding: 0 16px; font-weight: 700; font-size: 13.5px; }
+.switch button[aria-pressed="true"] { background: var(--pg-card); color: var(--pg-fg); box-shadow: 0 1px 3px rgba(14, 23, 48, .18); }
+
+.group { display: grid; gap: 16px; }
+.group > h2 { margin: 0; font-family: var(--f-display); font-weight: 800; font-size: 21px; }
+.group > p { margin: -8px 0 0; color: var(--pg-muted); max-width: 66ch; }
+.options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 20px; align-items: start; }
+.option { display: grid; gap: 10px; min-width: 0; }
+.option-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.option-head h3 { margin: 0; font-family: var(--f-display); font-weight: 800; font-size: 15.5px; }
+.pick { font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 99px; background: var(--pg-accent-bg); color: var(--pg-accent); border: 1px solid var(--pg-accent); }
+.option > p { margin: 0; font-size: 13.5px; color: var(--pg-muted); }
+
+/* ---------- a cut-out of the app screen ---------- */
+.cut { background: var(--app-bg); color: var(--navy); border-radius: var(--r-lg); padding: 12px; display: grid; gap: 10px; font-size: 14px; max-width: 393px; width: 100%; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px; display: grid; gap: 12px; }
+
+.figs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); font-variant-numeric: tabular-nums; }
+.figs.c5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.fig { display: grid; gap: 3px; min-width: 0; padding: 0 4px 0 8px; border-left: 1px solid var(--line); }
+.fig:first-child { padding-left: 0; border-left: 0; }
+.fig span { font-size: 11px; font-weight: 700; color: var(--muted); display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.fig span i { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+.fig b { font-family: var(--f-display); font-weight: 800; font-size: 19px; line-height: 1.15; }
+.figs.plain .fig b { font-size: 17px; color: var(--navy); }
+
+.bar { display: flex; gap: 2px; height: 10px; border-radius: 5px; background: var(--track); overflow: hidden; }
+.bar i { display: block; height: 100%; }
+.bar.thin { height: 7px; border-radius: 8px; gap: 0; background: var(--muted-100); }
+
+/* the bar's own length is the total given: a dimension line says so */
+.ruler { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; color: var(--navy); font-variant-numeric: tabular-nums; margin-top: -6px; }
+.ruler::before, .ruler::after { content: ""; flex: 1; height: 7px; border-bottom: 1.5px solid var(--muted); }
+.ruler::before { border-left: 1.5px solid var(--muted); }
+.ruler::after { border-right: 1.5px solid var(--muted); }
+.ruler b { font-family: var(--f-display); font-weight: 800; font-size: 14px; }
+.ends { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: -6px; }
+.ends b { font-family: var(--f-display); font-weight: 800; font-size: 14px; color: var(--navy); }
+
+.foot { display: flex; justify-content: space-between; gap: 8px; font-size: 11.5px; color: var(--muted); }
+.foot b { font-size: 12.5px; font-weight: 800; color: var(--navy); }
+.over { font-size: 12px; font-weight: 700; color: var(--pending); background: var(--pending-bg); border-radius: var(--r-sm); padding: 5px 9px; font-variant-numeric: tabular-nums; }
+
+.card-head { display: flex; gap: 8px; align-items: flex-start; }
+.who { flex: 1; min-width: 0; }
+.who b { display: block; font-family: var(--f-display); font-weight: 700; font-size: 14.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.who small { display: block; font-family: var(--f-mono); font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip { font-size: 11px; font-weight: 800; padding: 4px 10px; border-radius: 99px; white-space: nowrap; letter-spacing: .02em; }
+.chip.doing { background: var(--pending-bg); color: var(--pending); }
+.chip.done { background: var(--success-bg); color: var(--success); }
+
+.panel { background: var(--pg-card); border: 1px solid var(--pg-line); border-radius: var(--r-lg); padding: 18px 20px; }
+.panel h2 { margin: 0 0 10px; font-family: var(--f-display); font-weight: 800; font-size: 17px; }
+.list { margin: 0; padding-left: 18px; display: grid; gap: 8px; max-width: 70ch; }
+</style>
+
+<div class="page">
+  <div class="intro">
+    <h1>Thanh dài bằng tổng giao, bốn số nằm phía trên</h1>
+    <p class="lead">Tổng giao không còn là một cột số. Nó là cả chiều dài của thanh, ghi ngay dưới thanh. Phía trên là Thu hồi, Hoàn thành, Còn lại, Phế, mỗi số có một ô màu trùng với đoạn của nó trên thanh. Đổi dữ liệu mẫu để xem từng trường hợp. Số liệu là ví dụ.</p>
+    <div class="switch" role="group" aria-label="Dữ liệu mẫu">
+      <button type="button" data-case="mixed" aria-pressed="true">Có phế và thu hồi</button>
+      <button type="button" data-case="fresh" aria-pressed="false">Chưa làm</button>
+      <button type="button" data-case="over" aria-pressed="false">Xác nhận vượt</button>
+    </div>
+  </div>
+
+  <section class="group">
+    <h2>Chi tiết nhân viên: thẻ tổng hợp</h2>
+    <p>Thẻ ở đầu màn hình chi tiết, hiện đang có năm cột số và một thanh bên dưới.</p>
+    <div class="options">
+      <div class="option">
+        <div class="option-head"><h3>Hiện tại</h3></div>
+        <div class="cut" id="d-now"></div>
+        <p>Tổng giao đứng chung hàng với bốn số kia. Thanh bên dưới không ghi nó dài bằng bao nhiêu.</p>
+      </div>
+      <div class="option">
+        <div class="option-head"><h3>Mới: tổng giao là chiều dài thanh</h3><span class="pick">Theo ý cậu</span></div>
+        <div class="cut" id="d-new"></div>
+        <p>Bốn số theo đúng thứ tự cậu nêu. Dưới thanh là đường kích thước ghi "Tổng giao". Phần Còn lại là đoạn thanh còn trống màu xám, nên không còn trùng màu vàng với Phế.</p>
+      </div>
+      <div class="option">
+        <div class="option-head"><h3>Mới, cách ghi gọn hơn</h3></div>
+        <div class="cut" id="d-alt"></div>
+        <p>Giống bên cạnh nhưng dưới thanh chỉ ghi 0 ở đầu trái và tổng giao ở đầu phải, như một cây thước. Ít nét hơn, hợp với máy PDA màn nhỏ.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="group">
+    <h2>Tổng quan: thẻ công nhân</h2>
+    <p>Nếu cậu muốn đồng bộ thì thẻ ở Tổng quan cũng làm được theo cách này.</p>
+    <div class="options">
+      <div class="option">
+        <div class="option-head"><h3>Hiện tại</h3></div>
+        <div class="cut" id="o-now"></div>
+        <p>Thanh ở trên, năm cột số ở dưới, Giao là cột đầu tiên.</p>
+      </div>
+      <div class="option">
+        <div class="option-head"><h3>Mới</h3></div>
+        <div class="cut" id="o-new"></div>
+        <p>Bốn số ở trên, chữ số vẫn màu đậm như cậu chọn. Thanh ở dưới dài bằng số giao, ghi "Giao" ở đầu phải.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="panel">
+    <h2>Cách đọc thanh</h2>
+    <ul class="list">
+      <li><b>Cả thanh là tổng giao.</b> Các đoạn nối nhau: hoàn thành (xanh lá), phế (vàng đậm), thu hồi (đỏ). Đoạn còn trống màu xám là còn lại.</li>
+      <li><b>Bốn đoạn cộng lại đúng bằng tổng giao</b>, nên nhìn thanh là biết còn bao nhiêu chưa làm.</li>
+      <li><b>Khi xác nhận vượt</b>, hoàn thành cộng phế lớn hơn tổng giao. Thanh đầy kín, số Còn lại âm, và có một dòng vàng ghi rõ vượt bao nhiêu.</li>
+    </ul>
+  </div>
+
+  <div class="panel">
+    <h2>Cần cậu chốt</h2>
+    <ul class="list">
+      <li>Dưới thanh dùng đường kích thước có chữ "Tổng giao" ở giữa, hay kiểu thước 0 và tổng giao ở hai đầu?</li>
+      <li>Còn lại để xám (đoạn trống của thanh) như demo, hay giữ màu vàng như hiện tại?</li>
+      <li>Chỉ áp dụng cho thẻ ở màn chi tiết, hay cả thẻ công nhân ở Tổng quan?</li>
+      <li>Dòng "Tiến độ trên giao hiệu lực … %" ở màn chi tiết giữ hay bỏ?</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+(function () {
+  var UOM = 'CHC';
+  var COLORS = { ht: 'var(--success)', phe: 'var(--scrap)', thuHoi: 'var(--danger)', conLai: 'var(--track)', gold: 'var(--gold)' };
+  var CASES = {
+    mixed: { name: 'HA Hà Ninh', code: 'CL1HA005', dept: 'MAY MIỆNG-XM2', giao: 500, thuHoi: 50, ht: 320, phe: 12 },
+    fresh: { name: 'HA Văn Thủy', code: 'CL1HA001', dept: 'MAY MIỆNG-XM2', giao: 310, thuHoi: 0, ht: 0, phe: 0 },
+    over:  { name: 'HA Đức Khiêm', code: 'CL1HA004', dept: 'MAY MIỆNG-XM2', giao: 400, thuHoi: 0, ht: 500, phe: 20 }
+  };
+
+  function fmt(n) { return n.toLocaleString('vi-VN'); }
+  function left(x) { return x.giao - x.thuHoi - x.ht - x.phe; }
+  function sw(color) { return '<i style="background:' + color + '"></i>'; }
+  function fig(label, value, color, swatch) {
+    return '<div class="fig"><span>' + (swatch ? sw(swatch) : '') + label + '</span><b' +
+      (color ? ' style="color:' + color + '"' : '') + '>' + value + '</b></div>';
+  }
+  /* segments on one scale: the total given, or what was used once that is more */
+  function segments(x, withRemaining) {
+    var used = x.ht + x.phe + x.thuHoi;
+    var whole = Math.max(x.giao, used, 1);
+    var parts = [[x.ht, COLORS.ht], [x.phe, COLORS.phe], [x.thuHoi, COLORS.thuHoi]];
+    if (withRemaining) parts.push([Math.max(left(x), 0), COLORS.gold]);
+    return parts.filter(function (p) { return p[0] > 0; }).map(function (p) {
+      return '<i style="width:' + p[0] / whole * 100 + '%;background:' + p[1] + '"></i>';
+    }).join('');
+  }
+  function overNote(x) {
+    return left(x) < 0
+      ? '<div class="over">Vượt tổng giao ' + fmt(-left(x)) + ' ' + UOM + '</div>' : '';
+  }
+  function pctDone(x) {
+    var eff = x.giao - x.thuHoi;
+    return eff > 0 ? Math.min(100, Math.floor(x.ht / eff * 100)) + '%' : '0%';
+  }
+  function foot(x) {
+    return '<div class="foot"><span>Tiến độ trên giao hiệu lực</span><b>' + pctDone(x) + '</b></div>' +
+      '<div class="foot"><span>Đơn vị: ' + UOM + '</span></div>';
+  }
+
+  function detailNow(x) {
+    return '<div class="card"><div class="figs c5">' +
+      fig('Tổng giao', fmt(x.giao), 'var(--navy)') + fig('Thu hồi', fmt(x.thuHoi), 'var(--danger)') +
+      fig('Hoàn thành', fmt(x.ht), 'var(--success)') + fig('Phế', fmt(x.phe), x.phe > 0 ? 'var(--scrap)' : 'var(--muted)') +
+      fig('Còn lại', fmt(left(x)), 'var(--pending)') + '</div>' +
+      '<div class="bar" style="background:var(--muted-100)">' + segments(x, true) + '</div>' + foot(x) + '</div>';
+  }
+  function topFigs(x, plain) {
+    var c = function (v) { return plain ? null : v; };
+    return '<div class="figs' + (plain ? ' plain' : '') + '">' +
+      fig('Thu hồi', fmt(x.thuHoi), c('var(--danger)'), COLORS.thuHoi) +
+      fig(plain ? 'H.thành' : 'Hoàn thành', fmt(x.ht), c('var(--success)'), COLORS.ht) +
+      fig('Còn lại', fmt(left(x)), c(left(x) < 0 ? 'var(--pending)' : 'var(--navy)'), COLORS.conLai) +
+      fig('Phế', fmt(x.phe), c(x.phe > 0 ? 'var(--scrap)' : 'var(--muted)'), COLORS.phe) + '</div>';
+  }
+  function barLabel(x, text) {
+    return 'role="img" aria-label="' + text + ' ' + fmt(x.giao) + ' ' + UOM + ': hoàn thành ' + fmt(x.ht) +
+      ', phế ' + fmt(x.phe) + ', thu hồi ' + fmt(x.thuHoi) + ', còn lại ' + fmt(left(x)) + '"';
+  }
+  function detailNew(x) {
+    return '<div class="card">' + topFigs(x, false) +
+      '<div class="bar" ' + barLabel(x, 'Tổng giao') + '>' + segments(x, false) + '</div>' +
+      '<div class="ruler"><span>Tổng giao <b>' + fmt(x.giao) + '</b> ' + UOM + '</span></div>' +
+      overNote(x) + foot(x) + '</div>';
+  }
+  function detailAlt(x) {
+    return '<div class="card">' + topFigs(x, false) +
+      '<div class="bar" ' + barLabel(x, 'Tổng giao') + '>' + segments(x, false) + '</div>' +
+      '<div class="ends"><span>0</span><span>Tổng giao <b>' + fmt(x.giao) + '</b></span></div>' +
+      overNote(x) + foot(x) + '</div>';
+  }
+
+  function head(x) {
+    var done = left(x) <= 0;
+    return '<div class="card-head"><div class="who"><b>' + x.name + '</b><small>' + x.code + ' · ' + x.dept + '</small></div>' +
+      '<span class="chip ' + (done ? 'done' : 'doing') + '">' + (done ? 'HOÀN THÀNH' : 'ĐANG THỰC HIỆN') + '</span></div>';
+  }
+  function overviewNow(x) {
+    var whole = Math.max(x.giao - x.thuHoi, x.ht + x.phe, 1);
+    return '<div class="card" style="border-radius:12px;gap:10px">' + head(x) +
+      '<div class="bar thin"><i style="width:' + x.ht / whole * 100 + '%;background:' + (left(x) <= 0 ? COLORS.ht : COLORS.gold) + '"></i>' +
+      '<i style="width:' + x.phe / whole * 100 + '%;background:' + COLORS.phe + '"></i></div>' +
+      '<div class="figs c5 plain">' + fig('Giao', fmt(x.giao)) + fig('Thu hồi', fmt(x.thuHoi)) + fig('H.thành', fmt(x.ht)) +
+      fig('Phế', fmt(x.phe)) + fig('Còn lại', fmt(left(x))) + '</div></div>';
+  }
+  function overviewNew(x) {
+    return '<div class="card" style="border-radius:12px;gap:10px">' + head(x) + topFigs(x, true) +
+      '<div class="bar" ' + barLabel(x, 'Giao') + '>' + segments(x, false) + '</div>' +
+      '<div class="ends"><span>0</span><span>Giao <b>' + fmt(x.giao) + '</b></span></div></div>';
+  }
+
+  function render(key) {
+    var x = CASES[key];
+    document.getElementById('d-now').innerHTML = detailNow(x);
+    document.getElementById('d-new').innerHTML = detailNew(x);
+    document.getElementById('d-alt').innerHTML = detailAlt(x);
+    document.getElementById('o-now').innerHTML = overviewNow(x);
+    document.getElementById('o-new').innerHTML = overviewNew(x);
+    document.querySelectorAll('.switch button').forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.case === key));
+    });
+  }
+  document.querySelectorAll('.switch button').forEach(function (b) {
+    b.addEventListener('click', function () { render(b.dataset.case); });
+  });
+  render('mixed');
+})();
+</script>

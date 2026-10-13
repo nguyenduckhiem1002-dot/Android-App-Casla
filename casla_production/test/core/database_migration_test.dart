@@ -422,6 +422,82 @@ void main() {
     expect(row['setting_key'], 'supervisor_setup:user-a');
     expect(row['setting_value'], '{"ShiftID":"NIGHT"}');
   });
+
+  test(
+    'v14 -> v15 adds the assignment position without touching rows',
+    () async {
+      final db = await openDatabase(inMemoryDatabasePath, version: 14);
+      addTearDown(db.close);
+      // Only the columns v15 must leave alone: it appends two nullable ones.
+      await db.execute('''
+        CREATE TABLE assignments (
+          id TEXT PRIMARY KEY,
+          nhan_vien_id TEXT NOT NULL,
+          don_hang_id TEXT NOT NULL,
+          to_id TEXT NOT NULL,
+          sync_status TEXT NOT NULL,
+          idempotency_key TEXT NOT NULL UNIQUE,
+          created_at_utc INTEGER NOT NULL
+        )
+      ''');
+      await db.insert('assignments', {
+        'id': 'a-1',
+        'nhan_vien_id': 'emp-1',
+        'don_hang_id': 'ord-1',
+        'to_id': 'team-1',
+        'sync_status': 'PENDING',
+        'idempotency_key': 'key-1',
+        'created_at_utc': 1,
+      });
+
+      await migrate(db, 14, 15);
+      // Running it twice must be harmless, like every additive step.
+      await migrate(db, 14, 15);
+
+      final row = (await db.query('assignments')).single;
+      expect(row['idempotency_key'], 'key-1');
+      expect(row.containsKey('position_id'), isTrue);
+      expect(row['position_id'], isNull);
+      expect(row.containsKey('machine_id'), isTrue);
+    },
+  );
+
+  test('v17 -> v18 leaves queued rows without an entry time', () async {
+    final db = await openDatabase(inMemoryDatabasePath, version: 17);
+    addTearDown(db.close);
+    const tables = ['assignments', 'production_records', 'recall_records'];
+    for (final table in tables) {
+      // Only the columns v18 must leave alone: it appends two nullable ones.
+      await db.execute('''
+        CREATE TABLE $table (
+          id TEXT PRIMARY KEY,
+          occurred_at_utc INTEGER NOT NULL,
+          sync_status TEXT NOT NULL,
+          idempotency_key TEXT NOT NULL UNIQUE
+        )
+      ''');
+      await db.insert(table, {
+        'id': 'queued',
+        'occurred_at_utc': 1788807600000,
+        'sync_status': 'PENDING',
+        'idempotency_key': 'key-$table',
+      });
+    }
+
+    await migrate(db, 17, 18);
+    // Running it twice must be harmless, like every additive step.
+    await migrate(db, 17, 18);
+
+    for (final table in tables) {
+      final row = (await db.query(table)).single;
+      expect(row['occurred_at_utc'], 1788807600000, reason: table);
+      // NULL is what keeps such a row on the UTC format when it is retried.
+      expect(row.containsKey('entry_date'), isTrue, reason: table);
+      expect(row['entry_date'], isNull, reason: table);
+      expect(row.containsKey('entry_time'), isTrue, reason: table);
+      expect(row['entry_time'], isNull, reason: table);
+    }
+  });
 }
 
 /// The three transaction tables exactly as `createSchema` shipped them at v5,

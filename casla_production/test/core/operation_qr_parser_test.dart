@@ -7,6 +7,8 @@ void main() {
         '{"ProductionOrder":"000001000020",'
         '"Operation":"0010","ProductCode":"200009017",'
         '"ProductName":"XE-EU24122750-G-V1-2cm","Plant":"6711",'
+        '"bo_phan":"GẤP TÚI VIỀN-XM1",'
+        '"salesorder":"5000012345","salesorderitem":"000010",'
         '"WorkCenter":"67110016","OperationQuantity":"4.000,000 KG",'
         '"UnitOfMeasure":"KG"}';
 
@@ -18,6 +20,9 @@ void main() {
     expect(result.productName, 'XE-EU24122750-G-V1-2cm');
     expect(result.operationQuantity, 4000);
     expect(result.plant, '6711');
+    expect(result.boPhan, 'GẤP TÚI VIỀN-XM1');
+    expect(result.salesOrder, '5000012345');
+    expect(result.salesOrderItem, '000010');
     expect(result.rawPayload, raw);
   });
 

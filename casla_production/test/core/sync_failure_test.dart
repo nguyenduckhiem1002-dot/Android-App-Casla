@@ -28,6 +28,57 @@ DioException _dio(DioExceptionType type, {int? status, Object? body}) {
 }
 
 void main() {
+  test('permission failures use their code-specific messages', () {
+    expect(
+      friendlySapErrorMessage(const SapBusinessError('MISSING_PERMISSION')),
+      'Tài khoản không có quyền thực hiện chức năng này.',
+    );
+    const scopeMessage =
+        'Công đoạn được giao không thuộc phiên làm việc được chọn.';
+    for (final code in [
+      'WORK_CONTEXT_NOT_ALLOWED',
+      'WORKER_NOT_ALLOWED',
+      'WORK_CONTEXT_MISMATCH',
+    ]) {
+      expect(friendlySapErrorMessage(SapBusinessError(code)), scopeMessage);
+      expect(classifySyncError(SapBusinessError(code)).message, scopeMessage);
+    }
+  });
+
+  test('an unknown position tells the supervisor where to create it', () {
+    const error = SapBusinessError('POSITION_NOT_ACTIVE');
+
+    expect(
+      friendlySapErrorMessage(error),
+      'Vị trí chưa tồn tại trên hệ thống. Vui lòng tạo ở phần Vị trí.',
+    );
+    // Retrying the same label cannot succeed until the position exists.
+    expect(classifySyncError(error).kind, SyncFailureKind.permanent);
+  });
+
+  test('RAP behavior failures show a supportable history message', () {
+    expect(
+      friendlySapErrorMessage(const SapBusinessError('SABP_BEHV/100')),
+      contains('kiểm tra log ST22'),
+    );
+  });
+
+  test('action wrapper exposes the nested SAP business failure', () {
+    const error = SapBusinessError(
+      'CONFIRM_INPUT_INVALID',
+      message: 'SHIFT_WORK_DATE_MISMATCH',
+    );
+
+    expect(
+      friendlySapErrorMessage(error),
+      contains('Ngày làm việc đã lưu không khớp'),
+    );
+    final failure = classifySyncError(error);
+    expect(failure.code, 'SHIFT_WORK_DATE_MISMATCH');
+    expect(failure.kind, SyncFailureKind.permanent);
+    expect(failure.message, isNot(contains('CONFIRM_INPUT_INVALID')));
+  });
+
   test('SAP XML parser response is a payload error, not worker rejection', () {
     final error = _dio(
       DioExceptionType.badResponse,
@@ -195,6 +246,75 @@ void main() {
       expect(odataErrorMessage(error), 'SHIFT_NOT_APPLICABLE');
     });
 
+    test('reads the RAP business code from nested reported details', () {
+      final error = _dio(
+        DioExceptionType.badResponse,
+        status: 400,
+        body: {
+          'error': {
+            'code': 'SABP_BEHV/100',
+            'message': {'value': 'Business validation failed'},
+            'innererror': {
+              'errordetails': [
+                {
+                  'code': 'WORKER_OPERATION_NOT_ALLOWED',
+                  'message': 'WORKER_OPERATION_NOT_ALLOWED',
+                },
+              ],
+            },
+          },
+        },
+      );
+
+      expect(odataErrorMessage(error), 'WORKER_OPERATION_NOT_ALLOWED');
+      expect(
+        () => rethrowAsBusinessError(error),
+        throwsA(
+          isA<SapBusinessError>().having(
+            (item) => item.code,
+            'code',
+            'WORKER_OPERATION_NOT_ALLOWED',
+          ),
+        ),
+      );
+      expect(
+        classifySyncError(
+          const SapBusinessError(
+            'WORKER_OPERATION_NOT_ALLOWED',
+            message: 'Business validation failed',
+          ),
+        ).message,
+        'Công nhân không có quyền với bộ phận của công đoạn.',
+      );
+    });
+
+    test('preserves human SAP text that ends with an uppercase word', () {
+      final error = _dio(
+        DioExceptionType.badResponse,
+        status: 400,
+        body: {
+          'error': {
+            'code': 'SABP_BEHV/100',
+            'message': 'Không tìm thấy lệnh sản xuất trên SAP',
+          },
+        },
+      );
+
+      expect(odataErrorMessage(error), 'Không tìm thấy lệnh sản xuất trên SAP');
+      expect(
+        () => rethrowAsBusinessError(error),
+        throwsA(
+          isA<SapBusinessError>()
+              .having((item) => item.code, 'code', 'SABP_BEHV/100')
+              .having(
+                (item) => item.message,
+                'message',
+                'Không tìm thấy lệnh sản xuất trên SAP',
+              ),
+        ),
+      );
+    });
+
     test('identifies a service binding missing the shift parameters', () {
       final error = _dio(
         DioExceptionType.badResponse,
@@ -220,6 +340,48 @@ void main() {
       );
     });
 
+    test(
+      'preserves a namespaced OData code and human message through classification',
+      () {
+        final error = _dio(
+          DioExceptionType.badResponse,
+          status: 400,
+          body: {
+            'error': {
+              'code': '/IWCOR/CX_OD_BAD_REQUEST',
+              'message': 'Yêu cầu không hợp lệ trên SAP',
+            },
+          },
+        );
+
+        try {
+          rethrowAsBusinessError(error);
+        } catch (converted) {
+          expect(converted, isA<SapBusinessError>());
+          final business = converted as SapBusinessError;
+          expect(business.code, '/IWCOR/CX_OD_BAD_REQUEST');
+          expect(business.message, 'Yêu cầu không hợp lệ trên SAP');
+
+          final failure = classifySyncError(business);
+          expect(failure.kind, SyncFailureKind.permanent);
+          expect(failure.code, '/IWCOR/CX_OD_BAD_REQUEST');
+          expect(failure.message, 'Yêu cầu không hợp lệ trên SAP');
+          expect(
+            friendlySapErrorMessage(business),
+            'Yêu cầu không hợp lệ trên SAP',
+          );
+        }
+      },
+    );
+
+    test('does not classify a namespaced token suffix as auth', () {
+      final failure = classifySyncError(
+        const SapBusinessError('/ZUI/CX_TOKEN_INVALID_OR_EXPIRED'),
+      );
+      expect(failure.kind, SyncFailureKind.permanent);
+      expect(failure.code, '/ZUI/CX_TOKEN_INVALID_OR_EXPIRED');
+    });
+
     test('falls back to a readable default when SAP sends no envelope', () {
       final failure = classifySyncError(
         _dio(DioExceptionType.badResponse, status: 400, body: 'oops'),
@@ -230,6 +392,55 @@ void main() {
   });
 
   group('ZUI_PP_OPALLOC / ZUI_MOB_AUTH business codes', () {
+    test('new backend codes map by code and preserve retry semantics', () {
+      expect(
+        friendlySapErrorMessage(
+          const SapBusinessError('OPERATION_QUANTITY_EXCEEDED'),
+        ),
+        contains('Tổng giao vượt sản lượng'),
+      );
+      expect(
+        classifySyncError(
+          const SapBusinessError('OPERATION_QUANTITY_EXCEEDED'),
+        ).kind,
+        SyncFailureKind.transient,
+      );
+      expect(
+        classifySyncError(
+          const SapBusinessError(
+            'MANAGER_OPERATION_NOT_ALLOWED',
+            message: 'backend technical text',
+          ),
+        ).kind,
+        SyncFailureKind.permanent,
+      );
+      expect(
+        friendlySapErrorMessage(
+          const SapBusinessError(
+            'WORKER_OPERATION_NOT_ALLOWED',
+            message: 'backend technical text',
+          ),
+        ),
+        'Công nhân không có quyền với bộ phận của công đoạn.',
+      );
+      expect(
+        classifySyncError(const SapBusinessError('EMPTY_TOKEN')).kind,
+        SyncFailureKind.auth,
+      );
+      expect(
+        classifySyncError(
+          const SapBusinessError('WORKER_BALANCE_DUPLICATE'),
+        ).kind,
+        SyncFailureKind.permanent,
+      );
+      expect(
+        classifySyncError(
+          const SapBusinessError('UNIT_OF_MEASURE_MISMATCH'),
+        ).kind,
+        SyncFailureKind.permanent,
+      );
+    });
+
     test('TOKEN_INVALID_OR_EXPIRED is refreshable, not permanent', () {
       final failure = classifySyncError(
         const SapBusinessError('TOKEN_INVALID_OR_EXPIRED'),

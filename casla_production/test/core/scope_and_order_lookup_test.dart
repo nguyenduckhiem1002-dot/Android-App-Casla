@@ -19,6 +19,32 @@ void main() {
     db = CaslaDatabase.instance;
   });
 
+  test(
+    'manual selection includes cached identities without granting team scope',
+    () async {
+      final cached = await db.acceptWorkerQr(
+        code: 'CACHE-1',
+        name: 'Cached Worker',
+      );
+      await db.acceptWorkerQr(code: 'EXPIRED-1', validTo: DateTime(2020));
+      await db.upsertEmployeesBatch([
+        {'worker_id': 'HISTORY-1', 'worker_name': 'History Worker'},
+      ]);
+      final rows = await db.getWorkersForManualSelection(['team-2']);
+      expect(
+        rows.map((e) => e['ma_nv']),
+        containsAll(['CACHE-1', 'HISTORY-1']),
+      );
+      expect(rows.map((e) => e['ma_nv']), isNot(contains('EXPIRED-1')));
+      expect(rows.map((e) => e['id']), isNot(contains('emp-2')));
+      expect(
+        await db.isEmployeeInScope(cached['id'] as String, ['team-2']),
+        isFalse,
+      );
+      expect(await db.getWorkersForManualSelection([]), isEmpty);
+    },
+  );
+
   group('getEmployeesByTeamIds', () {
     test('returns only workers in the requested teams', () async {
       // Seed: emp-2 is in team-1; emp-1 and emp-5 and emp-6 are in team-2.
@@ -187,6 +213,67 @@ void main() {
       expect(second.hasMore, isFalse);
       expect(second.pendingCount, 2);
     });
+
+    test(
+      'hides terminal failures after the ten-minute visibility window',
+      () async {
+        final now = DateTime.now().toUtc().millisecondsSinceEpoch;
+        Future<void> addFailed(String suffix, int updatedAt) {
+          return db.createAssignmentAtomically(
+            assignment: {
+              'id': 'expiry-assignment-$suffix',
+              'nhan_vien_id': 'emp-1',
+              'don_hang_id': 'ord-1',
+              'to_id': 'team-2',
+              'assigned_quantity': 10.0,
+              'business_date': '2026-09-05',
+              'shift_id': 'SHIFT_1',
+              'status': 'OPEN',
+              'created_by': 'SUP-A',
+              'occurred_at_utc': updatedAt,
+              'device_id': 'TEST',
+              'sync_status': 'FAILED',
+              'idempotency_key': 'expiry-assignment-$suffix',
+              'created_at_utc': updatedAt,
+            },
+            queueItem: {
+              'id': 'expiry-queue-$suffix',
+              'entity_type': 'ASSIGNMENT',
+              'entity_id': 'expiry-assignment-$suffix',
+              'action': 'CREATE',
+              'created_at_utc': updatedAt,
+              'updated_at_utc': updatedAt,
+              'retry_count': 1,
+              'status': 'FAILED',
+              'last_error_code': 'MANUFACTURING_ORDER_NOT_FOUND',
+              'last_error_message': 'Không tìm thấy lệnh sản xuất trên SAP.',
+            },
+            auditLog: {
+              'id': 'expiry-audit-$suffix',
+              'occurred_at_utc': updatedAt,
+            },
+          );
+        }
+
+        await addFailed(
+          'old',
+          now - syncFailureVisibilityDuration.inMilliseconds - 1,
+        );
+        await addFailed('fresh', now);
+
+        final page = await db.getSyncFeedPage(
+          actorId: 'SUP-A',
+          teamIds: ['team-2'],
+          filter: SyncFeedFilter.failed,
+        );
+
+        expect(page.items.map((item) => item['id']), ['expiry-queue-fresh']);
+        expect(page.failedCount, 1);
+        expect(page.totalCount, 1);
+        // Expiry only changes feed visibility; the old failure remains auditable.
+        expect(await db.getSyncQueueItemById('expiry-queue-old'), isNotNull);
+      },
+    );
   });
 
   group('isEmployeeInScope', () {

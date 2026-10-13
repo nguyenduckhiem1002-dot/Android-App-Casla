@@ -55,6 +55,22 @@ class ProductionMath {
     return (effectiveAssigned - completed).clamp(0.0, double.infinity);
   }
 
+  /// Convert a supervisor-entered post-confirmation balance into the quantity
+  /// to record. Both values are resolved at SAP's 3-decimal scale first, so a
+  /// valid decimal balance cannot be rejected because of binary double noise.
+  /// Invalid or out-of-range balances return zero; callers should validate the
+  /// input with [exceedsAtSapScale] before presenting a save action.
+  static double calculateCompletionFromRemaining(
+    double remainingMax,
+    double enteredRemaining,
+  ) {
+    if (!remainingMax.isFinite || !enteredRemaining.isFinite) return 0.0;
+    final max = toSapScale(remainingMax);
+    final entered = toSapScale(enteredRemaining);
+    if (entered < 0 || exceedsAtSapScale(entered, max)) return 0.0;
+    return toSapScale(max - entered);
+  }
+
   /// Có thể thu hồi = Giao ban đầu − Hoàn thành − Đã thu hồi
   static double calculateMaxRecall(
     double assigned,
@@ -77,16 +93,16 @@ class ProductionMath {
     return (completed / effectiveAssigned).clamp(0.0, 1.0);
   }
 
-  /// Validate ghi nhận sản lượng (Spec 3.1: 0 < newCompletion <= remaining)
-  static String? validateProductionEntry(double newQuantity, double remaining) {
-    if (!newQuantity.isFinite || !remaining.isFinite) {
+  /// Validate ghi nhận sản lượng: số hoàn thành phải là số dương.
+  ///
+  /// Vượt số còn lại không còn là lỗi: người quản lý được xác nhận nhiều hơn
+  /// số đã giao, màn hình chỉ cảnh báo (xem [exceedsAtSapScale]).
+  static String? validateProductionEntry(double newQuantity) {
+    if (!newQuantity.isFinite) {
       return 'Số lượng hoàn thành không hợp lệ';
     }
     if (newQuantity <= 0) {
       return 'Số lượng hoàn thành phải lớn hơn 0';
-    }
-    if (exceedsAtSapScale(newQuantity, remaining)) {
-      return 'Số lượng vượt quá số lượng còn lại (${formatQuantity(remaining)})';
     }
     return null;
   }

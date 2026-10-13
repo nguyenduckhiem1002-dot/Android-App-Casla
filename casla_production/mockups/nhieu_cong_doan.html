@@ -1,0 +1,694 @@
+<title>Giao và xác nhận nhiều công đoạn</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=Inter:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: review canvas — live PDA prototype (Phân công + Xác nhận) on the left, the four changes, demo controls and open questions on the right; stacks on phones. */
+:root {
+  --pg-bg: #ECEEF3; --pg-card: #FFFFFF; --pg-fg: #16234A; --pg-muted: #596274; --pg-line: #D8DCE5;
+  --pg-accent: #7A5A18; --pg-accent-bg: #F6EAD2; --pg-chip: #E4E8F1; --bezel: #0E1730;
+
+  /* Device screen: the Casla app has a light theme only */
+  --navy: #16234A; --navy-700: #1D2E5C; --navy-900: #0E1730; --navy-100: #EDF1F5;
+  --gold: #C9A24B; --gold-100: #F6EAD2; --gold-700: #765515;
+  --app-bg: #F5F6F8; --surface: #FFFFFF; --line: #E7E9EE; --muted: #626A78; --muted-100: #EEF0F3; --id-meta: #B9C2E4;
+  --success: #2E7D32; --success-bg: #E5F2E6; --danger: #C62828; --danger-bg: #FBEAEA;
+  --pending: #85601A; --pending-bg: #FBF1DD; --on-navy: #FFFFFF; --scrim: rgba(14, 23, 48, .55); --cam: #05080F;
+
+  --f-display: "Manrope", "Segoe UI", system-ui, sans-serif;
+  --f-body: "Inter", "Segoe UI", system-ui, sans-serif;
+  --f-mono: ui-monospace, "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  --r-sm: 8px; --r-md: 12px; --r-lg: 16px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --pg-bg: #0B1022; --pg-card: #131A31; --pg-fg: #E5E9F5; --pg-muted: #A0A9C6; --pg-line: #273153;
+    --pg-accent: #E0BE6E; --pg-accent-bg: #2A2413; --pg-chip: #1C2542; --bezel: #020409; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --pg-bg: #0B1022; --pg-card: #131A31; --pg-fg: #E5E9F5; --pg-muted: #A0A9C6; --pg-line: #273153;
+  --pg-accent: #E0BE6E; --pg-accent-bg: #2A2413; --pg-chip: #1C2542; --bezel: #020409; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { background: var(--pg-bg); color: var(--pg-fg); font-family: var(--f-body); font-size: 15px; line-height: 1.5; padding-inline: 16px; }
+button { font: inherit; color: inherit; cursor: pointer; touch-action: manipulation; }
+button:disabled { cursor: not-allowed; }
+:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+.page { max-width: 1160px; margin: 0 auto; padding-block: 28px 48px; display: grid; grid-template-columns: 404px minmax(0, 1fr); gap: 40px; align-items: start; }
+@media (max-width: 920px) { .page { grid-template-columns: minmax(0, 1fr); gap: 28px; } }
+
+/* ---------- device ---------- */
+.device-col { display: grid; justify-items: center; gap: 12px; }
+@media (min-width: 921px) and (min-height: 900px) { .device-col { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 20px); } }
+.device { width: 404px; max-width: 100%; height: 840px; padding: 12px; border-radius: 48px; background: var(--bezel); box-shadow: 0 30px 60px -30px rgba(14, 23, 48, .55); }
+.screen { position: relative; height: 100%; border-radius: 37px; overflow: hidden; background: var(--app-bg); color: var(--navy); display: flex; flex-direction: column; font-size: 14px; }
+@media (max-width: 460px) {
+  .device { padding: 0; border-radius: 22px; height: 780px; box-shadow: none; background: transparent; }
+  .screen { border-radius: 22px; border: 1px solid var(--pg-line); }
+}
+.device-caption { font-size: 13px; color: var(--pg-muted); text-align: center; max-width: 40ch; }
+.statusbar { background: var(--navy); color: var(--on-navy); display: flex; justify-content: space-between; padding: 10px 26px 4px; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.appbar { background: var(--navy); color: var(--on-navy); padding: 6px 8px 12px 16px; display: flex; align-items: center; gap: 8px; }
+.appbar .t { flex: 1; min-width: 0; }
+.appbar h1 { margin: 0; font-family: var(--f-display); font-weight: 800; font-size: 20px; line-height: 1.25; }
+.appbar .sub { font-size: 12px; color: var(--id-meta); }
+.avatar { width: 36px; height: 36px; margin: 4px; border-radius: 50%; border: 2px solid var(--gold); background: var(--navy-700); color: var(--on-navy); font-family: var(--f-display); font-weight: 800; font-size: 13px; display: grid; place-items: center; flex: none; }
+.strip { display: flex; gap: 8px; align-items: center; padding: 8px 16px; font-size: 12.5px; font-weight: 600; background: var(--success-bg); color: var(--success); }
+.body { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 14px; }
+
+.label { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; font-weight: 700; color: var(--navy); }
+.label > span:first-child { flex: 1; }
+.req { color: var(--danger); }
+.label .aside { font-size: 12px; font-weight: 700; color: var(--muted); }
+.link { border: 0; background: transparent; padding: 2px 0; font-size: 12.5px; font-weight: 700; color: var(--navy); text-decoration: underline; text-underline-offset: 3px; }
+
+/* operation cards */
+.ops { display: grid; gap: 8px; }
+.op { background: var(--success-bg); border: 1.2px solid var(--success); border-radius: var(--r-md); }
+.op.warn { background: var(--pending-bg); border-color: var(--pending); }
+.op-head { display: flex; align-items: center; gap: 10px; padding: 4px 4px 4px 12px; min-height: 52px; }
+.op-head > svg { color: var(--success); width: 22px; height: 22px; }
+.op.warn .op-head > svg { color: var(--pending); }
+.op-title { flex: 1; min-width: 0; border: 0; background: transparent; text-align: left; padding: 6px 0; display: grid; gap: 1px; }
+.op-title b { font-size: 14px; font-weight: 700; overflow-wrap: anywhere; }
+.op-title small { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tag { display: inline-block; font-size: 11px; font-weight: 800; padding: 1px 7px; border-radius: 99px; background: var(--surface); border: 1px solid currentColor; }
+.tag.min { color: var(--gold-700); }
+.icon-btn { width: 44px; height: 44px; border: 0; background: transparent; border-radius: 50%; display: grid; place-items: center; color: var(--muted); flex: none; }
+.icon-btn:hover { background: rgba(22,35,74,.07); }
+.icon-btn.navy { color: var(--navy); }
+.op-warn { display: flex; gap: 8px; align-items: flex-start; padding: 0 12px 10px 44px; font-size: 12.5px; font-weight: 600; color: var(--pending); line-height: 1.35; }
+.op-warn svg { width: 16px; height: 16px; margin-top: 1px; }
+.op-detail { padding: 0 12px 12px 44px; display: grid; gap: 6px; }
+.op-detail .info-row { grid-template-columns: 108px minmax(0, 1fr); }
+.op-detail .sec { display: flex; gap: 6px; align-items: center; font-size: 12.5px; font-weight: 800; color: var(--navy); }
+.op-detail .sec svg { width: 15px; height: 15px; }
+.op-detail .note { font-size: 12px; color: var(--muted); }
+.op .chev { transition: transform .15s; }
+.op.open .chev { transform: rotate(90deg); }
+.op-title:disabled { cursor: default; color: inherit; }
+.metric { background: var(--surface); border-radius: var(--r-sm); padding: 7px 12px; display: flex; justify-content: space-between; gap: 8px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.metric b { font-family: var(--f-display); text-align: right; }
+.add-op { min-height: 48px; border: 1.5px dashed var(--navy); background: var(--surface); color: var(--navy); border-radius: var(--r-md); font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 8px; }
+.add-op:hover { background: var(--navy-100); }
+.add-op .plus { width: 24px; height: 24px; border-radius: 50%; background: var(--navy); color: var(--on-navy); display: grid; place-items: center; }
+.add-op .plus svg { width: 16px; height: 16px; stroke-width: 2.6; }
+.empty-slot { background: var(--surface); border: 2px solid var(--navy); border-radius: var(--r-md); min-height: 56px; display: flex; align-items: center; gap: 12px; padding: 0 12px; color: var(--muted); font-weight: 700; }
+
+/* generic scan slot */
+.slot { background: var(--surface); border: 1.2px solid var(--line); border-radius: var(--r-md); }
+.slot.filled { background: var(--success-bg); border-color: var(--success); }
+.slot-row { display: flex; align-items: center; padding: 4px 4px 4px 12px; gap: 10px; min-height: 52px; }
+.slot-row > svg { width: 22px; height: 22px; color: var(--muted); }
+.slot.filled .slot-row > svg { color: var(--success); }
+.slot-val { flex: 1; min-width: 0; font-weight: 700; color: var(--muted); }
+.slot.filled .slot-val { color: var(--navy); }
+.slot-info { padding: 0 12px 10px 44px; display: grid; gap: 2px; }
+.info-row { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+.info-row .k { font-size: 12px; font-weight: 600; color: var(--muted); }
+.info-row .v { font-size: 14px; font-weight: 700; overflow-wrap: anywhere; }
+.kv { display: flex; flex-wrap: wrap; column-gap: 10px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.kv small { font-size: 12.5px; font-weight: 600; color: var(--muted); margin-right: 4px; }
+.warn-line { display: flex; gap: 8px; align-items: flex-start; padding: 8px 12px; border-radius: var(--r-sm); background: var(--pending-bg); color: var(--pending); font-size: 12.5px; font-weight: 600; line-height: 1.35; }
+.warn-line svg { width: 16px; height: 16px; margin-top: 1px; }
+
+/* quantity */
+.qty { display: grid; gap: 8px; }
+.remain { display: grid; gap: 2px; padding: 10px 12px; border-radius: var(--r-sm); background: var(--pending-bg); color: var(--pending); font-variant-numeric: tabular-nums; }
+.remain .row { display: flex; justify-content: space-between; gap: 8px; font-weight: 700; }
+.remain small { font-size: 12px; font-weight: 600; }
+.qty-input { display: flex; align-items: center; gap: 8px; border: 1.5px solid var(--line); border-radius: var(--r-sm); background: var(--surface); padding: 0 6px 0 14px; min-height: 52px; }
+.qty-input.bad { border-color: var(--danger); }
+.qty-input input { flex: 1; min-width: 0; border: 0; outline: 0; font: 700 18px var(--f-display); color: var(--navy); background: transparent; }
+.qty-input span { color: var(--muted); font-weight: 600; }
+.qty-input:focus-within { border-color: var(--navy); }
+.chip-btn { border: 1px solid var(--navy); background: var(--surface); color: var(--navy); border-radius: 99px; padding: 0 12px; min-height: 36px; font-size: 12.5px; font-weight: 700; white-space: nowrap; }
+.err { font-size: 12.5px; font-weight: 600; color: var(--danger); }
+.each { font-size: 12.5px; color: var(--muted); }
+
+/* confirm list */
+.check-row { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); }
+.check-row.on { border-color: var(--navy); background: var(--navy-100); }
+.check-row.done { opacity: .55; }
+.check-head { display: flex; align-items: center; min-height: 52px; }
+.check-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 8px 4px 8px 12px; cursor: pointer; }
+.check-main input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.box { width: 22px; height: 22px; border-radius: 6px; border: 2px solid var(--muted); background: var(--surface); display: grid; place-items: center; color: transparent; flex: none; }
+.box svg { width: 15px; height: 15px; stroke-width: 3; }
+.check-main input:checked + .box { background: var(--navy); border-color: var(--navy); color: var(--on-navy); }
+.check-main input:focus-visible + .box { outline: 3px solid var(--gold); outline-offset: 2px; }
+.check-main b { font-size: 14.5px; font-weight: 700; overflow-wrap: anywhere; }
+.chev { transition: transform .15s; }
+.check-row.open .chev { transform: rotate(90deg); }
+.check-detail { padding: 0 12px 12px 46px; display: grid; gap: 2px; }
+.worker-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px; display: flex; gap: 12px; align-items: center; }
+.worker-card .who { flex: 1; min-width: 0; }
+.worker-card .who b { display: block; font-family: var(--f-display); font-size: 16px; }
+.worker-card .who small { font-size: 12.5px; color: var(--muted); }
+.initials { width: 44px; height: 44px; border-radius: 50%; background: var(--navy-100); display: grid; place-items: center; font-family: var(--f-display); font-weight: 800; flex: none; }
+
+.cta { background: var(--surface); border-top: 1px solid var(--line); padding: 10px 14px; }
+.btn { min-height: 48px; border-radius: var(--r-md); border: 1.5px solid var(--navy); background: var(--surface); color: var(--navy); font-weight: 700; font-size: 14px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 14px; }
+.btn.gold { background: var(--gold); border-color: var(--gold); color: var(--navy-900); }
+.btn.navy { background: var(--navy); color: var(--on-navy); }
+.btn.wide { width: 100%; min-height: 52px; font-size: 15px; }
+.btn:disabled { opacity: .45; }
+.nav { background: var(--surface); border-top: 1px solid var(--line); display: grid; grid-template-columns: repeat(5, 1fr); padding: 4px 4px 14px; }
+.nav button { border: 0; background: transparent; min-height: 56px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 11.5px; color: var(--muted); }
+.nav .pill { width: 56px; height: 30px; border-radius: 99px; display: grid; place-items: center; }
+.nav button[aria-current="page"] { color: var(--navy); font-weight: 700; }
+.nav button[aria-current="page"] .pill { background: var(--gold-100); }
+.placeholder { margin: auto 0; text-align: center; color: var(--muted); padding: 24px; display: grid; gap: 8px; }
+.placeholder h3 { margin: 0; color: var(--navy); font-family: var(--f-display); font-size: 17px; }
+
+/* overlays */
+.layer { position: absolute; inset: 0; z-index: 20; display: flex; align-items: flex-end; }
+.layer.center { align-items: center; padding: 20px; }
+.scrim { position: absolute; inset: 0; background: var(--scrim); }
+.sheet { position: relative; width: 100%; max-height: 88%; overflow-y: auto; background: var(--surface); border-radius: 22px 22px 0 0; padding: 8px 18px 22px; animation: rise .22s cubic-bezier(.2,.8,.2,1); }
+.dialog { position: relative; width: 100%; max-height: 100%; overflow-y: auto; background: var(--surface); border-radius: 22px; padding: 22px 20px 18px; }
+@keyframes rise { from { transform: translateY(40px); opacity: .4; } }
+@media (prefers-reduced-motion: reduce) { .sheet { animation: none; } }
+.grab { width: 40px; height: 4px; border-radius: 99px; background: var(--line); margin: 4px auto 12px; }
+.sheet h3, .dialog h3 { margin: 0; font-family: var(--f-display); font-size: 19px; font-weight: 800; text-wrap: balance; }
+.dialog .ico { width: 52px; height: 52px; border-radius: 50%; background: var(--gold-100); color: var(--gold-700); display: grid; place-items: center; margin: 0 auto 10px; }
+.dialog .ico svg { width: 26px; height: 26px; }
+.dialog h3 { text-align: center; }
+.dialog p { margin: 10px 0 0; font-size: 14px; color: var(--muted); }
+.wlist { margin: 12px 0 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.wlist li { display: flex; gap: 8px; padding: 10px 12px; background: var(--pending-bg); color: var(--pending); border-radius: var(--r-sm); font-size: 13.5px; font-weight: 600; line-height: 1.4; }
+.wlist li svg { width: 17px; height: 17px; margin-top: 1px; }
+.actions { margin-top: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.samples { margin-top: 12px; display: grid; gap: 8px; }
+.sample { display: flex; align-items: center; gap: 10px; text-align: left; min-height: 56px; padding: 8px 12px; border-radius: var(--r-md); border: 1px solid var(--line); background: var(--surface); }
+.sample:hover { background: var(--app-bg); }
+.sample b { display: block; font-size: 14px; }
+.sample small { font-size: 12.5px; color: var(--muted); }
+.cam { height: 150px; border-radius: 16px; background: var(--cam); display: grid; place-items: center; margin-top: 12px; }
+.cam i { width: 100px; height: 100px; border: 3px solid var(--gold); border-radius: 12px; }
+.field { margin-top: 12px; display: grid; gap: 6px; }
+.field label { font-size: 13px; font-weight: 700; }
+.field input { min-height: 50px; border-radius: var(--r-sm); border: 1.5px solid var(--line); padding: 0 14px; font: 600 16px var(--f-body); color: var(--navy); background: var(--surface); }
+.field input:focus { outline: none; border-color: var(--navy); }
+.done-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.done-row:last-of-type { border-bottom: 0; }
+.done-row svg { color: var(--success); }
+.done-row span { flex: 1; min-width: 0; }
+.done-row b { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.toast { position: absolute; left: 14px; right: 14px; bottom: 96px; z-index: 30; background: var(--navy-900); color: var(--on-navy); padding: 12px 14px; border-radius: var(--r-md); font-size: 13.5px; display: flex; gap: 10px; align-items: center; }
+
+/* ---------- review panel ---------- */
+.panel { display: grid; gap: 22px; min-width: 0; }
+.panel header .kicker { font-size: 12.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--pg-accent); }
+.panel header h1 { margin: 6px 0 8px; font-family: var(--f-display); font-weight: 800; font-size: clamp(26px, 4vw, 36px); line-height: 1.15; text-wrap: balance; }
+.panel header p { margin: 0; max-width: 64ch; color: var(--pg-muted); }
+.card { background: var(--pg-card); border: 1px solid var(--pg-line); border-radius: var(--r-lg); padding: 20px; display: grid; gap: 14px; min-width: 0; }
+.card h2 { margin: 0; font-family: var(--f-display); font-size: 18px; font-weight: 800; }
+.card > p { margin: 0; color: var(--pg-muted); font-size: 14px; max-width: 66ch; }
+.changes { margin: 0; padding: 0; list-style: none; display: grid; gap: 14px; }
+.changes li { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 12px; }
+.changes .n { width: 30px; height: 30px; border-radius: 50%; background: var(--pg-accent-bg); color: var(--pg-accent); font-family: var(--f-display); font-weight: 800; display: grid; place-items: center; }
+.changes b { display: block; font-size: 15px; }
+.changes span { font-size: 14px; color: var(--pg-muted); }
+.ctl-group { display: grid; gap: 8px; }
+.ctl-group .lab { font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--pg-muted); }
+.ctl-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; }
+.ctl { text-align: left; border: 1px solid var(--pg-line); background: var(--pg-card); color: var(--pg-fg); border-radius: var(--r-md); padding: 10px 12px; display: grid; gap: 2px; }
+.ctl:hover { border-color: var(--pg-accent); }
+.ctl[aria-pressed="true"] { border-color: var(--pg-accent); background: var(--pg-accent-bg); }
+.ctl b { font-size: 14px; }
+.ctl span { font-size: 12.5px; color: var(--pg-muted); }
+.open-q { margin: 0; padding-left: 20px; display: grid; gap: 10px; font-size: 14px; }
+code { font-family: var(--f-mono); font-size: .92em; }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6M9 16h4"/></symbol>
+  <symbol id="i-scan" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></symbol>
+  <symbol id="i-sync" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 0-15-6.7L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 15 6.7L21 16"/><path d="M16 16h5v5"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-badge" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2"/><path d="M6 16a3 3 0 0 1 6 0M15 10h3M15 14h3"/></symbol>
+  <symbol id="i-box" viewBox="0 0 24 24"><path d="M21 8 12 3 3 8v8l9 5 9-5Z"/><path d="m3 8 9 5 9-5M12 13v8"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4M12 17h.01"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></symbol>
+  <symbol id="i-sensor" viewBox="0 0 24 24"><path d="M5 12a7 7 0 0 1 14 0M8.5 12a3.5 3.5 0 0 1 7 0"/><circle cx="12" cy="12" r="1"/></symbol>
+  <symbol id="i-swap" viewBox="0 0 24 24"><path d="m16 3 4 4-4 4M20 7H4M8 21l-4-4 4-4M4 17h16"/></symbol>
+</svg>
+
+<div class="page">
+  <div class="device-col">
+    <div class="device">
+      <div class="screen">
+        <div class="statusbar" aria-hidden="true"><span id="clock">09:41</span><span>4G · 64%</span></div>
+        <div class="appbar" id="appbar"></div>
+        <div id="strip"></div>
+        <div class="body" id="body"></div>
+        <div class="cta" id="cta"></div>
+        <nav class="nav" id="nav" aria-label="Điều hướng chính"></nav>
+        <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+        <div class="layer" id="layer" hidden></div>
+      </div>
+    </div>
+    <p class="device-caption">Prototype bấm được. Dữ liệu và phản hồi SAP là mô phỏng.</p>
+  </div>
+
+  <main class="panel">
+    <header>
+      <div class="kicker">Casla Production · Phân công &amp; Xác nhận · Bản review</div>
+      <h1>Giao và xác nhận nhiều công đoạn</h1>
+      <p>Một công nhân nhận nhiều công đoạn trong một lần giao, và xác nhận nhiều công đoạn trong một lần bấm. Số lượng nhập một lần, dùng chung cho mọi công đoạn đã chọn, nên không được vượt công đoạn còn ít nhất. Hai kiểm tra bộ phận chuyển từ chặn sang cảnh báo.</p>
+    </header>
+
+    <section class="card" aria-labelledby="h-ch">
+      <h2 id="h-ch">Bốn thay đổi</h2>
+      <ol class="changes">
+        <li><span class="n">1</span><div><b>Phân công: nút (+) quét thêm công đoạn</b><span>Thẻ công đoạn giữ đủ thông tin như hiện tại. Khi quét thêm, mỗi thẻ có mũi tên để thu gọn hoặc mở rộng; thẻ vừa quét mở sẵn, các thẻ trước tự thu gọn. Số lượng giao tối đa bằng số còn lại nhỏ nhất, thẻ đang giới hạn có nhãn "Ít nhất".</span></div></li>
+        <li><span class="n">2</span><div><b>Xác nhận: tích chọn nhiều công đoạn</b><span>Danh sách chỉ hiện tên công đoạn kèm ô tích. Bấm mũi tên để mở chi tiết (lệnh, công đoạn, đã giao, đã xác nhận, còn lại). Số xác nhận tối đa bằng số còn lại nhỏ nhất của các công đoạn đang tích.</span></div></li>
+        <li><span class="n">3</span><div><b>Công đoạn khác bộ phận phiên làm việc: cảnh báo</b><span>Trước đây quét là bị từ chối. Giờ vẫn nhận, thẻ chuyển vàng kèm lý do, và phải bấm "Vẫn giao" ở hộp cảnh báo trước khi gửi.</span></div></li>
+        <li><span class="n">4</span><div><b>Công nhân khác bộ phận của công đoạn: cảnh báo</b><span>Hiện dòng vàng dưới ô Công nhân và nằm chung hộp cảnh báo lúc gửi. Không còn chặn.</span></div></li>
+      </ol>
+    </section>
+
+    <section class="card" aria-labelledby="h-ctl">
+      <h2 id="h-ctl">Chạy thử</h2>
+      <div class="ctl-group">
+        <div class="lab">Phân công · quét thêm công đoạn (giống bấm nút +)</div>
+        <div class="ctl-row" id="ctl-ops"></div>
+      </div>
+      <div class="ctl-group">
+        <div class="lab">Chọn công nhân</div>
+        <div class="ctl-row" id="ctl-workers"></div>
+      </div>
+      <div class="ctl-group">
+        <div class="lab">Khác</div>
+        <div class="ctl-row">
+          <button class="ctl" id="go-confirm"><b>Mở tab Xác nhận</b><span>Tích nhiều công đoạn của công nhân đang chọn</span></button>
+          <button class="ctl" id="reset"><b>Đặt lại dữ liệu</b><span>Quay về trạng thái ban đầu</span></button>
+        </div>
+      </div>
+      <p>Thử nhập số lượng lớn hơn mức tối đa để xem báo lỗi, rồi bấm nút gửi để xem hộp cảnh báo và kết quả từng công đoạn.</p>
+    </section>
+
+    <section class="card" aria-labelledby="h-q">
+      <h2 id="h-q">Cần chốt trước khi code</h2>
+      <ol class="open-q">
+        <li><b>Một con số cho mỗi công đoạn.</b> Nhập 500 với 3 công đoạn nghĩa là mỗi công đoạn giao (hoặc xác nhận) 500, tổng 1.500. Đúng ý chưa?</li>
+        <li><b>Khác đơn vị tính.</b> Bản demo từ chối thêm công đoạn có đơn vị khác (ví dụ ST lẫn CHC), vì không lấy "số nhỏ nhất" giữa hai đơn vị được. Thử bằng công đoạn "Đóng gói".</li>
+        <li><b>Một phần thành công.</b> SAP hiện nhận từng công đoạn một lệnh riêng. Nếu công đoạn thứ 2 bị từ chối thì công đoạn 1 đã ghi rồi. Bản demo hiện kết quả từng dòng; dòng lỗi vào mục Đồng bộ để xử lý lại. Hay cần ABAP nhận cả lô, sai một là hủy hết?</li>
+        <li><b>Số lỗi và thu hồi khi xác nhận nhiều công đoạn.</b> Bản demo chỉ cho nhập số lỗi / thu hồi khi tích đúng một công đoạn.</li>
+        <li><b>Cảnh báo cần sửa cả ABAP.</b> Backend đang trả lỗi cứng <code>OPERATION_DEPARTMENT_MISMATCH</code>, <code>MANAGER_OPERATION_NOT_ALLOWED</code> và <code>WORKER_OPERATION_NOT_ALLOWED</code>. App đổi sang cảnh báo thì SAP vẫn từ chối, trừ khi ABAP bỏ các kiểm tra này hoặc nhận thêm cờ "đã xác nhận cảnh báo".</li>
+        <li><b>Vị trí / mã máy</b> dùng chung cho mọi công đoạn trong một lần giao.</li>
+      </ol>
+    </section>
+  </main>
+</div>
+
+<script>
+(() => {
+  const SESSION_DEPT = 'MAY MIỆNG-XM2';
+  const OPS = {
+    A: { name: 'May miệng túi', po: '100000000123', op: '0010', dept: 'MAY MIỆNG-XM2', uom: 'CHC', total: 10000, assigned: 9200, confirmed: 6100, defect: 40 },
+    B: { name: 'May thân sau', po: '100000000123', op: '0020', dept: 'MAY MIỆNG-XM2', uom: 'CHC', total: 10000, assigned: 9400, confirmed: 5800, defect: 0 },
+    C: { name: 'Đóng nút', po: '100000000123', op: '0030', dept: 'KLQ MAY ĐÁY-XM2', uom: 'CHC', total: 10000, assigned: 8500, confirmed: 4200, defect: 15 },
+    D: { name: 'Đóng gói', po: '100000000123', op: '0040', dept: 'MAY MIỆNG-XM2', uom: 'ST', total: 2000, assigned: 500, confirmed: 300, defect: 0 },
+  };
+  const PRODUCT = { name: 'Quần short nam KLQ', code: '200009410', so: '4500012345 / 10' };
+  const WORKERS = {
+    tham: { code: 'CL400096', name: 'Nguyễn Thị Thắm', dept: 'MAY MIỆNG-XM2', pos: 'G05', mac: 'M105' },
+    hoa: { code: 'CL400130', name: 'Đỗ Thị Hoa', dept: 'KLQ MAY ĐÁY-XM2', pos: 'G12', mac: 'M112' },
+  };
+  let ops, balances;
+  const S = { tab: 'assign', sel: [], open: new Set(), worker: 'tham', qty: '500', cWorker: 'tham', cSel: new Set(), cOpen: new Set(), cQty: '', busy: false };
+
+  const $ = (s) => document.querySelector(s);
+  const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const icon = (n, c = 'i') => `<svg class="${c}" aria-hidden="true"><use href="#i-${n}"/></svg>`;
+  const fmt = (n) => Number(n).toLocaleString('vi-VN');
+  const num = (v) => { const n = Number(String(v).replace(/\./g, '').replace(',', '.')); return Number.isFinite(n) ? n : NaN; };
+  const initials = (name) => { const p = name.trim().split(/\s+/); return (p[p.length - 2][0] + p[p.length - 1][0]).toUpperCase(); };
+  const remaining = (id) => ops[id].total - ops[id].assigned;
+
+  function seed() {
+    ops = JSON.parse(JSON.stringify(OPS));
+    // Per worker: what was assigned and what is already confirmed.
+    balances = {
+      tham: { A: { given: 300, done: 0 }, B: { given: 450, done: 0 }, C: { given: 120, done: 0 } },
+      hoa: { C: { given: 200, done: 50 } },
+    };
+    Object.assign(S, { sel: ['A', 'B'], open: new Set(['B']), worker: 'tham', qty: '500', cWorker: 'tham', cSel: new Set(), cOpen: new Set(), cQty: '', busy: false });
+  }
+
+  /* ----- rules ----- */
+  function minOf(ids, valueOf) {
+    let best = null;
+    ids.forEach((id) => { const v = valueOf(id); if (best === null || v < best.v) best = { id, v }; });
+    return best;
+  }
+  function assignWarnings() {
+    const out = [];
+    const w = S.worker ? WORKERS[S.worker] : null;
+    S.sel.forEach((id) => {
+      const o = ops[id];
+      if (o.dept !== SESSION_DEPT) out.push(`Công đoạn ${o.name} thuộc bộ phận ${o.dept}, còn phiên làm việc đang chọn là ${SESSION_DEPT}.`);
+      if (w && w.dept !== o.dept) out.push(`Công nhân ${w.name} thuộc bộ phận ${w.dept}, khác bộ phận ${o.dept} của công đoạn ${o.name}.`);
+    });
+    return out;
+  }
+  function confirmWarnings() {
+    const w = WORKERS[S.cWorker];
+    return [...S.cSel].filter((id) => ops[id].dept !== w.dept)
+      .map((id) => `Công nhân ${w.name} thuộc bộ phận ${w.dept}, khác bộ phận ${ops[id].dept} của công đoạn ${ops[id].name}.`);
+  }
+  const left = (wk, id) => { const b = balances[wk][id]; return b ? b.given - b.done : 0; };
+
+  /* ----- actions ----- */
+  function addOp(id) {
+    if (S.sel.includes(id)) { toast(`Công đoạn ${ops[id].name} đã có trong danh sách.`); return; }
+    const first = S.sel[0];
+    if (first && ops[first].uom !== ops[id].uom) {
+      toast(`Không thêm được: ${ops[id].name} tính theo ${ops[id].uom}, khác đơn vị ${ops[first].uom} của các công đoạn đã chọn.`);
+      return;
+    }
+    if (remaining(id) <= 0) { toast(`Công đoạn ${ops[id].name} đã giao hết.`); return; }
+    S.sel.push(id); S.open = new Set([id]); S.tab = 'assign'; render();
+  }
+
+  async function submitAssign() {
+    const q = num(S.qty);
+    const warnings = assignWarnings();
+    if (warnings.length && !(await askWarnings(warnings, 'Vẫn giao'))) return;
+    if (!(await askPassword(WORKERS[S.worker].name, 'gửi phân công lên SAP'))) return;
+    S.busy = true; render();
+    await new Promise((r) => setTimeout(r, 800));
+    const rows = S.sel.map((id) => {
+      ops[id].assigned += q;
+      const b = balances[S.worker][id] || (balances[S.worker][id] = { given: 0, done: 0 });
+      b.given += q;
+      return { name: ops[id].name, text: `+${fmt(q)} ${ops[id].uom}` };
+    });
+    const who = WORKERS[S.worker].name;
+    S.busy = false; S.sel = []; S.qty = ''; S.open = new Set();
+    render();
+    showResult(`Đã giao ${rows.length} công đoạn`, `Cho ${who} · mỗi công đoạn một giao dịch trên SAP`, rows);
+  }
+
+  async function submitConfirm() {
+    const q = num(S.cQty);
+    const ids = [...S.cSel];
+    const warnings = confirmWarnings();
+    if (warnings.length && !(await askWarnings(warnings, 'Vẫn xác nhận'))) return;
+    if (!(await askPassword(WORKERS[S.cWorker].name, 'gửi xác nhận lên SAP'))) return;
+    S.busy = true; render();
+    await new Promise((r) => setTimeout(r, 800));
+    const rows = ids.map((id) => { balances[S.cWorker][id].done += q; return { name: ops[id].name, text: `${fmt(q)} ${ops[id].uom}` }; });
+    S.busy = false; S.cSel = new Set(); S.cQty = '';
+    render();
+    showResult(`Đã xác nhận ${rows.length} công đoạn`, `${WORKERS[S.cWorker].name} · mỗi công đoạn một giao dịch trên SAP`, rows);
+  }
+
+  /* ----- render ----- */
+  const TABS = [
+    { id: 'overview', label: 'Tổng quan', icon: 'grid' }, { id: 'assign', label: 'Phân công', icon: 'clip' },
+    { id: 'confirm', label: 'Xác nhận', icon: 'scan' }, { id: 'pos', label: 'Vị trí', icon: 'pin' }, { id: 'sync', label: 'Đồng bộ', icon: 'sync' },
+  ];
+  function render() { renderChrome(); renderBody(); renderCta(); renderControls(); }
+  function renderChrome() {
+    const t = S.tab === 'assign' ? ['Tạo phân công', 'Chọn đúng ô rồi bấm quét'] : S.tab === 'confirm' ? ['Xác nhận sản lượng', `Phiên: ${SESSION_DEPT}`] : [TABS.find((x) => x.id === S.tab).label, 'Màn hình hiện có'];
+    $('#appbar').innerHTML = `<div class="t"><h1>${t[0]}</h1><div class="sub">${t[1]}</div></div><span class="avatar" aria-label="Tài khoản">HA</span>`;
+    $('#strip').innerHTML = S.tab === 'assign' ? `<div class="strip">${icon('sensor')}Sẵn sàng nhận mã từ đầu đọc · quét nhãn công đoạn để thêm</div>` : '';
+    $('#nav').innerHTML = TABS.map((x) => `<button data-tab="${x.id}" ${S.tab === x.id ? 'aria-current="page"' : ''}><span class="pill">${icon(x.icon)}</span>${x.label}</button>`).join('');
+    document.querySelectorAll('[data-tab]').forEach((b) => b.onclick = () => { S.tab = b.dataset.tab; render(); $('#body').scrollTop = 0; });
+  }
+  const infoRow = (k, v) => `<div class="info-row"><span class="k">${k}</span><span class="v">${v}</span></div>`;
+
+  function renderBody() {
+    const body = $('#body');
+    if (S.tab === 'assign') { body.innerHTML = assignView(); bindAssign(); return; }
+    if (S.tab === 'confirm') { body.innerHTML = confirmView(); bindConfirm(); return; }
+    body.innerHTML = `<div class="placeholder"><h3>${TABS.find((x) => x.id === S.tab).label}</h3><p>Màn hình hiện có, không đổi trong bản review này.</p></div>`;
+  }
+
+  /* --- assign --- */
+  function assignView() {
+    const lim = S.sel.length ? minOf(S.sel, remaining) : null;
+    const uom = S.sel.length ? ops[S.sel[0]].uom : '';
+    const q = num(S.qty);
+    const over = lim && q > lim.v;
+    const w = S.worker ? WORKERS[S.worker] : null;
+    const workerWarn = w ? S.sel.filter((id) => ops[id].dept !== w.dept).map((id) => ops[id].name) : [];
+    const many = S.sel.length > 1;
+    const cards = S.sel.map((id) => {
+      const o = ops[id];
+      const warn = o.dept !== SESSION_DEPT;
+      // One operation looks exactly as it does today. With several, each card
+      // gets an arrow to fold away the same details.
+      const open = !many || S.open.has(id);
+      const isMin = many && lim && lim.id === id;
+      return `<div class="op ${warn ? 'warn' : ''} ${open ? 'open' : ''}">
+        <div class="op-head">${icon(warn ? 'alert' : 'check')}
+          <button class="op-title" ${many ? `data-toggle="${id}" aria-expanded="${open}"` : 'disabled'}><b>${esc(o.name)}</b>
+            ${open ? '' : `<small>Còn lại ${fmt(remaining(id))} ${o.uom}</small>`}</button>
+          ${isMin ? '<span class="tag min">Ít nhất</span>' : ''}
+          ${many ? `<button class="icon-btn" data-toggle="${id}" aria-expanded="${open}" aria-label="${open ? 'Thu gọn' : 'Mở rộng'} ${esc(o.name)}">${icon('chev', 'i chev')}</button>` : ''}
+          <button class="icon-btn" data-remove="${id}" aria-label="Bỏ công đoạn ${esc(o.name)}">${icon('x')}</button>
+        </div>
+        ${warn ? `<div class="op-warn">${icon('alert')}<span>Bộ phận ${esc(o.dept)}, khác phiên làm việc ${SESSION_DEPT}. Vẫn giao được, cần xác nhận lúc gửi.</span></div>` : ''}
+        ${open ? `<div class="op-detail">
+          <div class="sec">${icon('box')}Thông tin sản phẩm / công đoạn</div>
+          ${infoRow('LSX / công đoạn', `${o.po} · ${o.op}`)}
+          ${infoRow('Tên hàng', esc(PRODUCT.name))}
+          ${infoRow('Mã hàng', PRODUCT.code)}
+          ${infoRow('SO / Item', PRODUCT.so)}
+          ${infoRow('Bộ phận', esc(o.dept))}
+          <div class="sec" style="margin-top:6px">${icon('grid')}Số lượng công đoạn</div>
+          <div class="metric"><span>SL công đoạn</span><b>${fmt(o.total)} ${o.uom}</b></div>
+          <div class="metric"><span>Đã xác nhận</span><b>${fmt(o.confirmed)} ${o.uom}</b></div>
+          <div class="metric"><span>Số lượng lỗi</span><b>${fmt(o.defect)} ${o.uom}</b></div>
+          <div class="metric"><span>Số lượng đã giao</span><b>${fmt(o.assigned)} ${o.uom}</b></div>
+          <div class="note">Số liệu gần nhất và giao dịch trên thiết bị</div>
+        </div>` : ''}
+      </div>`;
+    }).join('');
+    return `
+      <div class="ops">
+        <div class="label"><span>Sản phẩm / công đoạn <span class="req">*</span></span><span class="aside">${S.sel.length ? `${S.sel.length} công đoạn` : ''}</span></div>
+        ${cards || `<div class="empty-slot">${icon('box')}<span>Chưa chọn công đoạn</span></div>`}
+        <button class="add-op" id="add-op"><span class="plus">${icon('plus')}</span>${S.sel.length ? 'Quét thêm công đoạn' : 'Quét công đoạn'}</button>
+      </div>
+
+      <div>
+        <div class="label"><span>Công nhân <span class="req">*</span></span></div>
+        <div class="slot ${w ? 'filled' : ''}" style="margin-top:8px">
+          <div class="slot-row">${icon(w ? 'check' : 'badge')}<span class="slot-val">${w ? esc(w.name) : 'Chưa chọn công nhân'}</span>
+            <button class="icon-btn navy" id="pick-worker" aria-label="Đổi công nhân">${icon('camera')}</button></div>
+          ${w ? `<div class="slot-info">${infoRow('Mã NV', w.code)}${infoRow('Bộ phận', esc(w.dept))}</div>` : ''}
+        </div>
+        ${workerWarn.length ? `<div class="warn-line" style="margin-top:8px">${icon('alert')}<span>Công nhân thuộc bộ phận ${esc(w.dept)}, khác bộ phận của công đoạn ${esc(workerWarn.join(', '))}. Vẫn giao được, cần xác nhận lúc gửi.</span></div>` : ''}
+      </div>
+
+      ${w ? `<div><div class="label"><span>Vị trí / mã máy</span><span class="aside">Dùng chung cho các công đoạn</span></div>
+        <div class="slot filled" style="margin-top:8px"><div class="slot-row">${icon('check')}<span class="kv" style="flex:1"><span><small>Mã vị trí:</small>${w.pos}</span><span><small>Mã máy:</small>${w.mac}</span></span></div></div></div>` : ''}
+
+      <div class="qty">
+        <div class="label"><span>Số lượng giao <span class="req">*</span></span></div>
+        ${lim ? `<div class="remain"><div class="row"><span>Giao tối đa</span><span>${fmt(lim.v)} ${uom}</span></div>${S.sel.length > 1 ? `<small>Theo công đoạn còn ít nhất: ${esc(ops[lim.id].name)}</small>` : ''}</div>` : ''}
+        <label class="qty-input ${over ? 'bad' : ''}"><input id="qty" inputmode="decimal" value="${esc(S.qty)}" aria-label="Số lượng giao" ${S.sel.length ? '' : 'disabled'}><span>${uom}</span>
+          ${lim ? `<button type="button" class="chip-btn" id="max">Tối đa</button>` : ''}</label>
+        ${over ? `<div class="err" role="alert">Vượt số còn lại của ${esc(ops[lim.id].name)} (${fmt(lim.v)} ${uom}). Nhập tối đa ${fmt(lim.v)}.</div>` : ''}
+        ${S.sel.length > 1 && q > 0 && !over ? `<div class="each">Mỗi công đoạn giao ${fmt(q)} ${uom} · tổng ${fmt(q * S.sel.length)} ${uom} cho ${S.sel.length} công đoạn.</div>` : ''}
+      </div>`;
+  }
+  function bindAssign() {
+    $('#add-op').onclick = () => openOpScanner();
+    $('#pick-worker').onclick = () => openWorkerPicker((k) => { S.worker = k; render(); });
+    document.querySelectorAll('[data-remove]').forEach((b) => b.onclick = () => { S.sel = S.sel.filter((x) => x !== b.dataset.remove); render(); });
+    document.querySelectorAll('[data-toggle]').forEach((b) => b.onclick = () => { const id = b.dataset.toggle; S.open.has(id) ? S.open.delete(id) : S.open.add(id); render(); });
+    const q = $('#qty'); if (q) q.oninput = (e) => { S.qty = e.target.value; const pos = e.target.selectionStart; render(); const n = $('#qty'); n.focus(); n.setSelectionRange(pos, pos); };
+    $('#max') && ($('#max').onclick = () => { S.qty = String(minOf(S.sel, remaining).v); render(); });
+  }
+
+  /* --- confirm --- */
+  function confirmView() {
+    const w = WORKERS[S.cWorker];
+    const ids = Object.keys(balances[S.cWorker]);
+    const openIds = ids.filter((id) => left(S.cWorker, id) > 0);
+    const sel = [...S.cSel];
+    const lim = sel.length ? minOf(sel, (id) => left(S.cWorker, id)) : null;
+    const uom = sel.length ? ops[sel[0]].uom : (ids[0] ? ops[ids[0]].uom : '');
+    const q = num(S.cQty);
+    const over = lim && q > lim.v;
+    const rows = ids.map((id) => {
+      const o = ops[id], b = balances[S.cWorker][id], rem = b.given - b.done, done = rem <= 0;
+      const on = S.cSel.has(id), open = S.cOpen.has(id);
+      return `<div class="check-row ${on ? 'on' : ''} ${done ? 'done' : ''} ${open ? 'open' : ''}">
+        <div class="check-head">
+          <label class="check-main"><input type="checkbox" data-check="${id}" ${on ? 'checked' : ''} ${done ? 'disabled' : ''}>
+            <span class="box" aria-hidden="true">${icon('check')}</span><b>${esc(o.name)}</b>${done ? '<span class="tag" style="color:var(--muted)">Đã xong</span>' : ''}</label>
+          <button class="icon-btn" data-expand="${id}" aria-expanded="${open}" aria-label="Chi tiết ${esc(o.name)}">${icon('chev', 'i chev')}</button>
+        </div>
+        ${open ? `<div class="check-detail">${infoRow('Lệnh SX', o.po)}${infoRow('Công đoạn', o.op)}${infoRow('Bộ phận', esc(o.dept))}${infoRow('Đã giao', `${fmt(b.given)} ${o.uom}`)}${infoRow('Đã xác nhận', `${fmt(b.done)} ${o.uom}`)}${infoRow('Còn lại', `${fmt(rem)} ${o.uom}`)}
+          ${o.dept !== w.dept ? `<div class="warn-line" style="margin-top:6px">${icon('alert')}<span>Khác bộ phận của công nhân (${esc(w.dept)}).</span></div>` : ''}</div>` : ''}
+      </div>`;
+    }).join('');
+    return `
+      <div class="worker-card"><div class="initials">${initials(w.name)}</div>
+        <div class="who"><b>${esc(w.name)}</b><small>${w.code} · ${esc(w.dept)}</small></div>
+        <button class="chip-btn" id="c-worker">Đổi</button></div>
+
+      <div class="ops">
+        <div class="label"><span>Công đoạn cần xác nhận <span class="req">*</span></span>
+          ${openIds.length > 1 ? `<button class="link" id="c-all">${S.cSel.size === openIds.length ? 'Bỏ chọn hết' : 'Chọn tất cả'}</button>` : ''}</div>
+        ${rows || '<div class="empty-slot" style="border-color:var(--line)">Công nhân chưa được giao công đoạn nào</div>'}
+      </div>
+
+      <div class="qty">
+        <div class="label"><span>Số lượng xác nhận <span class="req">*</span></span><span class="aside">${sel.length ? `${sel.length} công đoạn` : ''}</span></div>
+        ${lim ? `<div class="remain"><div class="row"><span>Xác nhận tối đa</span><span>${fmt(lim.v)} ${uom}</span></div>${sel.length > 1 ? `<small>Theo công đoạn còn ít nhất: ${esc(ops[lim.id].name)}</small>` : ''}</div>`
+          : `<div class="each">Tích ít nhất một công đoạn để nhập số lượng.</div>`}
+        <label class="qty-input ${over ? 'bad' : ''}"><input id="c-qty" inputmode="decimal" value="${esc(S.cQty)}" aria-label="Số lượng xác nhận" ${sel.length ? '' : 'disabled'}><span>${uom}</span>
+          ${lim ? `<button type="button" class="chip-btn" id="c-max">Tối đa</button>` : ''}</label>
+        ${over ? `<div class="err" role="alert">Vượt số còn lại của ${esc(ops[lim.id].name)} (${fmt(lim.v)} ${uom}). Nhập tối đa ${fmt(lim.v)}.</div>` : ''}
+        ${sel.length > 1 && q > 0 && !over ? `<div class="each">Mỗi công đoạn xác nhận ${fmt(q)} ${uom}.</div>` : ''}
+        ${sel.length > 1 ? `<div class="each">Số lỗi và thu hồi chỉ nhập được khi tích một công đoạn.</div>` : ''}
+      </div>`;
+  }
+  function bindConfirm() {
+    $('#c-worker').onclick = () => openWorkerPicker((k) => { S.cWorker = k; S.cSel = new Set(); S.cOpen = new Set(); S.cQty = ''; render(); });
+    document.querySelectorAll('[data-check]').forEach((c) => c.onchange = () => {
+      const id = c.dataset.check;
+      const first = [...S.cSel][0];
+      if (c.checked && first && ops[first].uom !== ops[id].uom) { toast(`${ops[id].name} tính theo ${ops[id].uom}, không xác nhận chung với ${ops[first].uom}.`); render(); return; }
+      c.checked ? S.cSel.add(id) : S.cSel.delete(id); render();
+    });
+    document.querySelectorAll('[data-expand]').forEach((b) => b.onclick = () => { const id = b.dataset.expand; S.cOpen.has(id) ? S.cOpen.delete(id) : S.cOpen.add(id); render(); });
+    $('#c-all') && ($('#c-all').onclick = () => {
+      const openIds = Object.keys(balances[S.cWorker]).filter((id) => left(S.cWorker, id) > 0);
+      S.cSel = S.cSel.size === openIds.length ? new Set() : new Set(openIds); render();
+    });
+    const q = $('#c-qty'); if (q) q.oninput = (e) => { S.cQty = e.target.value; const pos = e.target.selectionStart; render(); const n = $('#c-qty'); n.focus(); n.setSelectionRange(pos, pos); };
+    $('#c-max') && ($('#c-max').onclick = () => { S.cQty = String(minOf([...S.cSel], (id) => left(S.cWorker, id)).v); render(); });
+  }
+
+  function renderCta() {
+    const cta = $('#cta');
+    if (S.tab === 'assign') {
+      const lim = S.sel.length ? minOf(S.sel, remaining) : null;
+      const q = num(S.qty);
+      const ok = S.sel.length && S.worker && q > 0 && q <= lim.v && !S.busy;
+      cta.hidden = false;
+      cta.innerHTML = `<button class="btn gold wide" id="submit" ${ok ? '' : 'disabled'}>${S.busy ? 'Đang gửi SAP…' : S.sel.length > 1 ? `Xác nhận phân công · ${S.sel.length} công đoạn` : 'Xác nhận phân công'}</button>`;
+      $('#submit').onclick = submitAssign;
+    } else if (S.tab === 'confirm') {
+      const sel = [...S.cSel];
+      const lim = sel.length ? minOf(sel, (id) => left(S.cWorker, id)) : null;
+      const q = num(S.cQty);
+      const ok = sel.length && q > 0 && q <= lim.v && !S.busy;
+      cta.hidden = false;
+      cta.innerHTML = `<button class="btn gold wide" id="submit" ${ok ? '' : 'disabled'}>${S.busy ? 'Đang gửi SAP…' : sel.length > 1 ? `Xác nhận ${sel.length} công đoạn` : 'Xác nhận sản lượng'}</button>`;
+      $('#submit').onclick = submitConfirm;
+    } else cta.hidden = true;
+  }
+
+  function renderControls() {
+    $('#ctl-ops').innerHTML = Object.entries(ops).map(([id, o]) => {
+      const note = o.uom !== 'CHC' ? 'Khác đơn vị tính → bị từ chối' : o.dept !== SESSION_DEPT ? 'Khác bộ phận phiên → cảnh báo' : 'Cùng bộ phận';
+      return `<button class="ctl" data-add="${id}" aria-pressed="${S.sel.includes(id)}"><b>${esc(o.name)}</b><span>Còn ${fmt(remaining(id))} ${o.uom} · ${note}</span></button>`;
+    }).join('');
+    $('#ctl-workers').innerHTML = Object.entries(WORKERS).map(([k, w]) => `<button class="ctl" data-w="${k}" aria-pressed="${(S.tab === 'confirm' ? S.cWorker : S.worker) === k}"><b>${esc(w.name)}</b><span>${esc(w.dept)}${w.dept !== SESSION_DEPT ? ' · khác bộ phận → cảnh báo' : ''}</span></button>`).join('');
+    document.querySelectorAll('[data-add]').forEach((b) => b.onclick = () => { closeLayer(); addOp(b.dataset.add); });
+    document.querySelectorAll('[data-w]').forEach((b) => b.onclick = () => {
+      closeLayer();
+      if (S.tab === 'confirm') { S.cWorker = b.dataset.w; S.cSel = new Set(); S.cOpen = new Set(); S.cQty = ''; } else { S.tab = 'assign'; S.worker = b.dataset.w; }
+      render();
+    });
+  }
+
+  /* ----- overlays ----- */
+  let resolver = null;
+  function openLayer(html, center) {
+    const layer = $('#layer');
+    layer.className = 'layer' + (center ? ' center' : '');
+    layer.innerHTML = `<div class="scrim" data-close></div>${html}`;
+    layer.hidden = false;
+    layer.onkeydown = (e) => { if (e.key === 'Escape') closeLayer(false); };
+    layer.querySelector('[data-close]').onclick = () => closeLayer(false);
+    return layer;
+  }
+  function closeLayer(value) {
+    const layer = $('#layer');
+    if (layer.hidden) return;
+    layer.hidden = true; layer.innerHTML = '';
+    if (resolver) { const r = resolver; resolver = null; r(value); }
+  }
+  function openOpScanner() {
+    const layer = openLayer(`<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sc-t"><div class="grab"></div>
+      <h3 id="sc-t">Quét mã công đoạn</h3><div class="cam" aria-hidden="true"><i></i></div>
+      <div class="samples">${Object.entries(ops).map(([id, o]) => `<button class="sample" data-pick="${id}">${icon('box')}<span style="flex:1"><b>${esc(o.name)}</b><small>CĐ ${o.op} · còn ${fmt(remaining(id))} ${o.uom}${S.sel.includes(id) ? ' · đã chọn' : ''}</small></span>${icon('chev')}</button>`).join('')}</div></div>`);
+    layer.querySelectorAll('[data-pick]').forEach((b) => b.onclick = () => { closeLayer(); addOp(b.dataset.pick); });
+    layer.querySelector('[data-pick]').focus();
+  }
+  function openWorkerPicker(onPick) {
+    const layer = openLayer(`<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="wk-t"><div class="grab"></div>
+      <h3 id="wk-t">Quét thẻ công nhân</h3><div class="cam" aria-hidden="true"><i></i></div>
+      <div class="samples">${Object.entries(WORKERS).map(([k, w]) => `<button class="sample" data-pick="${k}">${icon('badge')}<span style="flex:1"><b>${esc(w.name)}</b><small>${w.code} · ${esc(w.dept)}</small></span>${icon('chev')}</button>`).join('')}</div></div>`);
+    layer.querySelectorAll('[data-pick]').forEach((b) => b.onclick = () => { closeLayer(); onPick(b.dataset.pick); });
+    layer.querySelector('[data-pick]').focus();
+  }
+  function askWarnings(list, yesLabel) {
+    return new Promise((resolve) => {
+      resolver = resolve;
+      const layer = openLayer(`<div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="wr-t">
+        <div class="ico">${icon('alert')}</div><h3 id="wr-t">${list.length} cảnh báo cần xác nhận</h3>
+        <ul class="wlist">${list.map((t) => `<li>${icon('alert')}<span>${esc(t)}</span></li>`).join('')}</ul>
+        <p>Đây là cảnh báo, không chặn thao tác. Kiểm tra lại rồi quyết định.</p>
+        <div class="actions"><button class="btn" data-no>Quay lại</button><button class="btn gold" data-yes>${yesLabel}</button></div></div>`, true);
+      layer.querySelector('[data-no]').onclick = () => closeLayer(false);
+      layer.querySelector('[data-yes]').onclick = () => closeLayer(true);
+      layer.querySelector('[data-no]').focus();
+    });
+  }
+  function askPassword(name, action) {
+    return new Promise((resolve) => {
+      resolver = resolve;
+      const layer = openLayer(`<form class="dialog" role="dialog" aria-modal="true" aria-labelledby="pw-t" novalidate>
+        <h3 id="pw-t">Xác minh công nhân</h3>
+        <p>${esc(name)} nhập mật khẩu một lần để ${action} cho tất cả công đoạn đã chọn.</p>
+        <div class="field"><label for="pw">Mật khẩu công nhân</label><input id="pw" type="password" autocomplete="off" value="demo"></div>
+        <div class="actions"><button type="button" class="btn" data-no>Hủy</button><button type="submit" class="btn navy">Xác minh &amp; gửi SAP</button></div></form>`, true);
+      layer.querySelector('[data-no]').onclick = () => closeLayer(false);
+      layer.querySelector('form').onsubmit = (e) => { e.preventDefault(); closeLayer(true); };
+      layer.querySelector('#pw').focus();
+    });
+  }
+  function showResult(title, sub, rows) {
+    const layer = openLayer(`<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="rs-t"><div class="grab"></div>
+      <h3 id="rs-t">${esc(title)}</h3><p style="margin:4px 0 8px;color:var(--muted);font-size:13.5px">${esc(sub)}</p>
+      ${rows.map((r) => `<div class="done-row">${icon('check')}<span>${esc(r.name)}</span><b>${esc(r.text)}</b></div>`).join('')}
+      <button class="btn gold wide" style="margin-top:14px" data-ok>Xong</button></div>`);
+    layer.querySelector('[data-ok]').onclick = () => closeLayer();
+    layer.querySelector('[data-ok]').focus();
+  }
+  let toastTimer;
+  function toast(msg) {
+    const t = $('#toast'); t.innerHTML = `${icon('info')}<span>${esc(msg)}</span>`; t.hidden = false;
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, 4200);
+  }
+
+  $('#go-confirm').onclick = () => { closeLayer(); S.tab = 'confirm'; render(); };
+  $('#reset').onclick = () => { closeLayer(); seed(); render(); toast('Đã đặt lại dữ liệu mẫu.'); };
+  const d = new Date(); $('#clock').textContent = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  seed();
+  render();
+})();
+</script>

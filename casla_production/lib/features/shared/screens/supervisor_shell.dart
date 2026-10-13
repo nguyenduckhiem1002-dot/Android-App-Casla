@@ -7,7 +7,7 @@ import '../../supervisor/screens/s06_supervisor_overview_screen.dart';
 import '../../supervisor/screens/s07_create_assignment_wizard_screen.dart';
 import '../../supervisor/screens/s10_confirm_scan_screen.dart';
 import '../../sync/screens/s12_sync_screen.dart';
-import '../../account/screens/s13_account_screen.dart';
+import '../../supervisor/screens/s14_worker_position_screen.dart';
 
 class SupervisorShell extends ConsumerStatefulWidget {
   const SupervisorShell({super.key});
@@ -17,30 +17,39 @@ class SupervisorShell extends ConsumerStatefulWidget {
 }
 
 class _SupervisorShellState extends ConsumerState<SupervisorShell> {
-  int _currentIndex = 0;
-  final Set<int> _visitedTabIndices = {0};
-  Stream<int>? _outstandingSyncCount;
+  // Tabs are tracked by id, not position: the list is built from the
+  // session's permissions, so a refreshed session can shift the positions.
+  String? _currentTabId;
+  final Set<String> _visitedTabIds = {};
+  Stream<int>? _visibleSyncCount;
   String _syncScopeKey = '';
 
   void _ensureScopedSyncCount(String actorId, List<String> teamIds) {
     final normalizedTeams = teamIds.toList()..sort();
     final key = '$actorId|${normalizedTeams.join(',')}';
-    if (key == _syncScopeKey && _outstandingSyncCount != null) return;
+    if (key == _syncScopeKey && _visibleSyncCount != null) return;
     _syncScopeKey = key;
-    _outstandingSyncCount = ref
+    _visibleSyncCount = ref
         .read(appStateProvider)
         .db
-        .watchOutstandingSyncCount(actorId: actorId, teamIds: normalizedTeams);
+        .watchVisibleSyncCount(actorId: actorId, teamIds: normalizedTeams);
   }
 
   @override
   Widget build(BuildContext context) {
-    final session = ref.watch(appStateProvider).currentSession;
+    final appState = ref.watch(appStateProvider);
+    final session = appState.currentSession;
     if (session == null) return const SizedBox.shrink();
-    _ensureScopedSyncCount(session.maNv, session.toIds);
-    final tabs = <({Widget screen, BottomNavigationBarItem item})>[
+    final syncScope = <String>{...session.toIds};
+    final activeWorkId = appState.activeWorkContext?.workId;
+    if (activeWorkId != null && activeWorkId.trim().isNotEmpty) {
+      syncScope.add(activeWorkId.trim());
+    }
+    _ensureScopedSyncCount(session.maNv, syncScope.toList());
+    final tabs = <({String id, Widget screen, BottomNavigationBarItem item})>[
       if (session.hasPermission(Permission.viewTeamProduction))
         (
+          id: 'overview',
           screen: const S06SupervisorOverviewScreen(),
           item: const BottomNavigationBarItem(
             icon: Icon(Icons.grid_view),
@@ -49,6 +58,7 @@ class _SupervisorShellState extends ConsumerState<SupervisorShell> {
         ),
       if (session.hasPermission(Permission.assignQuantity))
         (
+          id: 'assign',
           screen: const S07CreateAssignmentWizardScreen(),
           item: const BottomNavigationBarItem(
             icon: Icon(Icons.assignment_outlined),
@@ -57,36 +67,43 @@ class _SupervisorShellState extends ConsumerState<SupervisorShell> {
         ),
       if (session.hasPermission(Permission.viewTeamProduction))
         (
+          id: 'confirm',
           screen: const S10ConfirmScanScreen(),
           item: const BottomNavigationBarItem(
             icon: Icon(Icons.qr_code_scanner),
             label: 'Xác nhận',
           ),
         ),
+      if (session.hasPermission(Permission.managePositions))
+        (
+          id: 'positions',
+          screen: const S14WorkerPositionScreen(),
+          item: const BottomNavigationBarItem(
+            icon: Icon(Icons.place_outlined),
+            activeIcon: Icon(Icons.place),
+            label: 'Vị trí',
+          ),
+        ),
       if (session.hasPermission(Permission.viewSyncStatus))
         (
+          id: 'sync',
           screen: const S12SyncScreen(),
           item: BottomNavigationBarItem(
-            icon: _SyncQueueNavigationIcon(stream: _outstandingSyncCount),
+            icon: _SyncQueueNavigationIcon(stream: _visibleSyncCount),
             label: 'Đồng bộ',
           ),
         ),
-      (
-        screen: const S13AccountScreen(),
-        item: const BottomNavigationBarItem(
-          icon: Icon(Icons.person_outline),
-          label: 'Tài khoản',
-        ),
-      ),
     ];
-    final selectedIndex = _currentIndex.clamp(0, tabs.length - 1);
-    _visitedTabIndices.add(selectedIndex);
+    final foundIndex = tabs.indexWhere((tab) => tab.id == _currentTabId);
+    final selectedIndex = foundIndex < 0 ? 0 : foundIndex;
+    _currentTabId = tabs[selectedIndex].id;
+    _visitedTabIds.add(tabs[selectedIndex].id);
 
     return Scaffold(
       body: IndexedStack(
         index: selectedIndex,
         children: List<Widget>.generate(tabs.length, (index) {
-          if (!_visitedTabIndices.contains(index)) {
+          if (!_visitedTabIds.contains(tabs[index].id)) {
             return const SizedBox.shrink();
           }
           // An offstage hardware scanner must not consume another tab's scans.
@@ -94,7 +111,9 @@ class _SupervisorShellState extends ConsumerState<SupervisorShell> {
               tabs[index].screen is S10ConfirmScanScreen) {
             return const SizedBox.shrink();
           }
+          // Keyed so a tab keeps its state if its position ever shifts.
           return TickerMode(
+            key: ValueKey(tabs[index].id),
             enabled: index == selectedIndex,
             child: tabs[index].screen,
           );
@@ -109,12 +128,12 @@ class _SupervisorShellState extends ConsumerState<SupervisorShell> {
           currentIndex: selectedIndex,
           selectedItemColor: CaslaColors.primaryNavy,
           unselectedItemColor: CaslaColors.muted,
-          selectedFontSize: 11,
-          unselectedFontSize: 11,
+          selectedFontSize: 12,
+          unselectedFontSize: 12,
           onTap: (index) {
             setState(() {
-              _currentIndex = index;
-              _visitedTabIndices.add(index);
+              _currentTabId = tabs[index].id;
+              _visitedTabIds.add(tabs[index].id);
             });
           },
           items: tabs.map((tab) => tab.item).toList(),

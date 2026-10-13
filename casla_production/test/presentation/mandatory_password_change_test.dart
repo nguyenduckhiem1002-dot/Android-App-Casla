@@ -11,6 +11,7 @@ import 'package:casla_production/main.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:go_router/go_router.dart';
 
 import '../support/database_test_harness.dart';
@@ -61,6 +62,7 @@ class _Auth extends SapAuthController {
 
 void main() {
   useInMemoryDatabase();
+  setUp(() => FlutterSecureStorage.setMockInitialValues({}));
 
   for (final signOut in [false, true]) {
     testWidgets('mandatory change exits to login (signOut: $signOut)', (

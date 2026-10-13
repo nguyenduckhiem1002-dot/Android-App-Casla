@@ -26,6 +26,36 @@ const _workContext = SapWorkContext(
 );
 
 void main() {
+  test('work context keeps PlantName for readable setup labels', () {
+    final context = SapWorkContext.fromJson({
+      'WorkID': 'WORK-01',
+      'WorkName': 'May 1',
+      'Plant': '6711',
+      'PlantName': 'Nhà máy 6711',
+      'WorkCenter': 'WC-01',
+      'BoPhan': 'Xưởng May',
+      'Location': 'Tầng 2',
+    });
+
+    expect(context.plantName, 'Nhà máy 6711');
+    expect(context.location, 'Tầng 2');
+  });
+
+  test('work context keeps WorkCenterName for the Xưởng label', () {
+    final context = SapWorkContext.fromJson({
+      'WorkID': 'XM2.002',
+      'WorkName': 'MAY CHI TIẾT PHỤ-XM2',
+      'Plant': '6711',
+      'WorkCenter': 'CL100077',
+      'WorkCenterName': 'Xưởng may 2',
+      'BoPhan': 'MAY CHI TIẾT PHỤ-XM2',
+      'Location': 'XM2',
+    });
+
+    expect(context.workCenter, 'CL100077');
+    expect(context.workCenterName, 'Xưởng may 2');
+  });
+
   group('SAP session authorization — supervisor', () {
     test('PP_INITIAL_ASSIGN maps to supervisor', () {
       // The real shape of a manager account: one write FuncID plus both

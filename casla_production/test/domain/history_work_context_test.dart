@@ -42,11 +42,38 @@ void main() {
       plant: '6711',
       workCenter: 'A',
     );
-    expect(report.workers.single.assignedQuantity, 90);
+    // Gross, like SAP's AssignedQuantity; the recall has its own figure.
+    expect(report.workers.single.assignedQuantity, 100);
+    expect(report.workers.single.recalledQuantity, 10);
     expect(report.workers.single.completedQuantity, 13);
     expect(report.workers.single.remainingQuantity, 77);
     expect(report.entries.every((e) => e.workCenter == 'A'), isTrue);
   });
+  test('the carried-over balance counts only on the first day', () {
+    WorkHistoryEntry on(DateTime day, String type, double qty) =>
+        entry('A', type, qty).copyWithDate(day);
+    final report = historyForWorkContext(
+      WorkHistoryResult(
+        scopeCode: 'T',
+        dateFrom: DateTime(2026, 9, 23),
+        dateTo: DateTime(2026, 9, 24),
+        isTruncated: false,
+        entries: [
+          on(DateTime(2026, 9, 23), 'REASSIGN', 967),
+          on(DateTime(2026, 9, 23), 'INITIAL_ASSIGN', 100),
+          // Tomorrow's snapshot of the same unfinished work is not new work.
+          on(DateTime(2026, 9, 24), 'REASSIGN', 900),
+          on(DateTime(2026, 9, 24), 'INITIAL_ASSIGN', 50),
+        ],
+        workers: const [],
+      ),
+      plant: '6711',
+      workCenter: 'A',
+    );
+    expect(report.workers.single.assignedQuantity, 967 + 100 + 50);
+    expect(report.workers.single.remainingQuantity, 967 + 100 + 50);
+  });
+
   test(
     'truncated ledger and ambiguous transfer cannot produce false totals',
     () {
@@ -67,5 +94,22 @@ void main() {
         throwsFormatException,
       );
     },
+  );
+}
+
+extension on WorkHistoryEntry {
+  WorkHistoryEntry copyWithDate(DateTime day) => WorkHistoryEntry(
+    transactionUuid: '$transactionUuid-${day.day}',
+    executionDate: day,
+    workerId: workerId,
+    workerName: workerName,
+    productionOrder: productionOrder,
+    operation: operation,
+    plant: plant,
+    workCenter: workCenter,
+    transactionType: transactionType,
+    quantity: quantity,
+    unitOfMeasure: unitOfMeasure,
+    transactionStatus: transactionStatus,
   );
 }

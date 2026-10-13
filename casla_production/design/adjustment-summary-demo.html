@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Demo · Loại điều chỉnh</title>
+  <style>
+    :root {
+      --navy:#152650; --ink:#13234a; --muted:#70798e; --canvas:#f3f5f8;
+      --line:#e1e6ee; --surface:#fff; --gold:#cda646; --gold-soft:#fff5dd;
+      --green:#287c3b; --green-soft:#e8f5e9; --red:#c53e46; --red-soft:#fff0f0;
+      --blue:#315c9e; --blue-soft:#edf3ff;
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; display:grid; place-items:center; background:#dfe3e8; color:var(--ink); font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; }
+    .phone { width:390px; min-height:844px; max-height:100vh; overflow:hidden; display:flex; flex-direction:column; background:var(--canvas); border:1px solid #cdd4df; box-shadow:0 20px 50px #15265024; }
+    .appbar { padding:19px 20px 17px; color:#fff; background:var(--navy); }
+    .appbar .eyebrow { margin-bottom:4px; font-size:11px; letter-spacing:.06em; opacity:.72; }
+    .appbar h1 { margin:0; font-size:19px; letter-spacing:-.02em; }
+    .appbar .meta { margin-top:5px; font-size:12px; opacity:.82; }
+    .content { padding:15px 16px 18px; overflow:auto; }
+    .date-row { display:flex; align-items:center; justify-content:space-between; padding:11px 12px; border:1px solid var(--line); border-radius:13px; background:var(--surface); font-size:12px; font-weight:800; }
+    .date-row span:last-child { color:var(--navy); }
+    .summary { margin-top:12px; padding:14px; border:1px solid var(--line); border-radius:16px; background:var(--surface); }
+    .kpis { display:grid; grid-template-columns:repeat(3,1fr); align-items:center; }
+    .kpi { text-align:center; }
+    .kpi + .kpi { border-left:1px solid var(--line); }
+    .kpi span { display:block; color:var(--muted); font-size:10.5px; }
+    .kpi strong { display:inline-block; margin-top:5px; font-size:18px; letter-spacing:-.03em; }
+    .kpi small { margin-left:3px; color:var(--muted); font-size:9px; font-weight:700; }
+    .kpi.done strong { color:var(--green); }
+    .kpi.left strong { color:var(--gold); }
+    .progress { height:7px; margin-top:13px; overflow:hidden; border-radius:99px; background:#edf0f3; }
+    .progress i { display:block; width:9%; height:100%; background:var(--gold); }
+    .progress-note { display:flex; justify-content:space-between; margin-top:5px; color:var(--muted); font-size:10px; }
+    .section-title { display:flex; align-items:center; justify-content:space-between; margin:18px 2px 9px; font-size:13px; font-weight:850; }
+    .section-title span { color:var(--muted); font-size:11px; font-weight:650; }
+    .filter { display:flex; gap:6px; padding:4px; border-radius:11px; background:#e8ecf2; }
+    .filter button { flex:1; min-height:34px; border:0; border-radius:8px; background:transparent; color:var(--muted); font-size:10.5px; font-weight:800; cursor:pointer; }
+    .filter button.active { color:var(--navy); background:#fff; box-shadow:0 2px 7px #15265014; }
+    .day { margin-top:13px; color:var(--muted); font:10.5px ui-monospace,SFMono-Regular,Menlo,monospace; font-weight:800; }
+    .card { margin-top:7px; padding:13px 12px 12px; border:1px solid var(--line); border-radius:15px; background:var(--surface); }
+    .card-top { display:flex; align-items:flex-start; gap:10px; }
+    .glyph { width:27px; height:27px; flex:0 0 27px; display:grid; place-items:center; border-radius:8px; background:#edf1f6; color:var(--navy); font-size:15px; }
+    .card-info { min-width:0; flex:1; }
+    .operation { font-size:13px; font-weight:850; line-height:1.23; }
+    .order { margin-top:4px; color:var(--muted); font:10.5px ui-monospace,SFMono-Regular,Menlo,monospace; }
+    .chevron { color:var(--navy); font-size:17px; line-height:1; }
+    .details { margin:10px 0 10px 37px; padding:9px 10px; border-radius:10px; background:#f0f3f7; }
+    .detail-row { display:flex; gap:8px; font-size:10px; line-height:1.35; }
+    .detail-row + .detail-row { margin-top:4px; }
+    .detail-row span { width:52px; flex:0 0 52px; color:var(--muted); }
+    .detail-row b { min-width:0; overflow:hidden; color:var(--ink); font-size:10.5px; font-weight:750; text-overflow:clip; }
+    .events { margin-left:37px; border-top:1px solid var(--line); }
+    .event { display:flex; align-items:center; gap:7px; min-height:39px; border-bottom:1px solid #edf0f4; }
+    .event[hidden], .card[hidden] { display:none; }
+    .event:last-child { border-bottom:0; }
+    .adjustment-strip { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin:10px 0 0 37px; padding:8px 9px; border:1px solid #e7ebf0; border-radius:10px; background:#f7f8fa; }
+    .adjustment-label { color:var(--muted); font-size:10px; font-weight:750; }
+    .adjustment-item { display:inline-flex; align-items:center; gap:4px; padding:4px 6px; border-radius:7px; font-size:9.5px; font-weight:800; white-space:nowrap; }
+    .adjustment-item strong { font-size:10px; }
+    .adjustment-item.assign { color:var(--blue); background:var(--blue-soft); }
+    .adjustment-item.recall { color:var(--red); background:var(--red-soft); }
+    .adjustment-item.confirm { color:var(--green); background:var(--green-soft); }
+    .chips { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin:9px 0 0 37px; }
+    .chip { display:inline-flex; align-items:center; gap:4px; padding:5px 8px; border:1px solid var(--line); border-radius:999px; font-size:10px; font-weight:850; white-space:nowrap; }
+    .chip strong { font-size:10.5px; }
+    .chip.assign { color:var(--blue); background:#f6f8fc; border-color:#cbd7eb; }
+    .chip.recall { color:var(--red); background:var(--red-soft); border-color:#efc8cc; }
+    .chip.confirm { color:var(--green); background:var(--green-soft); border-color:#b8dcbc; }
+    .chip.left { color:#7f5b16; background:var(--gold-soft); border-color:#ecd49b; }
+    .badge { display:inline-flex; align-items:center; gap:4px; padding:5px 7px; border-radius:999px; font-size:10px; font-weight:850; white-space:nowrap; }
+    .badge strong { font-size:10.5px; }
+    .badge.assign { color:var(--blue); background:var(--blue-soft); border:1px solid #cbdaf4; }
+    .badge.recall { color:var(--red); background:var(--red-soft); border:1px solid #f0c8cc; }
+    .badge.confirm { color:var(--green); background:var(--green-soft); border:1px solid #b8dcbc; }
+    .legend { display:flex; align-items:center; gap:10px; margin-top:11px; color:var(--muted); font-size:10px; }
+    .legend span { display:inline-flex; align-items:center; gap:4px; }
+    .legend i { width:6px; height:6px; display:inline-block; border-radius:50%; }
+    .legend .a { background:var(--blue); } .legend .r { background:var(--red); } .legend .c { background:var(--green); }
+    .bottom { margin-top:auto; display:flex; justify-content:space-between; padding:10px 16px 13px; color:var(--muted); background:var(--surface); border-top:1px solid var(--line); font-size:10px; }
+    .bottom span { display:flex; flex-direction:column; align-items:center; gap:4px; }
+    .bottom b { color:var(--navy); font-size:16px; line-height:1; }
+    .bottom .selected { color:var(--navy); font-weight:850; }
+    @media (max-height:740px) { .phone { min-height:100vh; } .content { padding-bottom:12px; } }
+  </style>
+</head>
+<body>
+  <main class="phone" aria-label="Demo hoạt động sản lượng">
+    <header class="appbar">
+      <div class="eyebrow">NHÂN VIÊN · LỊCH SỬ SẢN LƯỢNG</div>
+      <h1>Hoạt động sản lượng</h1>
+      <div class="meta">Lại Thị Dung · CL400098 · Tổ May 1 - Máy KQ-3</div>
+    </header>
+    <section class="content">
+      <div class="date-row"><span>▣ &nbsp;Kỳ: 14/09 - 17/09/2026</span><span>Đổi ngày⌄</span></div>
+      <section class="summary" aria-label="Tóm tắt sản lượng">
+        <div class="kpis"><div class="kpi"><span>Tổng giao</span><strong>11.000</strong><small>CHC</small></div><div class="kpi done"><span>Hoàn thành</span><strong>1.000</strong><small>CHC</small></div><div class="kpi left"><span>Còn lại</span><strong>9.500</strong><small>CHC</small></div></div>
+        <div class="progress"><i></i></div><div class="progress-note"><span>Tiến độ hoàn thành</span><b>9%</b></div>
+      </section>
+      <div class="section-title"><b>Hoạt động sản lượng</b><span>4 giao dịch</span></div>
+      <div class="day">14/09/2026</div>
+      <article class="card" data-types="assign confirm">
+        <div class="card-top"><div class="glyph">⌘</div><div class="card-info"><div class="operation">Miệng thân có đường chỉ qua quai đã may</div><div class="order">LSX 010140000342&nbsp;&nbsp;·&nbsp;&nbsp;CĐ 0010</div></div><div class="chevron">⌄</div></div>
+        <div class="details"><div class="detail-row"><span>Tên hàng</span><b>TM-SO25104467-G-44x23x34.5</b></div><div class="detail-row"><span>Mã hàng</span><b>000000000200009398</b></div><div class="detail-row"><span>SO · Item</span><b>0010001635 · 000020</b></div></div>
+        <div class="adjustment-strip"><span class="adjustment-label">Loại điều chỉnh</span><span class="adjustment-item assign">ASSIGN · Giao <strong>9.000 CHC</strong></span><span class="adjustment-item confirm">CONFIRM · Xác nhận <strong>500 CHC</strong></span></div>
+        <div class="chips"><span class="chip assign">Giao <strong>9.000 CHC</strong></span><span class="chip confirm">Xác nhận <strong>500 CHC</strong></span><span class="chip left">Còn lại <strong>8.500 CHC</strong></span></div>
+      </article>
+      <article class="card" data-types="assign recall">
+        <div class="card-top"><div class="glyph">⌘</div><div class="card-info"><div class="operation">Miệng thân có đường chỉ qua quai đã may</div><div class="order">LSX 010140000341&nbsp;&nbsp;·&nbsp;&nbsp;CĐ 0010</div></div><div class="chevron">⌄</div></div>
+        <div class="details"><div class="detail-row"><span>Tên hàng</span><b>TM-SO25104467-G-44x23x34.5</b></div><div class="detail-row"><span>Mã hàng</span><b>000000000200009398</b></div><div class="detail-row"><span>SO · Item</span><b>— · —</b></div></div>
+        <div class="adjustment-strip"><span class="adjustment-label">Loại điều chỉnh</span><span class="adjustment-item assign">ASSIGN · Giao <strong>2.000 CHC</strong></span><span class="adjustment-item recall">RECALL · Thu hồi <strong>500 CHC</strong></span></div>
+        <div class="chips"><span class="chip assign">Giao <strong>2.000 CHC</strong></span><span class="chip recall">Thu hồi <strong>500 CHC</strong></span><span class="chip confirm">Xác nhận <strong>500 CHC</strong></span><span class="chip left">Còn lại <strong>1.000 CHC</strong></span></div>
+      </article>
+    </section>
+    <nav class="bottom"><span><b>⌂</b>Tổng quan</span><span><b>▤</b>Phân công</span><span class="selected"><b>✓</b>Xác nhận</span><span><b>↻</b>Đồng bộ</span><span><b>♙</b>Tài khoản</span></nav>
+  </main>
+  <script>
+    const tabs = [...document.querySelectorAll('.filter button')];
+    const cards = [...document.querySelectorAll('.card')];
+    const events = [...document.querySelectorAll('.event')];
+    tabs.forEach(tab => tab.addEventListener('click', () => {
+      const filter = tab.dataset.filter;
+      tabs.forEach(item => item.classList.toggle('active', item === tab));
+      cards.forEach(card => {
+        const matches = filter === 'all' || card.dataset.types.split(' ').includes(filter);
+        card.hidden = !matches;
+        card.querySelectorAll('.event').forEach(event => { event.hidden = filter !== 'all' && event.dataset.type !== filter; });
+      });
+    }));
+  </script>
+</body>
+</html>

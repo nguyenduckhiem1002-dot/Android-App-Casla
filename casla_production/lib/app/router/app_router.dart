@@ -10,6 +10,7 @@ import 'app_route_observer.dart';
 
 import '../../features/authentication/screens/s02b_account_login_screen.dart';
 import '../../features/account/screens/mandatory_password_change_screen.dart';
+import '../../features/account/screens/s13_account_screen.dart';
 import '../../features/account/screens/supervisor_shift_setup_screen.dart';
 import '../../features/shared/screens/supervisor_shell.dart';
 import '../../features/supervisor/screens/s06b_employee_daily_detail_screen.dart';
@@ -17,10 +18,25 @@ import '../../features/supervisor/screens/s07_create_assignment_wizard_screen.da
 import '../../features/supervisor/screens/s08_assignment_detail_screen.dart';
 import '../../features/supervisor/screens/s09_recall_screen.dart';
 import '../../features/supervisor/screens/s10_confirm_scan_screen.dart';
+import '../../features/supervisor/screens/s15_multi_confirm_screen.dart';
 import '../../features/sync/screens/s12_sync_screen.dart';
 import '../../features/shared/screens/worker_shell.dart';
 
 const _skipSupervisorSetupExtra = 'skip-supervisor-setup';
+
+/// Guarded routes that need no `extra`, so the setup screen can open them
+/// again once the shift is chosen. Routes carrying an object cannot be rebuilt
+/// from a URL and fall back to the overview.
+const _resumableAfterSetup = {
+  '/supervisor/confirm_scan',
+  '/supervisor/create_assignment',
+  '/sync',
+};
+
+String? _resumeTarget(GoRouterState state) {
+  final next = state.uri.queryParameters['next'];
+  return _resumableAfterSetup.contains(next) ? next : null;
+}
 
 final routerProvider = Provider<GoRouter>((ref) {
   // `refreshListenable` below re-evaluates redirects on session changes, so the
@@ -35,11 +51,13 @@ final routerProvider = Provider<GoRouter>((ref) {
   final routingState = ValueNotifier((
     session: appState.currentSession,
     needsSetup: appState.needsSupervisorSetup,
+    restoring: appState.isRestoringSetup,
   ));
   void refreshRoutingState() {
     routingState.value = (
       session: appState.currentSession,
       needsSetup: appState.needsSupervisorSetup,
+      restoring: appState.isRestoringSetup,
     );
   }
 
@@ -74,6 +92,9 @@ final routerProvider = Provider<GoRouter>((ref) {
       }
 
       if (isLoggedIn) {
+        // Stay put until the saved shift is restored; deciding now would send
+        // a supervisor with a valid setup through the setup screen and back.
+        if (appState.isRestoringSetup) return null;
         final session = appState.currentSession!;
         final location = state.matchedLocation;
         final homeRoute = session.role == UserRole.worker
@@ -87,8 +108,12 @@ final routerProvider = Provider<GoRouter>((ref) {
         if (session.role == UserRole.supervisor &&
             appState.needsSupervisorSetup &&
             state.extra != _skipSupervisorSetupExtra) {
-          return state.matchedLocation == '/supervisor-setup'
-              ? null
+          if (state.matchedLocation == '/supervisor-setup') return null;
+          return _resumableAfterSetup.contains(location)
+              ? Uri(
+                  path: '/supervisor-setup',
+                  queryParameters: {'next': location},
+                ).toString()
               : '/supervisor-setup';
         }
 
@@ -98,7 +123,9 @@ final routerProvider = Provider<GoRouter>((ref) {
         // valid; otherwise the app can remain stuck on this screen forever.
         if (state.matchedLocation == '/supervisor-setup') {
           if (state.extra == true) return null;
-          return appState.needsSupervisorSetup ? null : homeRoute;
+          return appState.needsSupervisorSetup
+              ? null
+              : _resumeTarget(state) ?? homeRoute;
         }
 
         if (isPasswordChangeRoute) return homeRoute;
@@ -148,8 +175,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: '/supervisor-setup',
-        builder: (context, state) =>
-            SupervisorShiftSetupScreen(returnToPrevious: state.extra == true),
+        builder: (context, state) => SupervisorShiftSetupScreen(
+          returnToPrevious: state.extra == true,
+          next: _resumeTarget(state),
+        ),
       ),
       GoRoute(
         path: '/supervisor',
@@ -177,9 +206,26 @@ final routerProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: 'assignment_detail',
             builder: (context, state) {
-              final assignment = state.extra;
-              return assignment is Assignment
-                  ? S08AssignmentDetailScreen(assignment: assignment)
+              final extra = state.extra;
+              final assignment = extra is Assignment
+                  ? extra
+                  : extra is Map<String, dynamic> &&
+                        extra['assignment'] is Assignment
+                  ? extra['assignment'] as Assignment
+                  : null;
+              final openConfirmation = extra is Map<String, dynamic>
+                  ? extra['openConfirmation'] == true
+                  : false;
+              final group =
+                  extra is Map<String, dynamic> && extra['group'] is List
+                  ? (extra['group'] as List).whereType<Assignment>().toList()
+                  : const <Assignment>[];
+              return assignment != null
+                  ? S08AssignmentDetailScreen(
+                      assignment: assignment,
+                      openConfirmation: openConfirmation,
+                      confirmationGroup: group,
+                    )
                   : const _RouteRecoveryScreen(
                       title: 'Thiếu thông tin phân công',
                       message:
@@ -206,11 +252,39 @@ final routerProvider = Provider<GoRouter>((ref) {
             path: 'confirm_scan',
             builder: (context, state) => const S10ConfirmScanScreen(),
           ),
+          GoRoute(
+            path: 'confirm_multi',
+            builder: (context, state) {
+              final extra = state.extra;
+              final worker = extra is Map<String, dynamic>
+                  ? extra['worker']
+                  : null;
+              final groups = extra is Map<String, dynamic>
+                  ? extra['groups']
+                  : null;
+              return worker is Map<String, dynamic> &&
+                      groups is List<List<Assignment>> &&
+                      groups.isNotEmpty
+                  ? S15MultiConfirmScreen(worker: worker, groups: groups)
+                  : const _RouteRecoveryScreen(
+                      title: 'Thiếu thông tin xác nhận',
+                      message:
+                          'Phiên xác nhận đã hết hạn. Hãy chọn lại công nhân ở tab Xác nhận.',
+                      destination: '/supervisor',
+                    );
+            },
+          ),
         ],
       ),
       GoRoute(
         path: '/sync',
         builder: (context, state) => const S12SyncScreen(),
+      ),
+      // Supervisors reach the account from the avatar in each tab's top bar;
+      // workers keep it as a tab in WorkerShell.
+      GoRoute(
+        path: '/account',
+        builder: (context, state) => const S13AccountScreen(),
       ),
       GoRoute(
         path: '/history',

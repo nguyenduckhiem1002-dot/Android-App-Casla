@@ -11,6 +11,7 @@ import 'package:casla_production/features/account/screens/supervisor_shift_setup
 import 'package:casla_production/features/supervisor/screens/s07_create_assignment_wizard_screen.dart';
 import 'package:casla_production/main.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -24,7 +25,7 @@ const _work = UserWorkContext(
   workCenter: '67110021',
 );
 final _shift = SapShift(
-  plant: '6711',
+  workCenter: '67110021',
   shiftId: 'DAY',
   validFrom: DateTime(2020),
   shiftName: 'Ca sáng',
@@ -41,7 +42,7 @@ class _Shifts extends SapShiftController {
 
   @override
   Future<List<SapShift>> getShifts({
-    required String plant,
+    required String workCenter,
     DateTime? onDate,
   }) async => [_shift];
 }
@@ -84,8 +85,118 @@ class _SupervisorState extends AppState {
   SapShiftController get shiftController => _Shifts();
 }
 
+const _namedWork = UserWorkContext(
+  workId: '6711_CLXM1VLT_MAY1_KQ3',
+  workName: 'Tổ May 1 - Máy KQ-3',
+  plant: '6711',
+  plantName: 'Nhà máy sản xuất Bình Minh',
+  workCenter: '67110021',
+  location: 'Khu xưởng may tầng 2 - Bình Minh',
+);
+
+class _LabelsState extends _SupervisorState {
+  // Login returned the Bộ phận without its Work Center yet.
+  UserWorkContext work = const UserWorkContext(
+    workId: '6711_CLXM1VLT_MAY1_KQ3',
+    workName: 'Tổ May 1 - Máy KQ-3',
+    plant: '6711',
+  );
+  final refreshCompleter = Completer<bool>();
+  int refreshCount = 0;
+
+  @override
+  UserSession get currentSession => UserSession(
+    id: 'setup-navigation-user',
+    maNv: 'manager-test',
+    fullName: 'Quản lý thử nghiệm',
+    teamName: 'Test',
+    role: UserRole.supervisor,
+    permissions: const {Permission.assignQuantity},
+    refreshToken: 'test-refresh-token',
+    workContexts: [work],
+  );
+
+  @override
+  Future<bool> refreshWorkContexts() {
+    refreshCount++;
+    return refreshCompleter.future;
+  }
+
+  void receiveNames() {
+    work = _namedWork;
+    notifyListeners();
+  }
+}
+
 void main() {
   useInMemoryDatabase();
+
+  for (final refreshSucceeds in [true, false]) {
+    testWidgets('setup shows work center and full location after refresh '
+        '(success: $refreshSucceeds)', (tester) async {
+      tester.view.physicalSize = const Size(360, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.runAsync(() => CaslaDatabase.instance.ready);
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      const connectivity = MethodChannel(
+        'dev.fluttercommunity.plus/connectivity_status',
+      );
+      messenger.setMockMethodCallHandler(connectivity, (_) async => null);
+      addTearDown(() => messenger.setMockMethodCallHandler(connectivity, null));
+      final appState = _LabelsState();
+      final container = ProviderContainer(
+        overrides: [appStateProvider.overrideWith((ref) => appState)],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: const MaterialApp(home: SupervisorShiftSetupScreen()),
+        ),
+      );
+      await tester.pump();
+      expect(appState.refreshCount, 1);
+      if (refreshSucceeds) appState.receiveNames();
+      appState.refreshCompleter.complete(refreshSucceeds);
+      await tester.pumpAndSettle();
+      final workshop = '${_namedWork.workCenter} (${_namedWork.location})';
+      if (!refreshSucceeds) {
+        expect(
+          find.text('Tài khoản chưa được cấp Xưởng làm việc trên SAP.'),
+          findsOneWidget,
+        );
+        // A later auth refresh must repaint this already mounted screen.
+        appState.receiveNames();
+        await tester.pumpAndSettle();
+        await tester.tap(find.byType(DropdownButtonFormField<String>));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text(workshop).last);
+        await tester.pumpAndSettle();
+      }
+      expect(find.text('Nhà máy'), findsNothing);
+      expect(find.text(workshop), findsOneWidget);
+      // A Xưởng with one Bộ phận selects it; the label is code - name only.
+      final department = find.text(
+        '${_namedWork.workId} - ${_namedWork.workName}',
+      );
+      expect(department, findsOneWidget);
+      final paragraph = tester.renderObject<RenderParagraph>(department);
+      expect(paragraph.didExceedMaxLines, isFalse);
+      final field = find.byType(DropdownButtonFormField<UserWorkContext>);
+      final fieldRect = tester.getRect(field);
+      final textRect = tester.getRect(department);
+      expect(fieldRect.contains(textRect.topLeft), isTrue);
+      expect(fieldRect.contains(textRect.bottomRight), isTrue);
+      expect(appState.refreshCount, 1);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.runAsync(() => CaslaDatabase.instance.close());
+      await tester.pump();
+    });
+  }
 
   for (final entry in ['login redirect', 'overview', 'assignment']) {
     testWidgets('Continue exits setup ($entry)', (tester) async {
@@ -97,6 +208,12 @@ void main() {
       await tester.runAsync(() => CaslaDatabase.instance.ready);
       final messenger =
           TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      // The assignment form now listens to the PDA while it is visible.
+      for (final name in ['casla/scanner/control', 'casla/scanner/events']) {
+        final channel = MethodChannel(name);
+        messenger.setMockMethodCallHandler(channel, (_) async => null);
+        addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+      }
       messenger.setMockMethodCallHandler(
         const MethodChannel('dev.fluttercommunity.plus/connectivity_status'),
         (_) async => null,
@@ -174,7 +291,14 @@ void main() {
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
       // Drain native SQLite work started by the overview streams before the
-      // fake-async test zone checks for pending database-lock timers.
+      // fake-async test zone checks for pending database-lock timers. Several
+      // overview watchers can queue behind one another, so let each finish.
+      for (var drain = 0; drain < 5; drain++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+        await tester.pump();
+      }
       await tester.runAsync(() => CaslaDatabase.instance.close());
       await tester.pump();
     });

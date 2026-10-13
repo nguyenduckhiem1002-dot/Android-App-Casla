@@ -2,16 +2,57 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../app/theme/casla_colors.dart';
+import '../../../core/auth/session_manager.dart';
 import '../../../domain/entities/enums.dart';
 import '../../../core/utils/device_info.dart';
 import '../../../main.dart';
 import '../widgets/change_password_dialog.dart';
+import '../widgets/scanner_settings_card.dart';
 
-class S13AccountScreen extends ConsumerWidget {
+class S13AccountScreen extends ConsumerStatefulWidget {
   const S13AccountScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<S13AccountScreen> createState() => _S13AccountScreenState();
+}
+
+class _S13AccountScreenState extends ConsumerState<S13AccountScreen> {
+  bool _isRefreshingCache = false;
+  bool _cacheInfoExpanded = false;
+  String? _cacheRefreshMessage;
+  bool _cacheRefreshFailed = false;
+
+  Future<void> _refreshProductionCache() async {
+    if (_isRefreshingCache) return;
+    setState(() {
+      _isRefreshingCache = true;
+      _cacheRefreshMessage = null;
+    });
+    try {
+      final result = await ref
+          .read(appStateProvider)
+          .refreshProductionDataCache();
+      if (!mounted) return;
+      setState(() {
+        _cacheRefreshMessage =
+            'Đã cập nhật ${result.entries.length} giao dịch từ SAP.';
+        _cacheRefreshFailed = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _cacheRefreshMessage =
+            'Chưa làm mới được. Dữ liệu đang có vẫn được giữ; hãy thử lại khi kết nối SAP ổn định.';
+        _cacheRefreshFailed = true;
+      });
+    } finally {
+      if (mounted) setState(() => _isRefreshingCache = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ref = this.ref;
     final appState = ref.watch(appStateProvider);
     final emp = appState.currentSession;
     final userName = emp?.fullName ?? emp?.userName ?? 'Người dùng';
@@ -204,7 +245,7 @@ class S13AccountScreen extends ConsumerWidget {
                           child: Text(
                             p,
                             style: const TextStyle(
-                              fontSize: 10.5,
+                              fontSize: 12,
                               fontWeight: FontWeight.w700,
                               color: CaslaColors.primaryNavy,
                             ),
@@ -219,6 +260,10 @@ class S13AccountScreen extends ConsumerWidget {
             const SizedBox(height: 20),
 
             // Action Buttons
+            const ScannerSettingsCard(),
+            const SizedBox(height: 12),
+            _buildCacheRefreshCard(appState),
+            const SizedBox(height: 12),
             ElevatedButton.icon(
               onPressed: () {
                 showChangePasswordDialog(context, ref: ref);
@@ -237,6 +282,161 @@ class S13AccountScreen extends ConsumerWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildCacheRefreshCard(AppState appState) {
+    final date = appState.activeBusinessDate;
+    final dateLabel =
+        '${date.day.toString().padLeft(2, '0')}/'
+        '${date.month.toString().padLeft(2, '0')}/'
+        '${date.year}';
+    final shift = appState.activeShift;
+    final work = appState.activeWorkContext;
+    final scopeLabel = [
+      dateLabel,
+      if (shift != null)
+        shift.shiftName.trim().isNotEmpty
+            ? shift.shiftName.trim()
+            : shift.shiftId,
+      if (work != null)
+        work.workName.trim().isNotEmpty ? work.workName.trim() : work.workId,
+    ].join(' · ');
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        color: CaslaColors.surface,
+        border: Border.all(color: CaslaColors.line),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.storage_rounded,
+                color: CaslaColors.primaryNavy,
+                size: 20,
+              ),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Dữ liệu sản lượng',
+                  style: TextStyle(
+                    fontFamily: 'Manrope',
+                    fontWeight: FontWeight.w800,
+                    fontSize: 14,
+                    color: CaslaColors.primaryNavy,
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: _isRefreshingCache
+                    ? 'Đang làm mới dữ liệu'
+                    : 'Làm mới dữ liệu SAP',
+                onPressed: _isRefreshingCache ? null : _refreshProductionCache,
+                constraints: const BoxConstraints.tightFor(
+                  width: 48,
+                  height: 48,
+                ),
+                icon: _isRefreshingCache
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh_rounded),
+              ),
+              IconButton(
+                tooltip: _cacheInfoExpanded ? 'Thu gọn' : 'Xem giải thích',
+                onPressed: () =>
+                    setState(() => _cacheInfoExpanded = !_cacheInfoExpanded),
+                constraints: const BoxConstraints.tightFor(
+                  width: 48,
+                  height: 48,
+                ),
+                icon: Icon(
+                  _cacheInfoExpanded
+                      ? Icons.expand_less_rounded
+                      : Icons.expand_more_rounded,
+                  color: CaslaColors.muted,
+                ),
+              ),
+            ],
+          ),
+          AnimatedSize(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.topCenter,
+            child: _cacheInfoExpanded
+                ? Padding(
+                    padding: const EdgeInsets.fromLTRB(4, 0, 4, 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Tải lại lịch sử từ SAP khi số liệu chưa khớp. '
+                          'Cache cũ được giữ nếu làm mới thất bại; '
+                          'giao dịch chờ đồng bộ không bị xóa.',
+                          style: TextStyle(
+                            color: CaslaColors.muted,
+                            fontSize: 12,
+                            height: 1.4,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          scopeLabel,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: CaslaColors.primaryNavy,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        if (_cacheRefreshMessage case final message?) ...[
+                          const SizedBox(height: 8),
+                          Semantics(
+                            liveRegion: true,
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Icon(
+                                  _cacheRefreshFailed
+                                      ? Icons.error_outline_rounded
+                                      : Icons.check_circle_outline_rounded,
+                                  size: 18,
+                                  color: _cacheRefreshFailed
+                                      ? CaslaColors.danger
+                                      : CaslaColors.success,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    message,
+                                    style: TextStyle(
+                                      color: _cacheRefreshFailed
+                                          ? CaslaColors.danger
+                                          : CaslaColors.success,
+                                      fontSize: 12,
+                                      height: 1.35,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  )
+                : const SizedBox.shrink(),
+          ),
+        ],
       ),
     );
   }
@@ -304,5 +504,6 @@ class S13AccountScreen extends ConsumerWidget {
     Permission.switchUser => 'Chuyển công nhân',
     Permission.viewOwnProductionHistory => 'Xem lịch sử bản thân',
     Permission.viewTeamProductionHistory => 'Xem lịch sử tổ',
+    Permission.managePositions => 'Quản lý vị trí công nhân',
   };
 }

@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:casla_production/core/scanner/barcode_scanner.dart';
 import 'package:casla_production/core/scanner/barcode_scan_event.dart';
+import 'package:casla_production/core/scanner/scan_feedback.dart';
+import 'package:casla_production/core/scanner/scanner_preferences.dart';
 import 'package:casla_production/presentation/widgets/adaptive_barcode_scanner_view.dart';
 
 class FakeScanner implements BarcodeScanner {
@@ -16,6 +18,9 @@ class FakeScanner implements BarcodeScanner {
 }
 
 void main() {
+  setUp(() => ScanFeedback.setMuted(true));
+  tearDown(() => ScanFeedback.setMuted(false));
+
   testWidgets('hidden tab must not handle PDA scans', (tester) async {
     final scanner = FakeScanner();
     var handled = 0;
@@ -27,8 +32,10 @@ void main() {
             title: 'Scan',
             subtitle: 'Test',
             hardwareScanner: scanner,
+            preferences: InMemoryScannerPreferences(),
             onScan: (_) {
               handled++;
+              return true;
             },
           ),
         ),

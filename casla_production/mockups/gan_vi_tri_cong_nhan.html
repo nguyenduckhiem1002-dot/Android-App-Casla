@@ -1,0 +1,1233 @@
+<title>Gán vị trí công nhân</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=Inter:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: review canvas — a live PDA prototype on the left, review notes and demo controls on the right; stacks on phones. */
+:root {
+  /* Page (follows the viewer's theme) */
+  --pg-bg: #ECEEF3;
+  --pg-card: #FFFFFF;
+  --pg-fg: #16234A;
+  --pg-muted: #596274;
+  --pg-line: #D8DCE5;
+  --pg-accent: #7A5A18;
+  --pg-accent-bg: #F6EAD2;
+  --pg-chip: #E4E8F1;
+  --bezel: #0E1730;
+
+  /* Device screen: the Casla app ships a light theme only, so the screen keeps one look in both page themes */
+  --navy: #16234A;
+  --navy-700: #1D2E5C;
+  --navy-900: #0E1730;
+  --navy-100: #EDF1F5;
+  --gold: #C9A24B;
+  --gold-100: #F6EAD2;
+  --gold-700: #765515;
+  --app-bg: #F5F6F8;
+  --surface: #FFFFFF;
+  --line: #E7E9EE;
+  --muted: #626A78;
+  --muted-100: #EEF0F3;
+  --id-meta: #B9C2E4;
+  --success: #2E7D32;
+  --success-bg: #E5F2E6;
+  --danger: #C62828;
+  --danger-bg: #FBEAEA;
+  --pending: #85601A;
+  --pending-bg: #FBF1DD;
+  --on-navy: #FFFFFF;
+  --scrim: rgba(14, 23, 48, .55);
+  --cam: #05080F;
+
+  --f-display: "Manrope", "Segoe UI", system-ui, sans-serif;
+  --f-body: "Inter", "Segoe UI", system-ui, sans-serif;
+  --f-mono: ui-monospace, "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --pg-bg: #0B1022;
+    --pg-card: #131A31;
+    --pg-fg: #E5E9F5;
+    --pg-muted: #A0A9C6;
+    --pg-line: #273153;
+    --pg-accent: #E0BE6E;
+    --pg-accent-bg: #2A2413;
+    --pg-chip: #1C2542;
+    --bezel: #020409;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --pg-bg: #0B1022;
+  --pg-card: #131A31;
+  --pg-fg: #E5E9F5;
+  --pg-muted: #A0A9C6;
+  --pg-line: #273153;
+  --pg-accent: #E0BE6E;
+  --pg-accent-bg: #2A2413;
+  --pg-chip: #1C2542;
+  --bezel: #020409;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  background: var(--pg-bg);
+  color: var(--pg-fg);
+  font-family: var(--f-body);
+  font-size: 15px;
+  line-height: 1.5;
+  padding-inline: 16px;
+}
+button { font: inherit; color: inherit; cursor: pointer; touch-action: manipulation; }
+button:disabled { cursor: not-allowed; }
+:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+.page {
+  max-width: 1160px;
+  margin: 0 auto;
+  padding-block: 28px 48px;
+  display: grid;
+  grid-template-columns: 404px minmax(0, 1fr);
+  gap: 40px;
+  align-items: start;
+}
+@media (max-width: 920px) {
+  .page { grid-template-columns: minmax(0, 1fr); gap: 28px; }
+}
+
+/* ---------- Device ---------- */
+.device-col { display: grid; justify-items: center; gap: 12px; }
+@media (min-width: 921px) and (min-height: 900px) {
+  .device-col { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 20px); }
+}
+.device {
+  width: 404px;
+  max-width: 100%;
+  height: 840px;
+  padding: 12px;
+  border-radius: 48px;
+  background: var(--bezel);
+  box-shadow: 0 30px 60px -30px rgba(14, 23, 48, .55);
+}
+.screen {
+  position: relative;
+  height: 100%;
+  border-radius: 37px;
+  overflow: hidden;
+  background: var(--app-bg);
+  color: var(--navy);
+  display: flex;
+  flex-direction: column;
+  font-size: 14px;
+}
+@media (max-width: 460px) {
+  .device { padding: 0; border-radius: 22px; height: 760px; box-shadow: none; background: transparent; }
+  .screen { border-radius: 22px; border: 1px solid var(--pg-line); }
+}
+.device-caption { font-size: 13px; color: var(--pg-muted); text-align: center; max-width: 40ch; }
+
+.statusbar {
+  background: var(--navy);
+  color: var(--on-navy);
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 26px 4px;
+  font-size: 12px; font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.statusbar .sys { display: flex; gap: 6px; align-items: center; }
+.statusbar .batt { width: 22px; height: 11px; border: 1.5px solid currentColor; border-radius: 3px; position: relative; }
+.statusbar .batt::after { content: ""; position: absolute; inset: 1.5px 5px 1.5px 1.5px; background: currentColor; border-radius: 1px; }
+
+.appbar { background: var(--navy); color: var(--on-navy); padding: 8px 16px 14px; }
+.appbar-row { display: flex; align-items: center; gap: 12px; }
+.appbar-title { flex: 1; min-width: 0; }
+.appbar-title h1 {
+  margin: 0; font-family: var(--f-display); font-weight: 800; font-size: 20px; line-height: 1.25;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ctx { margin-top: 2px; font-size: 12.5px; color: var(--id-meta); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.ctx .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--id-meta); }
+.avatar-btn {
+  width: 44px; height: 44px; border-radius: 50%;
+  border: 2px solid var(--gold); background: var(--navy-700); color: var(--on-navy);
+  font-family: var(--f-display); font-weight: 800; font-size: 14px;
+  display: grid; place-items: center; flex: none;
+}
+.avatar-btn:hover { background: var(--navy-900); }
+
+.segment {
+  margin-top: 14px;
+  display: grid; grid-template-columns: 1fr 1fr;
+  background: rgba(255, 255, 255, .08);
+  border-radius: 10px; padding: 3px;
+}
+.segment button {
+  border: 0; background: transparent; color: var(--id-meta);
+  min-height: 38px; border-radius: 8px; font-weight: 600; font-size: 13.5px;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+}
+.segment button[aria-selected="true"] { background: var(--surface); color: var(--navy); }
+
+.body { flex: 1; overflow-y: auto; padding: 14px 14px 20px; display: flex; flex-direction: column; gap: 12px; scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { .body { scroll-behavior: auto; } }
+
+.reader {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12.5px; color: var(--success); font-weight: 600;
+  padding: 7px 12px; border-radius: 99px; background: var(--success-bg); align-self: flex-start;
+}
+.reader .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 0 rgba(46, 125, 50, .5); animation: pulse 2s infinite; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(46,125,50,.45); } 70% { box-shadow: 0 0 0 7px rgba(46,125,50,0); } 100% { box-shadow: 0 0 0 0 rgba(46,125,50,0); } }
+@media (prefers-reduced-motion: reduce) { .reader .pulse, .scanline { animation: none !important; } }
+
+/* Scan field — mirrors _ScanSlot on the Phân công screen */
+.fld-wrap { display: grid; gap: 8px; }
+.fld-label { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; font-weight: 700; color: var(--navy); }
+.fld-label span:first-child { flex: 1; }
+.fld-label .req { color: var(--danger); }
+.fld-label .tgt { font-size: 12px; font-weight: 700; color: var(--navy); }
+.slot {
+  background: var(--surface); border: 1.2px solid var(--line); border-radius: var(--r-md);
+  padding: 4px 4px 4px 0; transition: border-color .2s, background .2s;
+}
+.slot.target { border: 2px solid var(--navy); padding: 3px 3px 3px 0; }
+.slot.filled { background: var(--success-bg); border-color: var(--success); }
+.slot.filled.target { border-color: var(--navy); }
+.slot-row { display: flex; align-items: center; }
+.slot-main {
+  flex: 1; min-width: 0; min-height: 48px; border: 0; background: transparent; text-align: left;
+  display: flex; align-items: center; gap: 12px; padding: 4px 4px 4px 12px; border-radius: 10px;
+  font-size: 14px; font-weight: 700; color: var(--muted);
+}
+.slot-main svg { width: 22px; height: 22px; color: var(--muted); }
+.slot.filled .slot-main { color: var(--navy); }
+.slot.filled .slot-main svg { color: var(--success); }
+.slot-main span { overflow-wrap: anywhere; }
+.slot-btn { width: 48px; height: 48px; border: 0; background: transparent; border-radius: 50%; display: grid; place-items: center; color: var(--navy); flex: none; }
+.slot-btn.clear { color: var(--muted); }
+.slot-btn:hover { background: rgba(22, 35, 74, .07); }
+.slot-info { padding: 2px 12px 10px 46px; display: grid; gap: 2px; }
+.info-row { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+.info-row .k { font-size: 12px; font-weight: 600; color: var(--muted); }
+.info-row .v { font-size: 14px; font-weight: 700; color: var(--navy); overflow-wrap: anywhere; }
+.info-row.warn .v { color: var(--pending); }
+.info-row.new .v { color: var(--pending); }
+.info-row .v.quiet { color: var(--muted); font-weight: 600; }
+.assign { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); transition: border-color .2s; }
+.assign.on { border-color: var(--navy); }
+.opt { position: relative; display: flex; gap: 12px; align-items: flex-start; padding: 12px; min-height: 48px; cursor: pointer; border-radius: var(--r-md); }
+.opt input { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+.opt .box {
+  width: 22px; height: 22px; border-radius: 6px; border: 2px solid var(--muted); flex: none; margin-top: 1px;
+  display: grid; place-items: center; color: transparent; background: var(--surface); transition: background .15s, border-color .15s;
+}
+.opt .box svg { width: 15px; height: 15px; stroke-width: 3; }
+.opt input:checked + .box { background: var(--navy); border-color: var(--navy); color: var(--on-navy); }
+.opt input:focus-visible + .box { outline: 3px solid var(--gold); outline-offset: 2px; }
+.opt-txt { display: grid; gap: 2px; min-width: 0; }
+.opt-txt b { font-size: 14px; font-weight: 700; color: var(--navy); }
+.opt-txt small { font-size: 12.5px; color: var(--muted); line-height: 1.4; }
+.opt .optional { font-size: 11.5px; font-weight: 700; color: var(--muted); background: var(--muted-100); padding: 2px 8px; border-radius: 99px; margin-left: auto; flex: none; }
+.assign-body { padding: 0 12px 12px; }
+.row .who .none { font-style: italic; }
+.manual-link {
+  justify-self: start; border: 0; background: transparent; padding: 4px 2px; min-height: 32px;
+  font-size: 13px; font-weight: 600; color: var(--navy); text-decoration: underline; text-underline-offset: 3px;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.manual-link svg { width: 16px; height: 16px; }
+.hint { margin: 0; color: var(--muted); font-size: 13.5px; }
+.btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.btn {
+  min-height: 46px; border-radius: var(--r-md); border: 1.5px solid var(--navy);
+  background: var(--surface); color: var(--navy); font-weight: 700; font-size: 14px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 14px;
+  transition: background .15s, transform .1s;
+}
+.btn:active { transform: scale(.98); }
+.btn.navy { background: var(--navy); color: var(--on-navy); }
+.btn.navy:hover { background: var(--navy-700); }
+.btn.gold { background: var(--gold); border-color: var(--gold); color: var(--navy-900); }
+.btn.gold:hover { background: #BE9640; }
+.btn.ghost { border-color: transparent; background: transparent; min-height: 36px; padding: 0 8px; font-size: 13px; color: var(--muted); }
+.btn.ghost:hover { background: var(--muted-100); }
+.btn.danger { border-color: var(--danger); color: var(--danger); }
+.btn:disabled { opacity: .45; transform: none; }
+
+.initials {
+  width: 46px; height: 46px; border-radius: 50%; flex: none; display: grid; place-items: center;
+  background: var(--navy-100); color: var(--navy); font-family: var(--f-display); font-weight: 800; font-size: 16px;
+}
+
+.preview {
+  display: flex; gap: 10px; align-items: flex-start; padding: 12px; border-radius: var(--r-md);
+  font-size: 13.5px; font-weight: 600; line-height: 1.4;
+}
+.preview.ok { background: var(--success-bg); color: var(--success); }
+.preview.warn { background: var(--pending-bg); color: var(--pending); }
+.preview .cases { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+.preview .cases span { font-size: 11.5px; padding: 2px 8px; border-radius: 99px; background: var(--surface); border: 1px solid currentColor; }
+
+.error {
+  display: flex; gap: 8px; align-items: flex-start; padding: 10px 6px 10px 12px;
+  background: var(--danger-bg); color: var(--danger); border-radius: var(--r-md);
+  border: 1px solid rgba(198, 40, 40, .3); font-size: 13px;
+}
+.error p { margin: 0; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.icon-btn {
+  width: 40px; height: 40px; border-radius: 50%; border: 0; background: transparent;
+  display: grid; place-items: center; color: inherit; flex: none;
+}
+.icon-btn:hover { background: rgba(0, 0, 0, .06); }
+
+.cta {
+  background: var(--surface); border-top: 1px solid var(--line);
+  padding: 10px 14px;
+}
+.cta .btn { width: 100%; min-height: 52px; font-size: 15px; }
+.cta .sub { margin: 6px 0 0; text-align: center; font-size: 12px; color: var(--muted); }
+.spinner { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid rgba(14,23,48,.25); border-top-color: var(--navy-900); animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.nav {
+  background: var(--surface); border-top: 1px solid var(--line);
+  display: grid; grid-template-columns: repeat(5, 1fr);
+  padding: 4px 4px 14px;
+}
+.nav button {
+  border: 0; background: transparent; min-height: 56px; border-radius: 12px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  font-size: 11.5px; font-weight: 500; color: var(--muted); position: relative;
+}
+.nav button .pill { width: 56px; height: 30px; border-radius: 99px; display: grid; place-items: center; transition: background .2s; }
+.nav button[aria-current="page"] { color: var(--navy); font-weight: 700; }
+.nav button[aria-current="page"] .pill { background: var(--gold-100); }
+.nav .badge {
+  position: absolute; top: 4px; left: calc(50% + 6px);
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px;
+  background: var(--danger); color: var(--on-navy); font-size: 10.5px; font-weight: 700;
+  display: grid; place-items: center; font-variant-numeric: tabular-nums;
+}
+.nav .new-dot {
+  position: absolute; top: 6px; left: calc(50% + 10px); width: 8px; height: 8px; border-radius: 50%;
+  background: var(--gold); border: 2px solid var(--surface);
+}
+
+/* table view */
+.filters { display: flex; gap: 8px; flex-wrap: wrap; }
+.filters button {
+  min-height: 36px; padding: 0 14px; border-radius: 99px; border: 1px solid var(--line);
+  background: var(--surface); font-size: 13px; font-weight: 600; color: var(--muted);
+}
+.filters button[aria-pressed="true"] { background: var(--navy); border-color: var(--navy); color: var(--on-navy); }
+.rows { display: flex; flex-direction: column; gap: 8px; }
+.row {
+  width: 100%; text-align: left; color: var(--navy);
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md);
+  padding: 12px 8px 12px 12px; display: flex; gap: 10px; align-items: center;
+  transition: border-color .15s;
+}
+.row:hover { border-color: var(--navy); }
+.row .chev { color: var(--muted); }
+.row.recent { background: var(--gold-100); border-color: var(--gold); }
+.table-hint { margin: 0; font-size: 12.5px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
+.table-hint svg { width: 15px; height: 15px; }
+
+/* detail sheet */
+.detail-head { display: flex; gap: 10px; align-items: flex-start; }
+.detail-head h3 { margin: 0; flex: 1; }
+.ro { margin-top: 14px; background: var(--app-bg); border-radius: var(--r-md); padding: 12px; display: grid; gap: 4px; }
+
+.row .main { flex: 1; min-width: 0; }
+.row .slot { font-family: var(--f-display); font-weight: 800; font-size: 15px; }
+.row.off .slot { color: var(--muted); text-decoration: line-through; }
+.row .who { font-size: 13px; color: var(--muted); }
+.row .when { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.st {
+  flex: none; display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px; border-radius: 99px; font-size: 12px; font-weight: 700; white-space: nowrap;
+}
+.st::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.st.a { background: var(--success-bg); color: var(--success); border: 1px solid rgba(46,125,50,.3); }
+.st.i { background: var(--muted-100); color: var(--muted); border: 1px solid var(--line); }
+.new-mark { font-size: 11px; font-weight: 700; color: var(--gold-700); letter-spacing: .03em; }
+
+.placeholder { margin: auto 0; text-align: center; color: var(--muted); padding: 24px 20px; display: grid; gap: 10px; justify-items: center; }
+.placeholder .ph-icon { width: 64px; height: 64px; border-radius: 18px; background: var(--muted-100); display: grid; place-items: center; color: var(--navy); }
+.placeholder .ph-icon svg { width: 30px; height: 30px; }
+.placeholder h3 { margin: 0; color: var(--navy); font-family: var(--f-display); font-size: 17px; }
+.placeholder p { margin: 0; font-size: 13.5px; max-width: 30ch; }
+
+/* overlays inside the device */
+.layer { position: absolute; inset: 0; z-index: 20; display: flex; align-items: flex-end; }
+.layer[hidden] { display: none; }
+.layer.center { align-items: center; justify-content: center; padding: 20px; }
+.scrim { position: absolute; inset: 0; background: var(--scrim); animation: fade .18s ease-out; }
+.sheet {
+  position: relative; width: 100%; max-height: 88%; overflow-y: auto;
+  background: var(--surface); border-radius: 22px 22px 0 0; padding: 8px 18px 22px;
+  animation: rise .24s cubic-bezier(.2, .8, .2, 1);
+}
+.grab { width: 40px; height: 4px; border-radius: 99px; background: var(--line); margin: 4px auto 12px; }
+.dialog {
+  position: relative; width: 100%; max-height: 100%; overflow-y: auto;
+  background: var(--surface); border-radius: 22px; padding: 22px 20px 18px;
+  animation: pop .2s cubic-bezier(.2, .8, .2, 1);
+}
+@keyframes fade { from { opacity: 0; } }
+@keyframes rise { from { transform: translateY(40px); opacity: .4; } }
+@keyframes pop { from { transform: scale(.94); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .scrim, .sheet, .dialog { animation: none; } }
+
+.warn-icon { width: 52px; height: 52px; border-radius: 50%; background: var(--gold-100); color: var(--gold-700); display: grid; place-items: center; margin: 0 auto 10px; }
+.warn-icon svg { width: 26px; height: 26px; }
+.eyebrow { text-align: center; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--gold-700); }
+.dialog h3, .sheet h3 { margin: 4px 0 0; font-family: var(--f-display); font-size: 20px; font-weight: 800; line-height: 1.3; text-wrap: balance; }
+.dialog h3 { text-align: center; }
+.dialog .msg { margin: 14px 0 0; font-size: 15.5px; line-height: 1.5; color: var(--navy-900); }
+.dialog .msg b, .sheet b { font-weight: 800; }
+.changes { margin-top: 14px; padding: 12px; background: var(--app-bg); border-radius: var(--r-md); display: grid; gap: 8px; }
+.changes .lbl { font-size: 12px; font-weight: 700; color: var(--muted); }
+.chg { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.chg .txt { flex: 1; min-width: 0; font-variant-numeric: tabular-nums; }
+.chg .k { font-size: 11.5px; font-weight: 800; padding: 2px 8px; border-radius: 99px; flex: none; }
+.chg.off .k { background: var(--danger-bg); color: var(--danger); }
+.chg.new .k, .chg.re .k { background: var(--success-bg); color: var(--success); }
+.chg.off svg { color: var(--danger); } .chg.new svg, .chg.re svg { color: var(--success); }
+.chg svg { width: 16px; height: 16px; }
+.dialog .actions { margin-top: 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.dialog .foot { margin: 10px 0 0; text-align: center; font-size: 12px; color: var(--muted); }
+
+.cam {
+  position: relative; height: 230px; border-radius: 16px; background: var(--cam); overflow: hidden;
+  display: grid; place-items: center; margin-top: 12px;
+}
+.cam .frame { width: 150px; height: 150px; position: relative; }
+.cam .frame i { position: absolute; width: 28px; height: 28px; border-color: var(--gold); border-style: solid; border-width: 0; }
+.cam .frame i:nth-child(1) { top: 0; left: 0; border-top-width: 4px; border-left-width: 4px; border-top-left-radius: 8px; }
+.cam .frame i:nth-child(2) { top: 0; right: 0; border-top-width: 4px; border-right-width: 4px; border-top-right-radius: 8px; }
+.cam .frame i:nth-child(3) { bottom: 0; left: 0; border-bottom-width: 4px; border-left-width: 4px; border-bottom-left-radius: 8px; }
+.cam .frame i:nth-child(4) { bottom: 0; right: 0; border-bottom-width: 4px; border-right-width: 4px; border-bottom-right-radius: 8px; }
+.scanline { position: absolute; left: 8px; right: 8px; height: 2px; background: var(--gold); box-shadow: 0 0 12px var(--gold); top: 10%; animation: sweep 2.2s ease-in-out infinite alternate; }
+@keyframes sweep { to { top: 88%; } }
+.cam .cam-note { position: absolute; bottom: 10px; left: 0; right: 0; text-align: center; font-size: 12px; color: var(--id-meta); }
+.samples { margin-top: 14px; display: grid; gap: 8px; }
+.samples .lbl { font-size: 12px; font-weight: 700; color: var(--muted); letter-spacing: .03em; }
+.sample {
+  display: flex; align-items: center; gap: 10px; text-align: left;
+  min-height: 52px; padding: 8px 12px; border-radius: var(--r-md); border: 1px solid var(--line); background: var(--surface);
+}
+.sample:hover { background: var(--app-bg); }
+.sample .code { font-family: var(--f-mono); font-weight: 700; font-size: 13.5px; }
+.sample .desc { font-size: 12.5px; color: var(--muted); }
+.sample .txt { flex: 1; min-width: 0; }
+
+.field { margin-top: 14px; display: grid; gap: 6px; }
+.field label { font-size: 13px; font-weight: 700; }
+.field input {
+  min-height: 50px; border-radius: var(--r-sm); border: 1.5px solid var(--line); padding: 0 14px;
+  font: 600 16px var(--f-mono); color: var(--navy); background: var(--surface); text-transform: uppercase;
+}
+.field input:focus { outline: none; border-color: var(--navy); box-shadow: 0 0 0 3px rgba(22,35,74,.12); }
+.field input[aria-invalid="true"] { border-color: var(--danger); }
+.field .help { font-size: 12.5px; color: var(--muted); }
+.field .err { font-size: 12.5px; color: var(--danger); font-weight: 600; }
+
+.acct-head { display: flex; gap: 14px; align-items: center; padding: 4px 0 14px; border-bottom: 1px solid var(--line); }
+.acct-head .initials { width: 56px; height: 56px; font-size: 19px; background: var(--navy); color: var(--on-navy); border: 2px solid var(--gold); }
+.acct-list { display: grid; padding: 6px 0; }
+.acct-list button {
+  display: flex; align-items: center; gap: 12px; min-height: 52px; border: 0; background: transparent;
+  text-align: left; border-radius: var(--r-sm); padding: 0 6px; font-size: 14.5px; font-weight: 500;
+}
+.acct-list button:hover { background: var(--app-bg); }
+.acct-list button span { flex: 1; }
+.acct-list button .chev { color: var(--muted); }
+.acct-list .val { font-size: 12.5px; color: var(--muted); font-weight: 500; flex: none; }
+.acct-sep { height: 1px; background: var(--line); margin: 6px 0; }
+.acct-list .logout { color: var(--danger); font-weight: 700; }
+
+.toast {
+  position: absolute; left: 14px; right: 14px; bottom: 96px; z-index: 30;
+  background: var(--navy-900); color: var(--on-navy); padding: 12px 14px; border-radius: var(--r-md);
+  font-size: 13.5px; display: flex; gap: 10px; align-items: center;
+  box-shadow: 0 10px 24px -10px rgba(0,0,0,.5); animation: rise .2s ease-out;
+}
+.toast[hidden] { display: none; }
+
+.flash { animation: flash .6s ease-out; }
+@keyframes flash { 0% { box-shadow: 0 0 0 0 rgba(201,162,75,.9); } 100% { box-shadow: 0 0 0 14px rgba(201,162,75,0); } }
+@media (prefers-reduced-motion: reduce) { .flash { animation: none; } }
+
+/* ---------- Review panel ---------- */
+.panel { display: grid; gap: 22px; min-width: 0; }
+.panel header .kicker { font-size: 12.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--pg-accent); }
+.panel header h1 { margin: 6px 0 8px; font-family: var(--f-display); font-weight: 800; font-size: clamp(28px, 4vw, 38px); line-height: 1.15; letter-spacing: -.01em; text-wrap: balance; }
+.panel header p { margin: 0; max-width: 62ch; color: var(--pg-muted); }
+.card { background: var(--pg-card); border: 1px solid var(--pg-line); border-radius: var(--r-lg); padding: 20px; display: grid; gap: 14px; min-width: 0; }
+.card h2 { margin: 0; font-family: var(--f-display); font-size: 18px; font-weight: 800; }
+.card > p { margin: 0; color: var(--pg-muted); font-size: 14px; max-width: 65ch; }
+
+.navcmp { display: grid; gap: 10px; }
+.navcmp .lab { font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--pg-muted); }
+.navstrip { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.navstrip div {
+  border: 1px solid var(--pg-line); border-radius: 10px; padding: 8px 4px; text-align: center;
+  font-size: 12.5px; font-weight: 600; display: grid; justify-items: center; gap: 4px; min-width: 0;
+}
+.navstrip div svg { width: 18px; height: 18px; }
+.navstrip .gone { opacity: .55; text-decoration: line-through; }
+.navstrip .added { border-color: var(--pg-accent); background: var(--pg-accent-bg); color: var(--pg-accent); }
+.navstrip span { overflow-wrap: anywhere; }
+.why { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 14px; }
+.why li::marker { color: var(--pg-accent); }
+
+.scen { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
+.scen button {
+  text-align: left; border: 1px solid var(--pg-line); background: var(--pg-card); border-radius: var(--r-md);
+  padding: 12px 14px; display: grid; gap: 4px; transition: border-color .15s, background .15s;
+}
+.scen button:hover { border-color: var(--pg-accent); background: var(--pg-accent-bg); }
+.scen .t { font-weight: 700; font-size: 14px; display: flex; gap: 8px; align-items: center; }
+.scen .t em { font-style: normal; font-size: 11.5px; font-weight: 800; padding: 1px 8px; border-radius: 99px; background: var(--pg-chip); }
+.scen .c { font-family: var(--f-mono); font-size: 12.5px; color: var(--pg-muted); }
+.scen .d { font-size: 13px; color: var(--pg-muted); }
+.tools { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+.tools .fld { display: grid; gap: 4px; flex: 1 1 220px; min-width: 0; }
+.tools label { font-size: 12.5px; font-weight: 700; color: var(--pg-muted); }
+.tools input {
+  min-height: 44px; border-radius: 10px; border: 1px solid var(--pg-line); background: var(--pg-bg); color: var(--pg-fg);
+  padding: 0 12px; font: 600 14px var(--f-mono); width: 100%;
+}
+.pbtn {
+  min-height: 44px; border-radius: 10px; border: 1px solid var(--pg-line); background: var(--pg-chip); color: var(--pg-fg);
+  padding: 0 14px; font-weight: 700; font-size: 13.5px; display: inline-flex; align-items: center; gap: 8px;
+}
+.pbtn:hover { border-color: var(--pg-accent); }
+
+.tbl-wrap { overflow-x: auto; border: 1px solid var(--pg-line); border-radius: var(--r-md); }
+table { border-collapse: collapse; width: 100%; min-width: 620px; font-size: 13.5px; }
+th, td { text-align: left; vertical-align: top; padding: 10px 12px; border-bottom: 1px solid var(--pg-line); }
+th { font-size: 12px; letter-spacing: .05em; text-transform: uppercase; color: var(--pg-muted); background: var(--pg-chip); }
+tr:last-child td { border-bottom: 0; }
+td.no { font-family: var(--f-display); font-weight: 800; font-size: 16px; color: var(--pg-accent); }
+td q { quotes: "“" "”"; }
+.open-q { margin: 0; padding-left: 20px; display: grid; gap: 8px; font-size: 14px; }
+.open-q b { font-weight: 700; }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6M9 16h4"/></symbol>
+  <symbol id="i-scan" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></symbol>
+  <symbol id="i-sync" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 0-15-6.7L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 15 6.7L21 16"/><path d="M16 16h5v5"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></symbol>
+  <symbol id="i-kbd" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4M12 17h.01"/></symbol>
+  <symbol id="i-factory" viewBox="0 0 24 24"><path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8l-7 5V8l-7 5V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M17 18h1M12 18h1M7 18h1"/></symbol>
+  <symbol id="i-swap" viewBox="0 0 24 24"><path d="m16 3 4 4-4 4M20 7H4M8 21l-4-4 4-4M4 17h16"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M8 12h8M12 8v8"/></symbol>
+  <symbol id="i-minus" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/></symbol>
+  <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="i-logout" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+  <symbol id="i-table" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 13v8M8 17l4-4 4 4"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></symbol>
+  <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5M3 12a9 3 0 0 0 18 0"/></symbol>
+  <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8"/></symbol>
+</svg>
+
+<div class="page">
+  <div class="device-col">
+    <div class="device" id="device">
+      <div class="screen" id="screen">
+        <div class="statusbar" aria-hidden="true"><span id="clock">09:41</span><span class="sys">4G <span class="batt"></span></span></div>
+        <div class="appbar" id="appbar"></div>
+        <div class="body" id="body" tabindex="-1"></div>
+        <div class="cta" id="cta"></div>
+        <nav class="nav" id="nav" aria-label="Điều hướng chính"></nav>
+        <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+        <div class="layer" id="layer" hidden></div>
+      </div>
+    </div>
+    <p class="device-caption">Prototype bấm được. Dữ liệu là mô phỏng, không gửi SAP thật.</p>
+  </div>
+
+  <main class="panel">
+    <header>
+      <div class="kicker">Casla Production · Tổ trưởng · Bản review</div>
+      <h1>Gán vị trí công nhân</h1>
+      <p>Quét nhãn trên máy vào ô Vị trí / mã máy. Muốn gán công nhân luôn thì tick ô Gán công nhân và quét thẻ, không thì bỏ trống để gán sau. Bấm Cập nhật. SAP kiểm tra bảng quản lý vị trí CN và trả về cảnh báo theo 4 trường hợp. Tổ trưởng xác nhận từng cảnh báo trước khi dữ liệu được ghi.</p>
+    </header>
+
+    <section class="card" aria-labelledby="h-nav">
+      <h2 id="h-nav">Điều hướng mới</h2>
+      <div class="navcmp">
+        <div class="lab">Hiện tại</div>
+        <div class="navstrip">
+          <div><svg class="i"><use href="#i-grid"/></svg><span>Tổng quan</span></div>
+          <div><svg class="i"><use href="#i-clip"/></svg><span>Phân công</span></div>
+          <div><svg class="i"><use href="#i-scan"/></svg><span>Xác nhận</span></div>
+          <div><svg class="i"><use href="#i-sync"/></svg><span>Đồng bộ</span></div>
+          <div class="gone"><svg class="i"><use href="#i-user"/></svg><span>Tài khoản</span></div>
+        </div>
+        <div class="lab">Đề xuất</div>
+        <div class="navstrip">
+          <div><svg class="i"><use href="#i-grid"/></svg><span>Tổng quan</span></div>
+          <div><svg class="i"><use href="#i-clip"/></svg><span>Phân công</span></div>
+          <div><svg class="i"><use href="#i-scan"/></svg><span>Xác nhận</span></div>
+          <div class="added"><svg class="i"><use href="#i-pin"/></svg><span>Vị trí</span></div>
+          <div><svg class="i"><use href="#i-sync"/></svg><span>Đồng bộ</span></div>
+        </div>
+      </div>
+      <ul class="why">
+        <li>Ô Vị trí / mã máy đứng đầu và bắt buộc. Công nhân là tùy chọn, nằm trong ô tick <i>Gán công nhân vào vị trí này</i>. Quét thẻ công nhân khi chưa tick thì app tự tick.</li>
+        <li>Bảng vị trí chỉ để xem: chạm một dòng để mở chi tiết, không sửa được gì. Mọi thay đổi đi qua Quét gán.</li>
+        <li>Ô quét dùng chung kiểu với màn Phân công: chạm vào ô để chọn, bóp cò thì mã vào ô đó, nút camera ở cuối ô.</li>
+        <li>Thanh điều hướng giữ đúng 5 mục. Nhiều hơn thì nhãn bị cắt và ô bấm nhỏ hơn 48dp trên PDA.</li>
+        <li>Tài khoản ít dùng trong ca nên chuyển lên avatar góc phải thanh tiêu đề, có mặt ở mọi tab. Đăng xuất nằm riêng ở cuối, tô đỏ.</li>
+        <li>Vị trí đứng cạnh Xác nhận vì cả hai đều là thao tác quét. Đồng bộ ở cuối và giữ badge số giao dịch chờ.</li>
+      </ul>
+    </section>
+
+    <section class="card" aria-labelledby="h-scn">
+      <h2 id="h-scn">Chạy thử kịch bản</h2>
+      <p>Mỗi nút điền sẵn ô Vị trí / mã máy, và ô Công nhân nếu kịch bản có gán. Bấm <b>Cập nhật</b> trên máy để xem cảnh báo. Kết quả thay đổi theo bảng hiện tại, nên muốn chạy lại từ đầu thì bấm Đặt lại dữ liệu.</p>
+      <div class="scen" id="scenarios"></div>
+      <div class="tools">
+        <div class="fld">
+          <label for="trigger">Giả lập bóp cò đầu đọc PDA</label>
+          <input id="trigger" placeholder="CN002 hoặc VT-02|MAY-102" autocomplete="off" spellcheck="false">
+        </div>
+        <button class="pbtn" id="trigger-send"><svg class="i"><use href="#i-scan"/></svg>Gửi mã</button>
+        <button class="pbtn" id="reset"><svg class="i"><use href="#i-rotate"/></svg>Đặt lại dữ liệu</button>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="h-cases">
+      <h2 id="h-cases">4 trường hợp SAP trả về</h2>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>TH</th><th>Khi nào</th><th>Cảnh báo trên app</th><th>Khi chọn Có</th></tr></thead>
+          <tbody>
+            <tr><td class="no">1</td><td>Vị trí và máy chưa có dòng đang dùng trong bảng</td><td><q>Vị trí VT-05 / máy MAY-105 chưa tồn tại. Có tạo mới không?</q></td><td>Thêm dòng mới, trạng thái Đang dùng</td></tr>
+            <tr><td class="no">2</td><td>Vị trí đang gắn máy khác, máy mới chưa ở đâu</td><td><q>Vị trí VT-01 đang gắn máy MAY-101. Có thay đổi sang máy MAY-109 không?</q></td><td>Dòng vị trí/máy cũ chuyển Ngưng, thêm dòng mới Đang dùng</td></tr>
+            <tr><td class="no">3</td><td>Máy mới đang ở vị trí khác</td><td><q>Máy MAY-102 đang ở vị trí VT-02. Có điều chuyển máy sang vị trí VT-01 không?</q></td><td>Vị trí mới/máy cũ và vị trí cũ/máy mới chuyển Ngưng, thêm dòng mới Đang dùng</td></tr>
+            <tr><td class="no">4</td><td>Có gán công nhân, và công nhân đó đang ở vị trí/máy khác</td><td><q>CN Nguyễn Văn An đang ở vị trí VT-01 / máy MAY-101. Có điều chuyển CN sang vị trí mới VT-03 không?</q></td><td>Dòng cũ của CN chuyển Ngưng, thêm CN/vị trí/máy mới Đang dùng</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Khi không gán công nhân thì chỉ có TH1 đến TH3, dòng mới ghi với cột công nhân để trống. Một lần cập nhật có thể gặp 2 cảnh báo, ví dụ TH3 và TH4. App hỏi lần lượt từng cảnh báo, chọn Không ở bất kỳ bước nào là hủy toàn bộ. Nếu đúng dòng đó đang Ngưng thì SAP chuyển lại thành Đang dùng, không thêm dòng trùng.</p>
+    </section>
+
+    <section class="card" aria-labelledby="h-q">
+      <h2 id="h-q">Cần chốt trước khi làm thật</h2>
+      <ol class="open-q">
+        <li><b>Định dạng nhãn QR vị trí.</b> Bản demo đọc <code>VT-01|MAY-101</code> và <code>VT=VT-01;MAY=MAY-101</code>.</li>
+        <li><b>Một máy có nhiều công nhân không?</b> Bản demo cho phép thêm công nhân vào máy đã có người, người cũ vẫn Đang dùng.</li>
+        <li><b>Thứ tự cảnh báo.</b> SAP trả tất cả cảnh báo trong một lần gọi, hay trả từng cái và app gọi lại sau mỗi lần Có?</li>
+        <li><b>Gán công nhân vào vị trí đang trống.</b> Bản demo điền công nhân vào dòng đang có. Hay SAP muốn ngưng dòng trống và thêm dòng mới?</li>
+        <li><b>Đổi máy khi vị trí đang có công nhân.</b> Ở TH2 và TH3, công nhân của dòng cũ bị ngưng theo. Có cần tự chuyển công nhân đó sang máy mới không?</li>
+        <li><b>Quyền.</b> Tab Vị trí hiện cho mọi tổ trưởng có quyền xem sản lượng tổ. Có cần quyền riêng không?</li>
+      </ol>
+    </section>
+  </main>
+</div>
+
+<script>
+(() => {
+  const WORKERS = {
+    CN001: { name: 'Nguyễn Văn An', dept: 'Tổ May 1' },
+    CN002: { name: 'Trần Thị Bình', dept: 'Tổ May 1' },
+    CN003: { name: 'Lê Văn Cường', dept: 'Tổ May 2' },
+    CN004: { name: 'Phạm Thị Dung', dept: 'Tổ May 2' },
+  };
+  const SCENARIOS = [
+    { th: 'TH1', t: 'Thêm vị trí, chưa gán CN', w: null, s: 'VT-05|MAY-105', d: 'Vị trí và máy chưa có trong bảng' },
+    { th: 'TH1', t: 'Thêm vị trí kèm CN', w: 'CN003', s: 'VT-07|MAY-107', d: 'Tạo vị trí mới và gán luôn CN003' },
+    { th: 'Gán CN', t: 'Vị trí đang trống', w: 'CN003', s: 'VT-06|MAY-106', d: 'VT-06 chưa có công nhân, không có cảnh báo' },
+    { th: 'TH2', t: 'Đổi máy', w: null, s: 'VT-01|MAY-109', d: 'VT-01 đang gắn MAY-101' },
+    { th: 'TH3', t: 'Điều chuyển máy', w: null, s: 'VT-01|MAY-102', d: 'MAY-102 đang ở VT-02' },
+    { th: 'TH4', t: 'Điều chuyển CN', w: 'CN001', s: 'VT-03|MAY-103', d: 'CN001 đang ở VT-01' },
+    { th: 'TH3+4', t: 'Hai cảnh báo', w: 'CN001', s: 'VT-03|MAY-101', d: 'Máy và công nhân cùng chuyển' },
+    { th: 'Dùng lại', t: 'Dòng đang ngưng', w: 'CN003', s: 'VT-04|MAY-104', d: 'Dòng cũ chuyển từ Ngưng sang Đang dùng' },
+  ];
+  const SLOT_SAMPLES = ['VT-05|MAY-105', 'VT-06|MAY-106', 'VT-01|MAY-101', 'VT-01|MAY-102', 'VT-03|MAY-103', 'VT-04|MAY-104'];
+
+  let rows = [];
+  let nextId = 1;
+  const S = { tab: 'pos', view: 'scan', filter: 'all', target: 'slot', assign: false, worker: null, slot: null, busy: false, modal: false, recent: new Set(), error: null };
+
+  const $ = (s) => document.querySelector(s);
+  const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const icon = (n, cls = 'i') => `<svg class="${cls}" aria-hidden="true"><use href="#i-${n}"/></svg>`;
+  const two = (n) => String(n).padStart(2, '0');
+  const hhmm = (d) => `${two(d.getHours())}:${two(d.getMinutes())}`;
+  const stamp = (d) => `${two(d.getDate())}/${two(d.getMonth() + 1)} ${hhmm(d)}`;
+  const initials = (name) => { const p = name.trim().split(/\s+/); return (p.length > 1 ? p[p.length - 2][0] + p[p.length - 1][0] : p[0][0]).toUpperCase(); };
+  const id = () => 'R' + String(nextId++).padStart(3, '0');
+
+  function seed() {
+    nextId = 1;
+    const y = new Date(Date.now() - 86400000);
+    const r = (pos, mac, cn, st) => ({ id: id(), pos, mac, cn, name: cn ? WORKERS[cn].name : '', st, at: y });
+    rows = [
+      r('VT-01', 'MAY-101', 'CN001', 'A'),
+      r('VT-02', 'MAY-102', 'CN002', 'A'),
+      r('VT-03', 'MAY-103', 'CN004', 'A'),
+      r('VT-04', 'MAY-104', 'CN003', 'I'),
+      r('VT-06', 'MAY-106', null, 'A'),
+    ];
+    S.recent = new Set();
+  }
+
+  /* ----- rules (same as lib/domain/policies/worker_position_policy.dart) ----- */
+  function parseSlot(raw) {
+    const text = String(raw).trim();
+    if (!text || text.length > 200) return null;
+    const keyed = {};
+    text.split(/[;&\n]/).forEach((part) => {
+      const kv = part.split(/[=:]/);
+      if (kv.length === 2) keyed[kv[0].trim().toUpperCase().replace(/_/g, '')] = kv[1].trim();
+    });
+    const kp = keyed.VT ?? keyed.VITRI ?? keyed.POSITION;
+    const km = keyed.MAY ?? keyed.MAMAY ?? keyed.MACHINE;
+    if (kp && km) return mkSlot(kp, km);
+    const parts = text.split(/\s*[|;,/]\s*/);
+    return parts.length === 2 ? mkSlot(parts[0], parts[1]) : null;
+  }
+  function mkSlot(p, m) {
+    const ok = /^[A-Za-z0-9._-]{1,40}$/;
+    p = p.trim().toUpperCase(); m = m.trim().toUpperCase();
+    return ok.test(p) && ok.test(m) ? { pos: p, mac: m } : null;
+  }
+  function parseWorker(raw) {
+    const code = String(raw).trim().toUpperCase();
+    if (!/^[A-Z0-9][A-Z0-9_]{0,31}$/.test(code)) return null;
+    const known = WORKERS[code];
+    return { code, name: known ? known.name : 'CN ' + code, dept: known ? known.dept : '' };
+  }
+
+  // worker is null when the supervisor only registers the position/machine.
+  function plan(worker, slot) {
+    const act = rows.filter((r) => r.st === 'A');
+    const P = slot.pos, M = slot.mac;
+    const binds = (r) => r.pos === P && r.mac === M;
+    const slotRows = act.filter(binds);
+    const already = worker ? slotRows.some((r) => r.cn === worker.code) : slotRows.length > 0;
+    const atPosOther = act.filter((r) => r.pos === P && r.mac !== M);
+    const macElse = act.filter((r) => r.mac === M && r.pos !== P);
+    const warnings = [];
+    const off = (r) => ({ k: 'off', r });
+
+    if (macElse.length) {
+      warnings.push({ no: 3, title: 'Điều chuyển máy',
+        msg: `Máy <b>${M}</b> đang ở vị trí <b>${macElse[0].pos}</b>. Có điều chuyển máy sang vị trí <b>${P}</b> không?`,
+        changes: [...atPosOther, ...macElse].map(off) });
+    } else if (atPosOther.length) {
+      warnings.push({ no: 2, title: 'Thay đổi máy tại vị trí',
+        msg: `Vị trí <b>${P}</b> đang gắn máy <b>${atPosOther[0].mac}</b>. Có thay đổi sang máy <b>${M}</b> không?`,
+        changes: atPosOther.map(off) });
+    } else if (!slotRows.length) {
+      warnings.push({ no: 1, title: 'Vị trí chưa tồn tại',
+        msg: `Vị trí <b>${P}</b> / máy <b>${M}</b> chưa tồn tại. Có tạo mới không?`, changes: [] });
+    }
+    if (worker && !already) {
+      const wElse = act.filter((r) => r.cn === worker.code && !binds(r));
+      if (wElse.length) {
+        warnings.push({ no: 4, title: 'Điều chuyển công nhân',
+          msg: `CN <b>${esc(worker.name)}</b> đang ở vị trí <b>${wElse[0].pos}</b> / máy <b>${wElse[0].mac}</b>. Có điều chuyển CN sang vị trí mới <b>${P}</b> không?`,
+          changes: wElse.map(off) });
+      }
+    }
+
+    const cn = worker ? worker.code : null;
+    const emptyRow = worker ? slotRows.find((r) => !r.cn) : null;
+    const dormant = rows.find((r) => r.st === 'I' && binds(r) && r.cn === cn);
+    const activation = emptyRow
+      ? { k: 'fill', r: emptyRow, cn, name: worker.name }
+      : dormant
+        ? { k: 're', r: dormant }
+        : { k: 'new', r: { pos: P, mac: M, cn, name: worker ? worker.name : '' } };
+    return { already, withWorker: !!worker, warnings: already ? [] : warnings, activation };
+  }
+  function allChanges(p) {
+    const seen = new Set(); const out = [];
+    p.warnings.forEach((w) => w.changes.forEach((c) => { if (!seen.has(c.r.id)) { seen.add(c.r.id); out.push(c); } }));
+    if (!p.already && p.activation) out.push(p.activation);
+    return out;
+  }
+  function apply(p) {
+    const now = new Date();
+    S.recent = new Set();
+    allChanges(p).forEach((c) => {
+      if (c.k === 'new') {
+        const row = { id: id(), ...c.r, st: 'A', at: now };
+        rows.push(row); S.recent.add(row.id);
+      } else if (c.k === 'fill') {
+        const row = rows.find((r) => r.id === c.r.id);
+        row.cn = c.cn; row.name = c.name; row.at = now; S.recent.add(row.id);
+      } else {
+        const row = rows.find((r) => r.id === c.r.id);
+        row.st = c.k === 'off' ? 'I' : 'A'; row.at = now; S.recent.add(row.id);
+      }
+    });
+  }
+
+  /* ----- rendering ----- */
+  const TABS = [
+    { id: 'overview', label: 'Tổng quan', icon: 'grid' },
+    { id: 'assign', label: 'Phân công', icon: 'clip' },
+    { id: 'confirm', label: 'Xác nhận', icon: 'scan' },
+    { id: 'pos', label: 'Vị trí', icon: 'pin' },
+    { id: 'sync', label: 'Đồng bộ', icon: 'sync', badge: 3 },
+  ];
+  const TITLES = { overview: 'Tổng quan tổ', assign: 'Phân công', confirm: 'Xác nhận sản lượng', pos: 'Vị trí & công nhân', sync: 'Đồng bộ SAP' };
+
+  function renderAppbar() {
+    $('#appbar').innerHTML = `
+      <div class="appbar-row">
+        <div class="appbar-title">
+          <h1>${TITLES[S.tab]}</h1>
+          <div class="ctx"><span>Ca 1 · 06:00–14:00</span><span class="dot"></span><span>Tổ May 1</span><span class="dot"></span><span>30/09</span></div>
+        </div>
+        <button class="avatar-btn" id="acct" aria-label="Tài khoản: Trần Minh Khoa" aria-haspopup="dialog">MK</button>
+      </div>
+      ${S.tab === 'pos' ? `
+      <div class="segment" role="tablist" aria-label="Chế độ xem">
+        <button role="tab" aria-selected="${S.view === 'scan'}" data-view="scan">${icon('scan')}Quét gán</button>
+        <button role="tab" aria-selected="${S.view === 'table'}" data-view="table">${icon('table')}Bảng vị trí</button>
+      </div>` : ''}`;
+    $('#acct').onclick = openAccount;
+    document.querySelectorAll('[data-view]').forEach((b) => b.onclick = () => { S.view = b.dataset.view; render(); });
+  }
+
+  function renderNav() {
+    $('#nav').innerHTML = TABS.map((t) => `
+      <button data-tab="${t.id}" ${S.tab === t.id ? 'aria-current="page"' : ''} aria-label="${t.label}${t.badge ? `, ${t.badge} giao dịch chờ` : ''}">
+        <span class="pill">${icon(t.icon)}</span>${t.label}
+        ${t.badge ? `<span class="badge" aria-hidden="true">${t.badge}</span>` : ''}
+      </button>`).join('');
+    document.querySelectorAll('[data-tab]').forEach((b) => b.onclick = () => { S.tab = b.dataset.tab; render(); $('#body').scrollTop = 0; });
+  }
+
+  function renderBody() {
+    const body = $('#body');
+    if (S.tab !== 'pos') {
+      const t = TABS.find((x) => x.id === S.tab);
+      body.innerHTML = `<div class="placeholder"><div class="ph-icon">${icon(t.icon)}</div><h3>${t.label}</h3><p>Màn hình hiện có, giữ nguyên nội dung. Bản review này chỉ vẽ tab Vị trí.</p></div>`;
+      return;
+    }
+    if (S.view === 'table') { body.innerHTML = tableView(); bindTable(); return; }
+    body.innerHTML = `
+      <div class="reader"><span class="pulse" aria-hidden="true"></span>Đầu đọc sẵn sàng · bóp cò để quét vào ô đang chọn</div>
+      ${S.error ? `<div class="error" role="alert">${icon('alert')}<p>${esc(S.error)}</p><button class="icon-btn" id="err-x" aria-label="Đóng thông báo lỗi">${icon('x')}</button></div>` : ''}
+      ${slotField()}
+      <div class="assign ${S.assign ? 'on' : ''}">
+        <label class="opt" for="assign">
+          <input type="checkbox" id="assign" ${S.assign ? 'checked' : ''} aria-describedby="assign-help">
+          <span class="box" aria-hidden="true">${icon('check')}</span>
+          <span class="opt-txt"><b>Gán công nhân vào vị trí này</b><small id="assign-help">Bỏ trống nếu chỉ thêm vị trí / máy, gán công nhân sau.</small></span>
+          <span class="optional">Tùy chọn</span>
+        </label>
+        ${S.assign ? `<div class="assign-body">${workerField()}</div>` : ''}
+      </div>
+      <button class="manual-link" data-manual="${S.target}">${icon('kbd')}Không quét được? Nhập mã thủ công</button>
+      ${S.slot && (!S.assign || S.worker) ? previewBox() : ''}`;
+    bindScan();
+  }
+
+  function scanField(kind, label, iconName, placeholder, value, info, required = true) {
+    const filled = !!value;
+    const isTarget = S.target === kind;
+    return `<div class="fld-wrap">
+      <div class="fld-label"><span>${label}${required ? ' <span class="req" aria-hidden="true">*</span>' : ''}</span>${isTarget ? '<span class="tgt">Đang chọn quét</span>' : ''}</div>
+      <div class="slot ${filled ? 'filled' : ''} ${isTarget ? 'target' : ''}">
+        <div class="slot-row">
+          <button class="slot-main" data-target="${kind}" aria-pressed="${isTarget}" aria-label="${label}: ${filled ? esc(value) : placeholder}. Chọn ô này để quét">
+            ${icon(filled ? 'check' : iconName)}<span>${filled ? esc(value) : placeholder}</span>
+          </button>
+          ${filled ? `<button class="slot-btn clear" data-clear="${kind}" aria-label="Xóa ${label.toLowerCase()}">${icon('x')}</button>` : ''}
+          <button class="slot-btn" data-cam="${kind}" aria-label="Quét ${label.toLowerCase()} bằng camera">${icon('camera')}</button>
+        </div>
+        ${filled && info ? `<div class="slot-info">${info}</div>` : ''}
+      </div>
+    </div>`;
+  }
+  const infoRow = (k, v, cls = '') => `<div class="info-row ${cls}"><span class="k">${k}</span><span class="v">${v}</span></div>`;
+
+  function workerField() {
+    const w = S.worker;
+    let info = '';
+    if (w) {
+      const cur = rows.find((r) => r.st === 'A' && r.cn === w.code);
+      info = infoRow('Mã NV', esc(w.code))
+        + infoRow('Bộ phận', w.dept ? esc(w.dept) : '<span class="v quiet">Chưa có bộ phận</span>')
+        + infoRow('Vị trí hiện tại', cur ? `${cur.pos} · ${cur.mac}` : '<span class="v quiet">Chưa được gán</span>');
+    }
+    return scanField('worker', 'Công nhân', 'user', 'Chưa chọn công nhân', w && w.name, info, false);
+  }
+
+  function slotField() {
+    const s = S.slot;
+    let info = '';
+    if (s) {
+      const atPos = rows.filter((r) => r.st === 'A' && r.pos === s.pos);
+      const macRow = rows.find((r) => r.st === 'A' && r.mac === s.mac);
+      info = infoRow('Mã vị trí', s.pos) + infoRow('Mã máy', s.mac);
+      if (!atPos.length && !macRow) info += infoRow('Tình trạng', 'Chưa có trong bảng', 'new');
+      [...new Set(atPos.map((r) => r.mac))].forEach((m) => {
+        const names = atPos.filter((r) => r.mac === m && r.cn).map((r) => esc(r.name)).join(', ') || 'chưa gán CN';
+        info += infoRow('Vị trí đang gắn', `${m} · ${names}`, m === s.mac ? '' : 'warn');
+      });
+      if (macRow && macRow.pos !== s.pos) info += infoRow('Máy đang ở', `Vị trí ${macRow.pos}`, 'warn');
+    }
+    return scanField('slot', 'Vị trí / mã máy', 'factory', 'Chưa chọn vị trí / máy', s && `${s.pos} · ${s.mac}`, info);
+  }
+
+  function previewBox() {
+    const p = plan(S.worker, S.slot);
+    if (p.already) {
+      const txt = p.withWorker ? 'Công nhân đã ở đúng vị trí và máy này. Không cần cập nhật.' : 'Vị trí và máy này đã có trong bảng. Không cần cập nhật.';
+      return `<div class="preview ok" role="status">${icon('check')}<div>${txt}</div></div>`;
+    }
+    if (!p.warnings.length) {
+      const txt = p.activation.k === 'fill' ? 'Vị trí đang chưa có công nhân. Bấm Cập nhật để gán.' : 'Không có cảnh báo. Bấm Cập nhật để ghi vào SAP.';
+      return `<div class="preview ok" role="status">${icon('check')}<div>${txt}</div></div>`;
+    }
+    return `<div class="preview warn" role="status">${icon('alert')}<div>SAP sẽ hỏi xác nhận ${p.warnings.length} cảnh báo trước khi ghi.
+      <div class="cases">${p.warnings.map((w) => `<span>TH${w.no} · ${w.title}</span>`).join('')}</div></div></div>`;
+  }
+
+  function tableView() {
+    const list = rows.filter((r) => S.filter === 'all' || r.st === S.filter)
+      .sort((a, b) => (a.st === b.st ? a.pos.localeCompare(b.pos) : a.st === 'A' ? -1 : 1));
+    const a = rows.filter((r) => r.st === 'A').length;
+    const f = (k, l) => `<button aria-pressed="${S.filter === k}" data-filter="${k}">${l}</button>`;
+    return `
+      <div class="filters" role="group" aria-label="Lọc trạng thái">${f('all', `Tất cả · ${rows.length}`)}${f('A', `Đang dùng · ${a}`)}${f('I', `Ngưng · ${rows.length - a}`)}</div>
+      <p class="table-hint">${icon('info')}Chạm một dòng để xem chi tiết.</p>
+      <div class="rows">${list.map((r) => `
+        <button class="row ${r.st === 'I' ? 'off' : ''} ${S.recent.has(r.id) ? 'recent' : ''}" data-row="${r.id}" aria-haspopup="dialog">
+          <span class="main">
+            <span class="slot" style="display:block">${r.pos} · ${r.mac}</span>
+            <span class="who" style="display:block">${r.cn ? `${r.cn} · ${esc(r.name)}` : '<span class="none">Chưa gán công nhân</span>'}</span>
+            <span class="when" style="display:block">${r.id} · ${stamp(r.at)} ${S.recent.has(r.id) ? '<span class="new-mark">· VỪA GHI</span>' : ''}</span>
+          </span>
+          <span class="st ${r.st === 'A' ? 'a' : 'i'}">${r.st === 'A' ? 'Đang dùng' : 'Ngưng'}</span>
+          ${icon('chev', 'i chev')}
+        </button>`).join('') || '<p class="hint">Không có dòng nào.</p>'}</div>`;
+  }
+  function bindTable() {
+    document.querySelectorAll('[data-filter]').forEach((b) => b.onclick = () => { S.filter = b.dataset.filter; renderBody(); });
+    document.querySelectorAll('[data-row]').forEach((b) => b.onclick = () => openDetail(b.dataset.row));
+  }
+
+  /* ----- position detail: view only ----- */
+  function openDetail(rowId) {
+    const r = rows.find((x) => x.id === rowId);
+    if (!r) return;
+    const w = r.cn ? WORKERS[r.cn] : null;
+    const active = r.st === 'A';
+    const layer = openLayer(`
+      <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="dt-t">
+        <div class="grab"></div>
+        <div class="detail-head">
+          <div style="flex:1;min-width:0"><div class="hint">Chi tiết vị trí</div><h3 id="dt-t">${r.pos} · ${r.mac}</h3></div>
+          <span class="st ${active ? 'a' : 'i'}" style="margin-top:6px">${active ? 'Đang dùng' : 'Ngưng'}</span>
+        </div>
+        <div class="ro">
+          ${infoRow('Mã vị trí', r.pos)}
+          ${infoRow('Mã máy', r.mac)}
+          ${infoRow('Công nhân', r.cn ? `${esc(r.name)} · ${r.cn}` : '<span class="v quiet">Chưa gán công nhân</span>')}
+          ${r.cn ? infoRow('Bộ phận', w ? esc(w.dept) : '<span class="v quiet">Chưa có bộ phận</span>') : ''}
+          ${infoRow('Trạng thái', active ? 'Đang dùng' : 'Ngưng')}
+          ${infoRow('Mã dòng', r.id)}
+          ${infoRow('Cập nhật lúc', stamp(r.at))}
+        </div>
+        <button class="btn" style="width:100%;margin-top:16px" data-close>Đóng</button>
+      </div>`, { onEsc: closeLayer });
+    layer.querySelector('[data-scrim]').onclick = closeLayer;
+    layer.querySelector('[data-close]').onclick = closeLayer;
+    layer.querySelector('[data-close]').focus();
+  }
+
+  function renderCta() {
+    const cta = $('#cta');
+    if (S.tab !== 'pos' || S.view !== 'scan') { cta.hidden = true; return; }
+    cta.hidden = false;
+    const needWorker = S.assign && !S.worker;
+    const ready = S.slot && !needWorker;
+    const p = ready ? plan(S.worker, S.slot) : null;
+    const disabled = !ready || S.busy || (p && p.already);
+    cta.innerHTML = `
+      <button class="btn gold" id="submit" ${disabled ? 'disabled' : ''} aria-busy="${S.busy}">
+        ${S.busy ? '<span class="spinner" aria-hidden="true"></span>Đang gửi SAP…' : `${icon('upload')}Cập nhật`}
+      </button>
+      <p class="sub">${S.busy ? 'Giữ máy, không tắt màn hình' : !S.slot ? 'Quét nhãn vị trí / máy để tiếp tục' : needWorker ? 'Quét thẻ công nhân, hoặc bỏ tick gán công nhân' : p.already ? 'Không có thay đổi để gửi' : S.worker ? 'Gửi SAP: vị trí / máy kèm công nhân' : 'Gửi SAP: chỉ thêm vị trí / máy'}</p>`;
+    $('#submit').onclick = submit;
+  }
+
+  function render() { renderAppbar(); renderBody(); renderCta(); renderNav(); }
+
+  function bindScan() {
+    $('#err-x') && ($('#err-x').onclick = () => { S.error = null; renderBody(); });
+    document.querySelectorAll('[data-target]').forEach((b) => b.onclick = () => { S.target = b.dataset.target; render(); });
+    const box = $('#assign');
+    if (box) box.onchange = () => {
+      S.assign = box.checked;
+      if (!S.assign) { S.worker = null; S.target = 'slot'; } else if (S.slot) S.target = 'worker';
+      render(); $('#assign').focus();
+    };
+    document.querySelectorAll('[data-clear]').forEach((b) => b.onclick = () => { S[b.dataset.clear] = null; S.target = b.dataset.clear; render(); });
+    document.querySelectorAll('[data-cam]').forEach((b) => b.onclick = () => openCamera(b.dataset.cam));
+    document.querySelectorAll('[data-manual]').forEach((b) => b.onclick = () => openManual(b.dataset.manual));
+  }
+
+  /* ----- scanning ----- */
+  // A reader pull lands in the selected field; each code is recognised by its
+  // shape, so a label or card read into the wrong field still lands correctly.
+  function handleScan(raw, target) {
+    if (S.busy || S.modal) return false;
+    const want = target || S.target;
+    const slot = parseSlot(raw);
+    const worker = slot ? null : parseWorker(raw);
+    const kind = slot ? 'slot' : worker ? 'worker' : null;
+    if (!kind || (target && kind !== target)) {
+      S.error = want === 'slot'
+        ? `Mã "${raw}" không phải nhãn vị trí/máy. Nhãn đúng có dạng VT-01|MAY-101.`
+        : `Không đọc được mã công nhân từ "${raw}". Quét lại thẻ hoặc nhập mã, ví dụ CN001.`;
+      render(); return false;
+    }
+    // A worker card on the reader means the supervisor wants to assign one.
+    if (kind === 'slot') S.slot = slot; else { S.worker = worker; S.assign = true; }
+    S.error = null;
+    S.target = !S.slot ? 'slot' : S.assign && !S.worker ? 'worker' : kind;
+    render(); return true;
+  }
+
+  /* ----- overlays ----- */
+  let lastFocus = null;
+  function openLayer(html, { center = false, onEsc } = {}) {
+    lastFocus = document.activeElement;
+    S.modal = true;
+    const layer = $('#layer');
+    layer.className = 'layer' + (center ? ' center' : '');
+    layer.innerHTML = `<div class="scrim" data-scrim></div>${html}`;
+    layer.hidden = false;
+    layer.onkeydown = (e) => { if (e.key === 'Escape' && onEsc) { e.preventDefault(); onEsc(); } };
+    return layer;
+  }
+  function closeLayer() {
+    const layer = $('#layer');
+    layer.hidden = true; layer.innerHTML = ''; S.modal = false;
+    if (lastFocus && document.contains(lastFocus)) lastFocus.focus();
+  }
+
+  function openCamera(kind) {
+    const isW = kind === 'worker';
+    const samples = isW
+      ? Object.entries(WORKERS).map(([c, w]) => ({ code: c, desc: `${w.name} · ${w.dept}` }))
+      : SLOT_SAMPLES.map((s) => { const sl = parseSlot(s); const r = rows.find((x) => x.st === 'A' && x.pos === sl.pos && x.mac === sl.mac); return { code: s, desc: r ? `Đang dùng · ${r.cn ? r.name : 'chưa gán CN'}` : rows.some((x) => x.pos === sl.pos || x.mac === sl.mac) ? 'Có trong bảng · đang ngưng' : 'Chưa có trong bảng' }; });
+    const layer = openLayer(`
+      <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="cam-t">
+        <div class="grab"></div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <h3 id="cam-t" style="flex:1">${isW ? 'Quét QR công nhân' : 'Quét QR vị trí / mã máy'}</h3>
+          <button class="icon-btn" data-close aria-label="Đóng">${icon('x')}</button>
+        </div>
+        <div class="cam" aria-hidden="true"><div class="frame"><i></i><i></i><i></i><i></i><div class="scanline"></div></div><div class="cam-note">${isW ? 'Đưa thẻ công nhân vào khung' : 'Đưa nhãn trên máy vào khung'}</div></div>
+        <div class="samples"><div class="lbl">MÃ MẪU · CHẠM ĐỂ MÔ PHỎNG QUÉT</div>
+          ${samples.map((s) => `<button class="sample" data-code="${esc(s.code)}">${icon(isW ? 'user' : 'factory')}<span class="txt"><span class="code">${esc(s.code)}</span><br><span class="desc">${esc(s.desc)}</span></span>${icon('chev')}</button>`).join('')}
+        </div>
+        <div style="margin-top:12px"><button class="btn" style="width:100%" data-manual-inside>${icon('kbd')}Nhập mã thủ công</button></div>
+      </div>`, { onEsc: closeLayer });
+    layer.querySelector('[data-scrim]').onclick = closeLayer;
+    layer.querySelector('[data-close]').onclick = closeLayer;
+    layer.querySelector('[data-manual-inside]').onclick = () => { closeLayer(); openManual(kind); };
+    layer.querySelectorAll('[data-code]').forEach((b) => b.onclick = () => { closeLayer(); handleScan(b.dataset.code, kind); });
+    layer.querySelector('[data-close]').focus();
+  }
+
+  function openManual(kind) {
+    const isW = kind === 'worker';
+    const layer = openLayer(`
+      <form class="sheet" role="dialog" aria-modal="true" aria-labelledby="man-t" novalidate>
+        <div class="grab"></div>
+        <h3 id="man-t">${isW ? 'Nhập mã công nhân' : 'Nhập vị trí và mã máy'}</h3>
+        <div class="field">
+          <label for="man-in">${isW ? 'Mã công nhân' : 'Vị trí | Mã máy'}</label>
+          <input id="man-in" autocomplete="off" spellcheck="false" aria-describedby="man-help">
+          <div class="help" id="man-help">${isW ? 'Ví dụ: CN001' : 'Ví dụ: VT-01|MAY-101'}</div>
+        </div>
+        <div class="btn-row" style="margin-top:16px">
+          <button type="button" class="btn" data-close>Hủy</button>
+          <button type="submit" class="btn navy">Xác nhận</button>
+        </div>
+      </form>`, { onEsc: closeLayer });
+    const input = layer.querySelector('#man-in');
+    layer.querySelector('[data-scrim]').onclick = closeLayer;
+    layer.querySelector('[data-close]').onclick = closeLayer;
+    layer.querySelector('form').onsubmit = (e) => {
+      e.preventDefault();
+      const v = input.value.trim();
+      const ok = v && (isW ? parseWorker(v) && !parseSlot(v) : parseSlot(v));
+      if (!ok) {
+        input.setAttribute('aria-invalid', 'true');
+        const help = layer.querySelector('#man-help');
+        help.className = 'err';
+        help.textContent = !v ? 'Chưa nhập mã.' : isW ? 'Mã công nhân chỉ gồm chữ và số, ví dụ CN001.' : 'Cần đủ vị trí và máy, cách nhau bằng dấu |, ví dụ VT-01|MAY-101.';
+        input.focus(); return;
+      }
+      closeLayer(); handleScan(v, kind);
+    };
+    input.focus();
+  }
+
+  function askWarning(w, i, n, activation) {
+    return new Promise((resolve) => {
+      const list = [...w.changes, ...(activation ? [activation] : [])];
+      const layer = openLayer(`
+        <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="w-t" aria-describedby="w-m">
+          <div class="warn-icon">${icon('alert')}</div>
+          ${w.no ? `<div class="eyebrow">${n > 1 ? `Cảnh báo ${i}/${n} · ` : ''}Trường hợp ${w.no}</div>` : ''}
+          <h3 id="w-t">${w.title}</h3>
+          <p class="msg" id="w-m">${w.msg}</p>
+          ${list.length ? `<div class="changes"><div class="lbl">Khi chọn Có, SAP sẽ:</div>${list.map(changeLine).join('')}</div>` : ''}
+          <div class="actions">
+            <button class="btn" data-no>Không</button>
+            <button class="btn gold" data-yes>Có</button>
+          </div>
+          <p class="foot">${n > 1 && i < n ? 'Còn cảnh báo tiếp theo. ' : ''}${w.no ? 'Chọn Không để hủy toàn bộ lần cập nhật.' : 'Chọn Không để giữ nguyên trạng thái.'}</p>
+        </div>`, { center: true, onEsc: () => done(false) });
+      function done(v) { closeLayer(); resolve(v); }
+      layer.querySelector('[data-no]').onclick = () => done(false);
+      layer.querySelector('[data-yes]').onclick = () => done(true);
+      layer.querySelector('[data-yes]').focus();
+    });
+  }
+  function changeLine(c) {
+    const r = c.r;
+    const [k, ic, cls] = c.k === 'off' ? ['Chuyển Ngưng', 'minus', 'off'] : c.k === 're' ? ['Dùng lại', 'rotate', 're'] : c.k === 'fill' ? ['Gán CN', 'user', 'new'] : ['Thêm mới', 'plus', 'new'];
+    const who = c.k === 'fill' ? c.cn : r.cn || 'chưa gán CN';
+    return `<div class="chg ${cls}">${icon(ic)}<span class="txt">${r.pos} / ${r.mac} · ${who}</span><span class="k">${k}</span></div>`;
+  }
+
+  async function submit() {
+    if (!S.slot || (S.assign && !S.worker) || S.busy) return;
+    const p = plan(S.worker, S.slot);
+    if (p.already) return;
+    for (let i = 0; i < p.warnings.length; i++) {
+      const ok = await askWarning(p.warnings[i], i + 1, p.warnings.length, i === p.warnings.length - 1 ? p.activation : null);
+      if (!ok) { toast('Đã hủy. Bảng vị trí không thay đổi.'); $('#submit')?.focus(); return; }
+    }
+    S.busy = true; renderCta();
+    await new Promise((r) => setTimeout(r, 900));
+    apply(p);
+    S.busy = false;
+    const changes = allChanges(p);
+    render();
+    const layer = openLayer(`
+      <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="ok-t">
+        <div class="grab"></div>
+        <div style="display:flex;gap:12px;align-items:center">
+          <div class="warn-icon" style="margin:0;background:var(--success-bg);color:var(--success)">${icon('check')}</div>
+          <div><h3 id="ok-t" style="margin:0">Đã cập nhật vị trí</h3><div class="hint">SAP ghi ${changes.length} dòng lúc ${hhmm(new Date())}</div></div>
+        </div>
+        <div class="changes">${changes.map(changeLine).join('')}</div>
+        <div class="btn-row" style="margin-top:16px">
+          <button class="btn" data-table>${icon('table')}Xem bảng</button>
+          <button class="btn gold" data-next>${icon('scan')}Quét lượt tiếp</button>
+        </div>
+      </div>`, { onEsc: next });
+    function next() { closeLayer(); S.worker = null; S.slot = null; S.assign = false; S.target = 'slot'; render(); }
+    layer.querySelector('[data-scrim]').onclick = next;
+    layer.querySelector('[data-next]').onclick = next;
+    layer.querySelector('[data-table]').onclick = () => { next(); S.view = 'table'; render(); };
+    layer.querySelector('[data-next]').focus();
+  }
+
+  function openAccount() {
+    const layer = openLayer(`
+      <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="ac-t">
+        <div class="grab"></div>
+        <div class="acct-head">
+          <div class="initials" aria-hidden="true">MK</div>
+          <div><h3 id="ac-t" style="margin:0">Trần Minh Khoa</h3><div class="hint">Tổ trưởng · TT0012 · Tổ May 1, Tổ May 2</div></div>
+        </div>
+        <div class="acct-list">
+          <button>${icon('user')}<span>Thông tin tài khoản SAP</span>${icon('chev', 'i chev')}</button>
+          <button>${icon('scan')}<span>Cài đặt đầu đọc</span><span class="val">Tự động</span>${icon('chev', 'i chev')}</button>
+          <button>${icon('db')}<span>Làm mới dữ liệu SAP</span>${icon('chev', 'i chev')}</button>
+          <button>${icon('lock')}<span>Đổi mật khẩu</span>${icon('chev', 'i chev')}</button>
+          <div class="acct-sep"></div>
+          <button class="logout">${icon('logout')}<span>Đăng xuất</span></button>
+        </div>
+      </div>`, { onEsc: closeLayer });
+    layer.querySelector('[data-scrim]').onclick = closeLayer;
+    layer.querySelectorAll('.acct-list button').forEach((b) => b.onclick = () => { closeLayer(); toast(b.classList.contains('logout') ? 'Đăng xuất không chạy trong bản review.' : 'Mở màn hình hiện có (không vẽ trong bản review).'); });
+    layer.querySelector('.acct-list button').focus();
+  }
+
+  let toastTimer;
+  function toast(msg) {
+    const t = $('#toast');
+    t.innerHTML = `${icon('info')}<span>${esc(msg)}</span>`;
+    t.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.hidden = true; }, 3500);
+  }
+
+  function flashDevice() {
+    const d = $('#screen');
+    d.classList.remove('flash'); void d.offsetWidth; d.classList.add('flash');
+    if (window.matchMedia('(max-width: 920px)').matches) $('#device').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  /* ----- review panel ----- */
+  $('#scenarios').innerHTML = SCENARIOS.map((s, i) => `
+    <button data-scn="${i}"><span class="t"><em>${s.th}</em>${s.t}</span><span class="c">${s.s}${s.w ? ' + ' + s.w : ' · không gán CN'}</span><span class="d">${s.d}</span></button>`).join('');
+  document.querySelectorAll('[data-scn]').forEach((b) => b.onclick = () => {
+    if (S.modal) closeLayer();
+    const s = SCENARIOS[+b.dataset.scn];
+    S.tab = 'pos'; S.view = 'scan'; S.error = null; S.busy = false;
+    S.worker = s.w ? parseWorker(s.w) : null; S.assign = !!s.w; S.slot = parseSlot(s.s); S.target = 'slot';
+    render(); flashDevice();
+  });
+  const sendTrigger = () => {
+    const v = $('#trigger').value.trim();
+    if (!v) { $('#trigger').focus(); return; }
+    if (S.modal) closeLayer();
+    S.tab = 'pos'; S.view = 'scan'; render();
+    handleScan(v); flashDevice();
+    $('#trigger').value = '';
+  };
+  $('#trigger-send').onclick = sendTrigger;
+  $('#trigger').onkeydown = (e) => { if (e.key === 'Enter') sendTrigger(); };
+  $('#reset').onclick = () => {
+    if (S.modal) closeLayer();
+    seed(); S.worker = null; S.slot = null; S.assign = false; S.target = 'slot'; S.error = null; S.filter = 'all'; render();
+    toast('Đã đặt lại dữ liệu mẫu.'); flashDevice();
+  };
+
+  $('#clock').textContent = hhmm(new Date());
+  seed();
+  // Open in a working state: a new position label is scanned, no worker assigned yet.
+  S.slot = parseSlot('VT-05|MAY-105');
+  render();
+})();
+</script>

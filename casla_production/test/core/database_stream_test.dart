@@ -56,9 +56,7 @@ void main() {
   });
 
   test('outstanding count includes every unresolved sync state', () async {
-    for (final item in await db.watchSyncQueue().first) {
-      await db.deleteSyncQueueItem(item['id'] as String);
-    }
+    await db.clearSyncQueueForTesting();
     final now = DateTime.now().millisecondsSinceEpoch;
     for (final entry in const [
       ('sync-pending', 'PENDING'),
@@ -77,5 +75,37 @@ void main() {
 
     expect(await db.watchOutstandingSyncCount().first, 3);
     expect(await db.watchPendingCount().first, 1);
+  });
+
+  test('visible sync count hides expired terminal failures', () async {
+    await db.clearSyncQueueForTesting();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await db.insertSyncQueueItem({
+      'id': 'visible-pending',
+      'entity_type': 'ASSIGNMENT',
+      'entity_id': 'asg-001',
+      'action': 'CREATE',
+      'status': 'PENDING',
+      'created_at_utc': now,
+    });
+    await db.insertSyncQueueItem({
+      'id': 'visible-verify',
+      'entity_type': 'ASSIGNMENT',
+      'entity_id': 'asg-001',
+      'action': 'CREATE',
+      'status': 'NEEDS_VERIFICATION',
+      'created_at_utc': now,
+    });
+    await db.insertSyncQueueItem({
+      'id': 'expired-failure',
+      'entity_type': 'ASSIGNMENT',
+      'entity_id': 'asg-001',
+      'action': 'CREATE',
+      'status': 'FAILED',
+      'created_at_utc': now - const Duration(minutes: 11).inMilliseconds,
+      'updated_at_utc': now - const Duration(minutes: 11).inMilliseconds,
+    });
+
+    expect(await db.watchVisibleSyncCount().first, 2);
   });
 }

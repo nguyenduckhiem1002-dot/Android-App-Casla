@@ -13,6 +13,9 @@ class Assignment {
   final String teamId;
   final String orderId;
   final String orderCode;
+  final String productionOrder;
+  final String operation;
+  final String operationName;
   final String productCode;
   final String productName;
   final String plant;
@@ -20,6 +23,7 @@ class Assignment {
   final String uom;
   final double assignedQuantity;
   final double completedQuantity;
+  final double defectQuantity;
   final double recalledQuantity;
   final String businessDate;
   final String shiftId;
@@ -27,7 +31,9 @@ class Assignment {
   final String? note;
   final String createdBy;
   final String idempotencyKey;
+  final String sapId;
   final SyncStatus syncStatus;
+  final int createdAtUtc;
 
   const Assignment({
     required this.id,
@@ -37,6 +43,9 @@ class Assignment {
     required this.teamId,
     required this.orderId,
     required this.orderCode,
+    this.productionOrder = '',
+    this.operation = '',
+    this.operationName = '',
     required this.productCode,
     required this.productName,
     this.plant = '',
@@ -44,6 +53,7 @@ class Assignment {
     required this.uom,
     required this.assignedQuantity,
     required this.completedQuantity,
+    this.defectQuantity = 0,
     required this.recalledQuantity,
     required this.businessDate,
     required this.shiftId,
@@ -51,7 +61,9 @@ class Assignment {
     this.note,
     required this.createdBy,
     required this.idempotencyKey,
+    this.sapId = '',
     required this.syncStatus,
+    this.createdAtUtc = 0,
   });
 
   /// Giao hiệu lực = Giao ban đầu − Đã thu hồi (Spec 3.1)
@@ -60,14 +72,15 @@ class Assignment {
 
   /// Còn lại = Giao hiệu lực − Hoàn thành lũy kế (Spec 3.1)
   double get remaining =>
-      (effectiveAssigned - completedQuantity).clamp(0.0, double.infinity);
-
-  /// Có thể thu hồi = Giao ban đầu − Hoàn thành − Đã thu hồi (Spec 3.1)
-  double get maxRecall =>
-      (assignedQuantity - completedQuantity - recalledQuantity).clamp(
+      (effectiveAssigned - completedQuantity - defectQuantity).clamp(
         0.0,
         double.infinity,
       );
+
+  /// Có thể thu hồi = Giao ban đầu − Hoàn thành − Đã thu hồi (Spec 3.1)
+  double get maxRecall =>
+      (assignedQuantity - completedQuantity - defectQuantity - recalledQuantity)
+          .clamp(0.0, double.infinity);
 
   /// Tỷ lệ hoàn thành
   double get completionRate =>
@@ -78,6 +91,7 @@ class Assignment {
 
   Assignment copyWith({
     double? completedQuantity,
+    double? defectQuantity,
     double? recalledQuantity,
     AssignmentStatus? status,
     SyncStatus? syncStatus,
@@ -90,6 +104,9 @@ class Assignment {
       teamId: teamId,
       orderId: orderId,
       orderCode: orderCode,
+      productionOrder: productionOrder,
+      operation: operation,
+      operationName: operationName,
       productCode: productCode,
       productName: productName,
       plant: plant,
@@ -97,6 +114,7 @@ class Assignment {
       uom: uom,
       assignedQuantity: assignedQuantity,
       completedQuantity: completedQuantity ?? this.completedQuantity,
+      defectQuantity: defectQuantity ?? this.defectQuantity,
       recalledQuantity: recalledQuantity ?? this.recalledQuantity,
       businessDate: businessDate,
       shiftId: shiftId,
@@ -104,7 +122,9 @@ class Assignment {
       note: note,
       createdBy: createdBy,
       idempotencyKey: idempotencyKey,
+      sapId: sapId,
       syncStatus: syncStatus ?? this.syncStatus,
+      createdAtUtc: createdAtUtc,
     );
   }
 }
@@ -114,6 +134,7 @@ class ProductionRecord {
   final String id;
   final String assignmentId;
   final double quantity;
+  final double defectQuantity;
   final String businessDate;
   final String shiftId;
   final String? note;
@@ -127,6 +148,7 @@ class ProductionRecord {
     required this.id,
     required this.assignmentId,
     required this.quantity,
+    this.defectQuantity = 0,
     required this.businessDate,
     required this.shiftId,
     this.note,
@@ -147,7 +169,13 @@ class UserWorkContext {
   final String workId;
   final String workName;
   final String plant;
+
+  /// Human-readable plant name returned by SAP when available.
+  final String plantName;
   final String workCenter;
+
+  /// Human-readable Work Center (Xưởng) name returned by SAP when available.
+  final String workCenterName;
   final String boPhan;
   final String location;
 
@@ -155,10 +183,34 @@ class UserWorkContext {
     required this.workId,
     required this.workName,
     this.plant = '',
+    this.plantName = '',
     this.workCenter = '',
+    this.workCenterName = '',
     this.boPhan = '',
     this.location = '',
   });
+
+  /// Xưởng name for display: SAP's Work Center text, else its Location.
+  String get workCenterDisplayName {
+    final name = workCenterName.trim();
+    return name.isNotEmpty ? name : location.trim();
+  }
+
+  /// `CL100077 (Xưởng may 2)`, or whichever half SAP returned.
+  String get workCenterLabel {
+    final code = workCenter.trim();
+    final name = workCenterDisplayName;
+    if (code.isEmpty) return name;
+    return name.isEmpty ? code : '$code ($name)';
+  }
+
+  /// `XM2.002 - MAY CHI TIẾT PHỤ-XM2`: Bộ phận code and name only.
+  String get departmentLabel {
+    final id = workId.trim();
+    final name = workName.trim();
+    if (id.isEmpty) return name;
+    return name.isEmpty ? id : '$id - $name';
+  }
 }
 
 /// Phiên đăng nhập
