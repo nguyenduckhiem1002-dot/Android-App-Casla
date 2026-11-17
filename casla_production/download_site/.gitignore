@@ -1,0 +1,13 @@
+node_modules/
+.next/
+next-env.d.ts
+*.tsbuildinfo
+.vercel/
+
+# Token Blob và mã truy cập: KHÔNG commit.
+.env
+.env.local
+.env.*.local
+
+# Kho thử cục bộ của `release.mjs --local` (chứa APK).
+.local-store/
