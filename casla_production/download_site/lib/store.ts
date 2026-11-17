@@ -15,7 +15,7 @@ import type { Manifest, Release } from './shared.mjs';
 export type { Manifest, Release };
 
 /**
- * blob        : có token, đọc từ Vercel Blob.
+ * blob        : đã nối store (token hoặc OIDC), đọc từ Vercel Blob.
  * local       : chạy ở máy dev không có token, đọc `.local-store/` (do
  *               `release.mjs --local` ghi) để xem thử trang.
  * unconfigured: đang chạy trên Vercel nhưng chưa nối Blob store.
@@ -23,7 +23,9 @@ export type { Manifest, Release };
 export type StoreMode = 'blob' | 'local' | 'unconfigured';
 
 export function storeMode(): StoreMode {
-  if (process.env.BLOB_READ_WRITE_TOKEN) return 'blob';
+  // Vercel nối store theo một trong hai cách: token đọc/ghi, hoặc OIDC kèm
+  // BLOB_STORE_ID (không có token). SDK tự chọn cách có sẵn.
+  if (process.env.BLOB_READ_WRITE_TOKEN || process.env.BLOB_STORE_ID) return 'blob';
   if (process.env.VERCEL) return 'unconfigured';
   return 'local';
 }

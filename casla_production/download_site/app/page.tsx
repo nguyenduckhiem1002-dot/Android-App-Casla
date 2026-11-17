@@ -201,7 +201,7 @@ function EmptyCard({ loadFailed }: { loadFailed: boolean }) {
         {loadFailed
           ? 'Máy chủ lưu trữ đang không phản hồi. Vui lòng tải lại trang sau ít phút.'
           : unconfigured
-            ? 'Trang chưa được nối với Blob store: thiếu biến BLOB_READ_WRITE_TOKEN trên Vercel.'
+            ? `Bản deploy này (môi trường ${process.env.VERCEL_ENV ?? 'không rõ'}) chưa thấy Blob store: thiếu biến BLOB_READ_WRITE_TOKEN hoặc BLOB_STORE_ID. Nối store cho đúng môi trường này rồi Redeploy.`
             : 'Bản cài đặt sẽ xuất hiện ở đây ngay sau lần phát hành đầu tiên.'}
       </p>
     </section>
