@@ -1,5 +1,7 @@
 // Dùng chung cho trang web (Next.js) và scripts/release.mjs, để hai bên luôn
 // đọc/ghi cùng một manifest.
+import { BlobNotFoundError, get, head } from '@vercel/blob';
+
 /** Thư mục kho thử cục bộ (khi không có BLOB_READ_WRITE_TOKEN). */
 export const LOCAL_STORE_DIR = '.local-store';
 
@@ -72,4 +74,32 @@ export function normalizeManifest(raw) {
     updatedAt: typeof input.updatedAt === 'string' ? input.updatedAt : base.updatedAt,
     releases,
   };
+}
+
+/**
+ * Đọc manifest mới nhất từ Blob, kèm ETag để ghi lại có điều kiện.
+ *
+ * Store public: CDN của Blob giữ bản cũ của manifest lâu hơn max-age, nên đọc
+ * thẳng URL sẽ ra danh sách cũ. `head()` hỏi API (luôn mới) lấy ETag, rồi gắn
+ * ETag vào URL để mỗi phiên bản manifest có một khóa cache riêng.
+ * @param {'private' | 'public'} [access]
+ * @returns {Promise<{ manifest: Manifest, etag: string | null }>}
+ */
+export async function fetchBlobManifest(access = blobAccess()) {
+  if (access === 'private') {
+    const result = await get(MANIFEST_PATHNAME, { access, useCache: false });
+    if (!result || result.statusCode !== 200) return { manifest: emptyManifest(), etag: null };
+    return { manifest: normalizeManifest(await new Response(result.stream).json()), etag: result.blob.etag };
+  }
+
+  let meta;
+  try {
+    meta = await head(MANIFEST_PATHNAME);
+  } catch (error) {
+    if (error instanceof BlobNotFoundError) return { manifest: emptyManifest(), etag: null };
+    throw error;
+  }
+  const response = await fetch(`${meta.url}?v=${encodeURIComponent(meta.etag)}`, { cache: 'no-store' });
+  if (!response.ok) throw new Error(`Manifest HTTP ${response.status}`);
+  return { manifest: normalizeManifest(await response.json()), etag: meta.etag };
 }

@@ -37,27 +37,40 @@ Trang web đọc manifest mỗi lần mở  →  nút "Tải về máy" trỏ t�
 Chạy từ gốc project, trong Terminal (Gradle không build được trong sandbox):
 
 ```powershell
-# Mặc định: flavor production, bản debug, dart-define từ .env
+# Mặc định: bản staging (QAS) release, .env.qas, android-arm64, tự tăng số build
 tool\publish_release.cmd --notes "Sửa lỗi đồng bộ\nThêm nút thu hồi"
 
-# Bản staging release, dùng .env.qas
-tool\publish_release.cmd --flavor staging --mode release --env-file .env.qas
+# Bản production debug cho TC22, dùng .env
+tool\publish_release.cmd --flavor production
 
 # Đã build sẵn rồi, chỉ đưa file lên
 tool\publish_release.cmd --skip-build
-tool\publish_release.cmd --apk build\app\outputs\flutter-apk\app-production-debug.apk
+tool\publish_release.cmd --apk build\app\outputs\flutter-apk\app-staging-release.apk
 
 # Xem trước sẽ làm gì, không build, không tải lên
-tool\publish_release.cmd --skip-build --dry-run
+tool\publish_release.cmd --dry-run
+
+# Xem các bản đang có trên trang, gỡ một bản
+tool\publish_release.cmd --list
+tool\publish_release.cmd --remove <id>
 ```
 
 Tất cả tùy chọn: `tool\publish_release.cmd --help`.
 
-- **Số phiên bản** lấy từ chính file APK. Muốn mỗi bản một số build riêng thì
-  thêm `--bump` (versionCode = bản đã phát hành gần nhất + 1) hoặc
-  `--build-number <n>`; không thêm thì dùng `version:` trong `pubspec.yaml`.
-  Lưu ý: máy đã cài build cao hơn sẽ không cài đè được build thấp hơn, kể cả khi
-  `flutter run` từ máy dev.
+- **Mặc định theo flavor** khớp bảng lệnh chuẩn ở `docs/PROJECT_HARNESS.md`:
+
+  | Flavor | Kiểu | File env | Kiến trúc | Số build |
+  | --- | --- | --- | --- | --- |
+  | `staging` (mặc định) | release | `.env.qas` | android-arm64 | tự tăng |
+  | `production` | debug | `.env` | mọi kiến trúc | theo `pubspec.yaml` |
+  | `dev` | debug | `.env` | mọi kiến trúc | theo `pubspec.yaml` |
+
+  Đổi từng phần bằng `--mode`, `--env-file`, `--target-platform`.
+- **Số build tự tăng** lấy số lớn nhất trong ba số: `pubspec.yaml`, bản đã phát
+  hành gần nhất của kênh + 1, và APK đang có trong thư mục build + 1. Nhờ vậy
+  máy đã cài bản cũ luôn cập nhật đè được. Tự đặt số bằng `--build-number <n>`;
+  bật cho flavor khác bằng `--bump`. Số hiện trên trang luôn đọc từ chính file
+  APK.
 - **Ghi chú** dài hoặc có ký tự đặc biệt (`&`, `|`, `%`): viết vào file rồi dùng
   `--notes-file ghi_chu.txt`, mỗi dòng một ý.
 - **Kênh**: mỗi flavor là một kênh trên trang (Chính thức / Thử nghiệm / Phát

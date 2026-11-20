@@ -8,12 +8,13 @@ import { createReadStream, existsSync, openAsBlob, promises as fs, readFileSync,
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, promisify } from 'node:util';
-import { del, get, put } from '@vercel/blob';
+import { BlobPreconditionFailedError, del, put } from '@vercel/blob';
 import {
   APK_CONTENT_TYPE,
   LOCAL_STORE_DIR,
   MANIFEST_PATHNAME,
   blobAccess,
+  fetchBlobManifest,
   normalizeManifest,
 } from '../lib/shared.mjs';
 
@@ -28,14 +29,22 @@ Phát hành APK CASLA lên trang tải.
   node download_site/scripts/release.mjs [tùy chọn]
 
 Tùy chọn build
-  --flavor <tên>        production | staging | dev        (mặc định: production)
-  --mode <kiểu>         debug | release                   (mặc định: debug)
-  --env-file <file>     File dart-define, tính từ gốc project (mặc định: .env)
+  --flavor <tên>        staging | production | dev         (mặc định: staging)
+  --mode <kiểu>         debug | release
+  --env-file <file>     File dart-define, tính từ gốc project
+  --target-platform <p> Ví dụ android-arm64; "all" = mọi kiến trúc
   --build-name <x.y.z>  Ghi đè versionName của pubspec.yaml
   --build-number <n>    Ghi đè versionCode của pubspec.yaml
-  --bump                Tự lấy versionCode = bản đã phát hành gần nhất của kênh + 1
+  --bump                Tự tăng versionCode (xem dưới)
   --skip-build          Không build, dùng APK đã có ở build/app/outputs/flutter-apk
   --apk <file>          Phát hành đúng file APK này (không build)
+
+Mặc định theo flavor (khớp docs/PROJECT_HARNESS.md):
+  staging     release · .env.qas · android-arm64 · tự tăng versionCode
+  production  debug   · .env
+  dev         debug   · .env
+Tự tăng versionCode = số lớn nhất trong (pubspec, bản đã phát hành gần nhất + 1,
+APK đang có trong thư mục build + 1), để máy đã cài bản cũ cập nhật đè được.
 
 Tùy chọn phát hành
   --notes "<nội dung>"  Ghi chú phát hành; dùng \\n để xuống dòng
@@ -46,10 +55,21 @@ Tùy chọn phát hành
   --dry-run             Chỉ in kế hoạch, không build lại và không tải lên
   --help
 
+Quản lý
+  --list                Liệt kê các bản đang có trên trang
+  --remove <id>         Gỡ một bản khỏi trang và xóa file của nó (id lấy từ --list)
+
 Token Blob đọc từ download_site/.env.local (BLOB_READ_WRITE_TOKEN).
 `;
 
 class ReleaseError extends Error {}
+
+// Khớp bảng "Lệnh chuẩn" trong docs/PROJECT_HARNESS.md.
+const PRESETS = {
+  staging: { mode: 'release', envFile: '.env.qas', targetPlatform: 'android-arm64', bump: true },
+  production: { mode: 'debug', envFile: '.env', targetPlatform: null, bump: false },
+  dev: { mode: 'debug', envFile: '.env', targetPlatform: null, bump: false },
+};
 
 const log = (message = '') => console.log(message);
 const step = (message) => console.log(`\n> ${message}`);
@@ -57,9 +77,10 @@ const step = (message) => console.log(`\n> ${message}`);
 async function main() {
   const { values } = parseArgs({
     options: {
-      flavor: { type: 'string', default: 'production' },
-      mode: { type: 'string', default: 'debug' },
-      'env-file': { type: 'string', default: '.env' },
+      flavor: { type: 'string', default: 'staging' },
+      mode: { type: 'string' },
+      'env-file': { type: 'string' },
+      'target-platform': { type: 'string' },
       'build-name': { type: 'string' },
       'build-number': { type: 'string' },
       bump: { type: 'boolean', default: false },
@@ -71,6 +92,8 @@ async function main() {
       keep: { type: 'string', default: '5' },
       local: { type: 'boolean', default: false },
       'dry-run': { type: 'boolean', default: false },
+      list: { type: 'boolean', default: false },
+      remove: { type: 'string' },
       help: { type: 'boolean', default: false },
     },
   });
@@ -80,11 +103,23 @@ async function main() {
     return;
   }
 
-  const flavor = values.flavor;
-  const mode = values.mode;
-  if (!['production', 'staging', 'dev'].includes(flavor)) {
-    throw new ReleaseError(`--flavor phải là production, staging hoặc dev (đang là "${flavor}").`);
+  if (values.list || values.remove) {
+    loadSiteEnv();
+    const storage = values.local ? localStorage() : blobStorage();
+    log(`Kho lưu: ${storage.label}`);
+    if (values.remove) await removeRelease(storage, values.remove);
+    else listReleases(await storage.readManifest());
+    return;
   }
+
+  const flavor = values.flavor;
+  const preset = PRESETS[flavor];
+  if (!preset) {
+    throw new ReleaseError(`--flavor phải là staging, production hoặc dev (đang là "${flavor}").`);
+  }
+  const mode = values.mode ?? preset.mode;
+  const envFile = values['env-file'] ?? preset.envFile;
+  const targetPlatform = values['target-platform'] ?? preset.targetPlatform;
   if (!['debug', 'release'].includes(mode)) {
     throw new ReleaseError(`--mode phải là debug hoặc release (đang là "${mode}").`);
   }
@@ -94,6 +129,7 @@ async function main() {
   if (values.bump && values['build-number']) {
     throw new ReleaseError('Chỉ dùng một trong hai: --bump hoặc --build-number.');
   }
+  const bump = !values['build-number'] && (values.bump || preset.bump);
 
   loadSiteEnv();
   const storage = values.local ? localStorage() : blobStorage();
@@ -106,7 +142,6 @@ async function main() {
 
   let buildNumber = values['build-number'] ? Number.parseInt(values['build-number'], 10) : null;
   if (values['build-number'] && !(buildNumber > 0)) throw new ReleaseError('--build-number phải là số nguyên dương.');
-  if (values.bump) buildNumber = Math.max(pubspec.code, lastCode + 1);
   const buildName = values['build-name'] ?? null;
 
   // ----- Build -----
@@ -115,19 +150,26 @@ async function main() {
     ? path.resolve(process.cwd(), values.apk)
     : path.join(flutterRoot, 'build', 'app', 'outputs', 'flutter-apk', `app-${flavor}-${mode}.apk`);
 
+  if (building && bump) {
+    // APK còn trong thư mục build thường là bản đang cài trên máy người dùng.
+    const previous = existsSync(apkPath) ? await readApkBadge(apkPath) : null;
+    buildNumber = Math.max(pubspec.code, lastCode + 1, (previous?.versionCode ?? 0) + 1);
+  }
+
   if (building && !values['dry-run']) {
-    await buildApk({ flavor, mode, envFile: values['env-file'], buildName, buildNumber, apkPath });
+    await buildApk({ flavor, mode, envFile, targetPlatform, buildName, buildNumber, apkPath });
   } else if (!building && (buildName || buildNumber)) {
     log('Lưu ý: không build nên --build-name/--build-number/--bump chỉ dùng khi không đọc được số phiên bản từ APK.');
   }
 
-  if (!existsSync(apkPath)) {
-    if (values['dry-run'] && building) {
-      log(`\n[dry-run] Sẽ build ${flavor} ${mode} rồi phát hành ${rel(apkPath)}.`);
-      return;
-    }
-    throw new ReleaseError(`Không thấy file APK: ${apkPath}`);
+  if (values['dry-run'] && building) {
+    const platform = targetPlatform && targetPlatform !== 'all' ? `, ${targetPlatform}` : '';
+    const number = buildNumber ? `, build ${buildNumber}` : '';
+    log(`\n[dry-run] Sẽ build ${flavor} ${mode} (${envFile}${platform}${number})`);
+    log(`[dry-run] rồi phát hành ${rel(apkPath)} lên kênh "${channel}".`);
+    return;
   }
+  if (!existsSync(apkPath)) throw new ReleaseError(`Không thấy file APK: ${apkPath}`);
 
   // ----- Thông tin file -----
   step('Đọc thông tin APK');
@@ -168,13 +210,21 @@ async function main() {
     log(`  CẢNH BÁO  : build ${versionCode} thấp hơn bản đã phát hành (build ${lastCode}); máy đã cài bản cao hơn sẽ không cập nhật đè được.`);
   }
 
-  const kept = [release, ...manifest.releases];
-  const pruned = keep > 0 ? kept.filter((r) => r.channel === channel).slice(keep) : [];
-  const prunedIds = new Set(pruned.map((r) => r.id));
+  // Thêm bản mới, giữ `keep` bản mới nhất của kênh; trả về cả các bản bị loại.
+  const plan = (current) => {
+    const all = [release, ...current.releases.filter((r) => r.id !== release.id)];
+    const drop = keep > 0 ? all.filter((r) => r.channel === channel).slice(keep) : [];
+    const dropIds = new Set(drop.map((r) => r.id));
+    return {
+      drop,
+      next: { schema: 1, updatedAt: publishedAt.toISOString(), releases: all.filter((r) => !dropIds.has(r.id)) },
+    };
+  };
 
   if (values['dry-run']) {
+    const { drop } = plan(manifest);
     log(`\n[dry-run] Sẽ tải lên ${release.pathname}`);
-    if (pruned.length) log(`[dry-run] Sẽ xóa ${pruned.length} bản cũ: ${pruned.map((r) => r.id).join(', ')}`);
+    if (drop.length) log(`[dry-run] Sẽ xóa ${drop.length} bản cũ: ${drop.map((r) => r.id).join(', ')}`);
     return;
   }
 
@@ -185,10 +235,11 @@ async function main() {
   if (stored.downloadUrl) release.downloadUrl = stored.downloadUrl;
 
   step('Cập nhật danh sách phiên bản');
-  await storage.writeManifest({
-    schema: 1,
-    updatedAt: publishedAt.toISOString(),
-    releases: kept.filter((r) => !prunedIds.has(r.id)),
+  let pruned = [];
+  await storage.updateManifest((current) => {
+    const { drop, next } = plan(current);
+    pruned = drop;
+    return next;
   });
 
   if (pruned.length) {
@@ -207,14 +258,47 @@ async function main() {
   else if (site) log(`Trang tải: ${site}/`);
 }
 
+// -------------------------------------------------------------- quản lý
+
+function listReleases(manifest) {
+  if (manifest.releases.length === 0) {
+    log('Chưa có bản nào trên trang.');
+    return;
+  }
+  log();
+  for (const r of manifest.releases) {
+    const when = new Date(r.publishedAt).toLocaleString('vi-VN');
+    log(`${r.id}`);
+    log(`    ${r.channel} · ${r.mode} · ${r.versionName} (build ${r.versionCode}) · ${megabytes(r.size)} · ${when}`);
+  }
+}
+
+async function removeRelease(storage, id) {
+  let target;
+  await storage.updateManifest((current) => {
+    target = current.releases.find((r) => r.id === id);
+    if (!target) {
+      throw new ReleaseError(`Không có bản nào mang id "${id}". Xem danh sách: --list`);
+    }
+    return {
+      schema: 1,
+      updatedAt: new Date().toISOString(),
+      releases: current.releases.filter((r) => r.id !== id),
+    };
+  });
+  await storage.remove([target.pathname]);
+  log(`Đã gỡ ${id} khỏi trang và xóa file của nó.`);
+}
+
 // ---------------------------------------------------------------- build
 
-async function buildApk({ flavor, mode, envFile, buildName, buildNumber, apkPath }) {
+async function buildApk({ flavor, mode, envFile, targetPlatform, buildName, buildNumber, apkPath }) {
   const envPath = path.resolve(flutterRoot, envFile);
   if (!existsSync(envPath)) {
     throw new ReleaseError(`Không thấy file dart-define: ${envPath}\nChỉ định bằng --env-file <file>.`);
   }
   const args = ['build', 'apk', '--flavor', flavor, `--${mode}`, `--dart-define-from-file=${envFile}`];
+  if (targetPlatform && targetPlatform !== 'all') args.push('--target-platform', targetPlatform);
   if (buildName) args.push('--build-name', buildName);
   if (buildNumber) args.push('--build-number', String(buildNumber));
 
@@ -335,9 +419,10 @@ function localStorage() {
       await fs.copyFile(source, target);
       return { pathname };
     },
-    async writeManifest(manifest) {
+    async updateManifest(mutate) {
+      const next = mutate(await this.readManifest());
       await fs.mkdir(localStore, { recursive: true });
-      await fs.writeFile(manifestFile, JSON.stringify(manifest, null, 2), 'utf8');
+      await fs.writeFile(manifestFile, JSON.stringify(next, null, 2), 'utf8');
     },
     async remove(pathnames) {
       for (const pathname of pathnames) {
@@ -371,9 +456,7 @@ function blobStorage() {
     label: `Vercel Blob (${access})`,
     async readManifest() {
       try {
-        const result = await get(MANIFEST_PATHNAME, { access, useCache: false });
-        if (!result || result.statusCode !== 200) return normalizeManifest(null);
-        return normalizeManifest(await new Response(result.stream).json());
+        return (await fetchBlobManifest(access)).manifest;
       } catch (error) {
         throw explain(error);
       }
@@ -402,17 +485,33 @@ function blobStorage() {
         throw explain(error);
       }
     },
-    async writeManifest(manifest) {
-      try {
-        await put(MANIFEST_PATHNAME, JSON.stringify(manifest, null, 2), {
-          access,
-          allowOverwrite: true,
-          addRandomSuffix: false,
-          contentType: 'application/json; charset=utf-8',
-          cacheControlMaxAge: 60,
-        });
-      } catch (error) {
-        throw explain(error);
+    // Đọc bản mới nhất, sửa, rồi chỉ ghi nếu manifest chưa bị ai đổi (ETag khớp).
+    async updateManifest(mutate) {
+      for (let attempt = 1; ; attempt += 1) {
+        let current;
+        try {
+          current = await fetchBlobManifest(access);
+        } catch (error) {
+          throw explain(error);
+        }
+        const next = mutate(current.manifest);
+        try {
+          await put(MANIFEST_PATHNAME, JSON.stringify(next, null, 2), {
+            access,
+            addRandomSuffix: false,
+            contentType: 'application/json; charset=utf-8',
+            cacheControlMaxAge: 60,
+            ...(current.etag ? { ifMatch: current.etag } : { allowOverwrite: true }),
+          });
+          return;
+        } catch (error) {
+          if (!(error instanceof BlobPreconditionFailedError)) throw explain(error);
+          if (attempt >= 4) {
+            throw new ReleaseError('Danh sách phiên bản liên tục bị thay đổi ở nơi khác. Chạy lại lệnh sau ít phút.');
+          }
+          log('  Danh sách vừa được cập nhật ở nơi khác, đọc lại...');
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
       }
     },
     async remove(pathnames) {

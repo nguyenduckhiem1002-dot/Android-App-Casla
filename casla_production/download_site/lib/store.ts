@@ -5,9 +5,9 @@ import { get, issueSignedToken, presignUrl } from '@vercel/blob';
 import {
   APK_CONTENT_TYPE,
   LOCAL_STORE_DIR,
-  MANIFEST_PATHNAME,
   blobAccess,
   emptyManifest,
+  fetchBlobManifest,
   normalizeManifest,
 } from './shared.mjs';
 import type { Manifest, Release } from './shared.mjs';
@@ -57,9 +57,7 @@ async function loadManifest(): Promise<Manifest> {
     }
   }
 
-  const result = await get(MANIFEST_PATHNAME, { access: blobAccess(), useCache: false });
-  if (!result || result.statusCode !== 200) return emptyManifest();
-  return normalizeManifest(await new Response(result.stream).json());
+  return (await fetchBlobManifest()).manifest;
 }
 
 export type DownloadTarget =
