@@ -20,7 +20,9 @@ import '../utils/id_generator.dart';
 import '../utils/operation_qr_parser.dart';
 import '../../domain/policies/production_math.dart';
 import '../../domain/entities/work_history.dart';
+import '../../domain/policies/assignment_position_policy.dart';
 import '../../domain/policies/history_work_context.dart';
+import '../sync/sync_retention.dart';
 import 'casla_schema.dart';
 
 /// Maps a `sync_queue.entity_type` onto the table holding the source row.
@@ -874,9 +876,11 @@ class CaslaDatabase {
 
       // Cache retention is bounded independently from the durable outbox.
       // Deleting cache metadata cascades only to its entry/summary children.
-      final expiredBefore = DateTime.now()
-          .subtract(const Duration(days: 30))
-          .millisecondsSinceEpoch;
+      // The cutoff is measured from the snapshot being written, not from the
+      // wall clock: [fetchedAtUtc] is the repository's clock, and a test that
+      // injects a fixed clock must not see its own snapshot pruned.
+      final expiredBefore =
+          fetchedAtUtc - const Duration(days: 30).inMilliseconds;
       await txn.delete(
         'work_history_cache_meta',
         where: 'fetched_at_utc < ?',
@@ -1333,6 +1337,11 @@ class CaslaDatabase {
   Future<String> reconcileHistoryConfirmationAssignment({
     required Map<String, dynamic> assignment,
     required List<WorkHistoryEntry> entries,
+
+    /// What SAP still holds on the allocation's seat, settled in event
+    /// order (see `seat_balance.dart`). When given it decides OPEN or
+    /// COMPLETED instead of the allocation's own figure.
+    double? seatRemaining,
   }) async {
     String uuid(Object? value) =>
         (value ?? '').toString().replaceAll('-', '').trim().toUpperCase();
@@ -1364,8 +1373,8 @@ class CaslaDatabase {
             row['business_date'] != assignment['business_date'] ||
             row['shift_id'] != assignment['shift_id']) {
           throw const FormatException(
-            'Lần giao này thuộc bộ phận, ca hoặc ngày khác với lựa chọn hiện '
-            'tại. Hãy chọn đúng ca và bộ phận rồi thử lại.',
+            'Lần giao này thuộc tổ, ca hoặc ngày khác với lựa chọn hiện '
+            'tại. Hãy chọn đúng ca và tổ rồi thử lại.',
           );
         }
       }
@@ -1389,7 +1398,13 @@ class CaslaDatabase {
       } else {
         await txn.update(
           'assignments',
-          {'assigned_quantity': source.quantity},
+          {
+            'assigned_quantity': source.quantity,
+            // Rows imported before 2026-11-11 had no position; the seat a
+            // confirmation goes to is chosen by it.
+            if (assignment['position_id'] != null)
+              'position_id': assignment['position_id'],
+          },
           where: 'id = ?',
           whereArgs: [targetId],
         );
@@ -1520,7 +1535,12 @@ class CaslaDatabase {
       await txn.update(
         'assignments',
         {
-          'status': source.quantity - completed - recalled > 0.0001
+          // An allocation spent on paper stays OPEN while a later one
+          // reopened its seat; one SAP has cleared closes even with a
+          // figure of its own left.
+          'status':
+              (seatRemaining ?? (source.quantity - completed - recalled)) >
+                  0.0001
               ? 'OPEN'
               : 'COMPLETED',
         },
@@ -1533,6 +1553,20 @@ class CaslaDatabase {
     _notifyProduction();
     _notifyRecalls();
     return id;
+  }
+
+  /// Reopens an allocation closed on its own figure because SAP still holds
+  /// a balance on its seat (a later allocation reopened it). A recalled
+  /// allocation stays closed.
+  Future<void> reopenAssignmentForSeat(String id) async {
+    final db = await _database;
+    final changed = await db.update(
+      'assignments',
+      {'status': 'OPEN'},
+      where: "id = ? AND status = 'COMPLETED'",
+      whereArgs: [id],
+    );
+    if (changed > 0) _notifyAssignments();
   }
 
   Future<void> insertAssignment(Map<String, dynamic> assignment) async {
@@ -1561,29 +1595,95 @@ class CaslaDatabase {
     _notifySyncQueue();
   }
 
-  /// The position the worker's assignments for this operation and shift were
-  /// made at on this device, newest first; null when none recorded one.
+  /// The position the worker's open assignments for this operation and shift
+  /// were made at on this device, newest first; null when none recorded one
+  /// or when the group is settled (fully recalled, or confirmed and recalled
+  /// down to zero), so the next assignment may be made elsewhere.
   ///
-  /// Rows SAP rejected are skipped: they never became part of the group.
+  /// Only this device's rows are summed: the assignment form combines the
+  /// ledger with SAP's history through [getGroupAssignmentLedger] when it
+  /// can reach SAP, since a confirmation booked against carried-over work
+  /// (or made on another device) never touches the lots held here.
   Future<String?> getGroupAssignmentPosition({
     required String workerId,
     required String orderId,
     required String businessDate,
     required String shiftId,
+    String workId = '',
+  }) async {
+    final ledger = await getGroupAssignmentLedger(
+      workerId: workerId,
+      orderId: orderId,
+      businessDate: businessDate,
+      shiftId: shiftId,
+      workId: workId,
+    );
+    return ledger.openPosition;
+  }
+
+  /// This device's rows of one assignment group: the worker's lots for the
+  /// operation ([orderId]) in the shift and work date, within the department
+  /// ([workId], when given), with what they consumed.
+  ///
+  /// Rows SAP rejected are skipped: they never became part of the group.
+  Future<GroupAssignmentLedger> getGroupAssignmentLedger({
+    required String workerId,
+    required String orderId,
+    required String businessDate,
+    required String shiftId,
+    String workId = '',
   }) async {
     final db = await _database;
-    final rows = await db.query(
-      'assignments',
-      columns: ['position_id'],
-      where:
-          'nhan_vien_id = ? AND don_hang_id = ? AND business_date = ? '
-          "AND shift_id = ? AND sync_status <> 'FAILED' "
-          "AND position_id IS NOT NULL AND TRIM(position_id) <> ''",
-      whereArgs: [workerId, orderId, businessDate, shiftId],
-      orderBy: 'created_at_utc DESC',
-      limit: 1,
+    final department = workId.trim();
+    final rows = await db.rawQuery(
+      'SELECT a.position_id, a.sync_status, a.assigned_quantity, '
+      "  COALESCE((SELECT SUM(p.quantity + p.defect_quantity) "
+      '      FROM production_records p WHERE p.phan_cong_id = a.id '
+      "        AND COALESCE(p.sync_status, 'PENDING') != 'FAILED'), 0) "
+      '  + COALESCE((SELECT SUM(r.quantity) '
+      '      FROM recall_records r WHERE r.phan_cong_id = a.id '
+      "        AND COALESCE(r.sync_status, 'PENDING') != 'FAILED'), 0) "
+      '  AS consumed, '
+      "  COALESCE((SELECT SUM(p.quantity + p.defect_quantity) "
+      '      FROM production_records p WHERE p.phan_cong_id = a.id '
+      "        AND COALESCE(p.sync_status, 'PENDING') "
+      "          NOT IN ('FAILED', 'SYNCED')), 0) "
+      '  + COALESCE((SELECT SUM(r.quantity) '
+      '      FROM recall_records r WHERE r.phan_cong_id = a.id '
+      "        AND COALESCE(r.sync_status, 'PENDING') "
+      "          NOT IN ('FAILED', 'SYNCED')), 0) "
+      '  AS unsent_consumed '
+      'FROM assignments a '
+      'WHERE a.nhan_vien_id = ? AND a.don_hang_id = ? AND a.business_date = ? '
+      "AND a.shift_id = ? AND COALESCE(a.sync_status, '') != 'FAILED' "
+      "${department.isEmpty ? '' : 'AND a.to_id = ? '}"
+      'ORDER BY a.created_at_utc DESC',
+      [
+        workerId,
+        orderId,
+        businessDate,
+        shiftId,
+        if (department.isNotEmpty) department,
+      ],
     );
-    return rows.isEmpty ? null : rows.first['position_id']?.toString();
+    var remaining = 0.0;
+    var unsent = 0.0;
+    String? position;
+    for (final row in rows) {
+      final assigned = _toDouble(row['assigned_quantity']);
+      remaining += assigned - _toDouble(row['consumed']);
+      final status = (row['sync_status']?.toString() ?? '').toUpperCase();
+      if (status != 'SYNCED') unsent += assigned;
+      unsent -= _toDouble(row['unsent_consumed']);
+      final recorded = row['position_id']?.toString().trim() ?? '';
+      if (position == null && recorded.isNotEmpty) position = recorded;
+    }
+    return GroupAssignmentLedger(
+      hasRows: rows.isNotEmpty,
+      position: position,
+      remaining: remaining,
+      unsentDelta: unsent,
+    );
   }
 
   Future<Map<String, dynamic>?> getAssignmentById(String id) async {
@@ -2225,22 +2325,6 @@ class CaslaDatabase {
     return _toDouble(rows.first['total']);
   }
 
-  Stream<List<Map<String, dynamic>>> watchRecordsByAssignment(
-    String assignmentId,
-  ) {
-    return _watch(_productionController, () async {
-      final db = await _database;
-      return _rows(
-        await db.query(
-          'production_records',
-          where: 'phan_cong_id = ?',
-          whereArgs: [assignmentId],
-          orderBy: 'occurred_at_utc DESC',
-        ),
-      );
-    });
-  }
-
   void _notifyProduction() => _emit(_productionController);
 
   Future<List<Map<String, dynamic>>> getProductionHistory(
@@ -2477,6 +2561,9 @@ class CaslaDatabase {
     required Map<String, dynamic> record,
     required Map<String, dynamic> queueItem,
     required Map<String, dynamic> auditLog,
+
+    /// See `RecallRepository.recallAssignment.seatCeiling`.
+    double? seatCeiling,
   }) async {
     final assignmentId = record['phan_cong_id']?.toString();
     if (assignmentId == null || assignmentId.isEmpty) {
@@ -2529,12 +2616,17 @@ class CaslaDatabase {
       final assigned = _toDouble(assignment['assigned_quantity']);
       final completed = _toDouble(completedRows.single['total']);
       final recalled = _toDouble(recalledRows.single['total']);
-      final maxRecall = (assigned - completed - recalled)
+      final ownMaxRecall = (assigned - completed - recalled)
           .clamp(0.0, double.infinity)
           .toDouble();
+      final maxRecall = ProductionMath.recallCeiling(
+        ownMaxRecall,
+        seatCeiling: seatCeiling,
+      );
       if (quantity > maxRecall + 0.0001) {
         throw MutationValidationException(
-          'Số lượng thu hồi vượt quá hạn mức tối đa (${maxRecall.toInt()}).',
+          'Số lượng thu hồi vượt quá hạn mức tối đa '
+          '(${ProductionMath.formatQuantity(maxRecall)}).',
         );
       }
 
@@ -2592,6 +2684,34 @@ class CaslaDatabase {
   void _notifyRecalls() => _emit(_recallController);
 
   // ─── Sync Queue Queries ───────────────────────────────────────────
+  /// Drops every queue row that has outlived its day (see
+  /// [isExpiredSyncItem]), each with the local record it was carrying, and
+  /// returns how many were dropped. Runs on app open, on every sync pass and
+  /// on the Đồng bộ tab's refresh, so a device switched off overnight catches
+  /// up the moment it is used again. Rows SAP already accepted are not queue
+  /// rows any more and are never touched.
+  static int _toInt(Object? value) =>
+      value is int ? value : int.tryParse('$value') ?? 0;
+
+  Future<int> purgeExpiredSyncItems({DateTime? now}) async {
+    final db = await _database;
+    final clock = now ?? DateTime.now();
+    final rows = await db.query(
+      'sync_queue',
+      columns: ['id', 'created_at_utc', 'status'],
+      where: "COALESCE(status, 'PENDING') != 'SYNCED'",
+    );
+    var dropped = 0;
+    for (final row in rows) {
+      final createdAt = _toInt(row['created_at_utc']);
+      if (!isExpiredSyncItem(createdAtUtcMs: createdAt, now: clock)) continue;
+      if (await deleteSyncQueueItem(row['id'].toString(), allowPending: true)) {
+        dropped++;
+      }
+    }
+    return dropped;
+  }
+
   Future<void> insertSyncQueueItem(Map<String, dynamic> item) async {
     final db = await _database;
     await db.insert('sync_queue', item);
@@ -3039,6 +3159,102 @@ class CaslaDatabase {
     return rows.isEmpty ? null : Map<String, dynamic>.from(rows.first);
   }
 
+  /// What the sync screen shows about each queue item, keyed by queue id: the
+  /// source transaction with its assignment, order and worker resolved.
+  ///
+  /// One query for a whole page. Walking source row, assignment, order and
+  /// employee per item costs up to four round trips to the SQLite thread each,
+  /// and the feed re-emits on every queue write.
+  ///
+  /// An item whose source row is gone, or whose entity type is unknown, has no
+  /// entry, as [getSyncSourceRow] returns null for it.
+  Future<Map<String, Map<String, dynamic>>> getSyncItemDetailRows(
+    Iterable<String> queueIds,
+  ) async {
+    final ids = queueIds.where((id) => id.isNotEmpty).toSet().toList();
+    if (ids.isEmpty) return const {};
+    final db = await _database;
+    final result = <String, Map<String, dynamic>>{};
+    // Stays well under SQLite's bound-variable limit on any Android build.
+    const chunkSize = 400;
+    for (var start = 0; start < ids.length; start += chunkSize) {
+      final end = start + chunkSize > ids.length
+          ? ids.length
+          : start + chunkSize;
+      final chunk = ids.sublist(start, end);
+      final rows = await db.rawQuery('''
+        SELECT q.id AS queue_id,
+               q.entity_type AS entity_type,
+               CASE WHEN q.entity_type = 'ASSIGNMENT'
+                    THEN a.assigned_quantity
+                    ELSE COALESCE(production.quantity, recall.quantity)
+               END AS quantity,
+               -- A record with no frozen unit falls back to the order's, not
+               -- to its assignment's.
+               COALESCE(
+                 CASE WHEN q.entity_type = 'ASSIGNMENT'
+                      THEN a.unit_of_measure
+                      ELSE COALESCE(
+                        production.unit_of_measure,
+                        recall.unit_of_measure
+                      )
+                 END,
+                 o.uom
+               ) AS unit_of_measure,
+               COALESCE(
+                 production.business_date,
+                 recall.business_date,
+                 a.business_date
+               ) AS business_date,
+               COALESCE(production.shift_id, recall.shift_id, a.shift_id)
+                 AS shift_id,
+               CASE WHEN q.entity_type = 'ASSIGNMENT'
+                    THEN a.occurred_at_utc
+                    ELSE COALESCE(
+                      production.occurred_at_utc,
+                      recall.occurred_at_utc
+                    )
+               END AS occurred_at_utc,
+               a.nhan_vien_id AS worker_id,
+               a.to_id AS work_id,
+               e.ma_nv AS worker_code,
+               e.ten AS worker_name,
+               COALESCE(o.production_order, o.ma_don_hang) AS production_order,
+               o.operation AS operation,
+               o.ten_sp AS product_name,
+               o.ma_sp AS product_code
+        FROM sync_queue q
+        LEFT JOIN production_records production
+          ON q.entity_type IN ('PRODUCTION', 'PRODUCTION_RECORD')
+         AND production.id = q.entity_id
+        LEFT JOIN recall_records recall
+          ON q.entity_type IN ('RECALL', 'RECALL_RECORD')
+         AND recall.id = q.entity_id
+        LEFT JOIN assignments a
+          ON a.id = CASE WHEN q.entity_type = 'ASSIGNMENT'
+                         THEN q.entity_id
+                         ELSE COALESCE(
+                           production.phan_cong_id,
+                           recall.phan_cong_id
+                         )
+                    END
+        LEFT JOIN orders o ON o.id = a.don_hang_id
+        LEFT JOIN employees e
+          ON TRIM(a.nhan_vien_id) != ''
+         AND e.id = TRIM(a.nhan_vien_id)
+        WHERE q.id IN (${List.filled(chunk.length, '?').join(', ')})
+          AND CASE WHEN q.entity_type = 'ASSIGNMENT'
+                   THEN a.id
+                   ELSE COALESCE(production.id, recall.id)
+              END IS NOT NULL
+        ''', chunk);
+      for (final row in rows) {
+        result[row['queue_id'] as String] = Map<String, dynamic>.from(row);
+      }
+    }
+    return result;
+  }
+
   Future<bool> isSyncQueueItemInScope(
     String id, {
     required String actorId,
@@ -3171,7 +3387,8 @@ class CaslaDatabase {
       if (queueRows.isEmpty) return;
 
       final queueItem = queueRows.single;
-      final queueStatus = queueItem['status']?.toString();
+      // A row inserted without a status is pending work.
+      final queueStatus = queueItem['status']?.toString() ?? 'PENDING';
       final errorCode = queueItem['last_error_code']?.toString();
       if (queueStatus != 'FAILED' &&
           queueStatus != 'NEEDS_VERIFICATION' &&
@@ -3521,16 +3738,32 @@ class CaslaDatabase {
   }
 
   /// [_ticks] over several tables: one tick now, then one per write to any.
+  ///
+  /// A write notifies its tables back to back, so their ticks are delivered in
+  /// consecutive microtasks. The first one schedules the outgoing tick behind
+  /// the rest, and the watcher re-runs its query once for that write rather
+  /// than once per table.
   Stream<void> _ticksAny(List<StreamController<void>> controllers) {
     final subscriptions = <StreamSubscription<void>>[];
     // Single-subscription and owned by its listener; cancelling ends it.
     // ignore: close_sinks
     late final StreamController<void> ticks;
+    var tickScheduled = false;
+    void tick(void _) {
+      if (tickScheduled) return;
+      tickScheduled = true;
+      scheduleMicrotask(() {
+        tickScheduled = false;
+        // Cancelled while the tick was pending: nobody is left to re-query.
+        if (ticks.hasListener) ticks.add(null);
+      });
+    }
+
     ticks = StreamController<void>(
       onListen: () {
         ticks.add(null);
         for (final controller in controllers) {
-          subscriptions.add(controller.stream.listen(ticks.add));
+          subscriptions.add(controller.stream.listen(tick));
         }
       },
       onCancel: () async {

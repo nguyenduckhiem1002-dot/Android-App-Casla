@@ -22,8 +22,8 @@ abstract class AssignmentRepository {
   /// sync screen.
   ///
   /// [positionId] is where the worker operates for this assignment, possibly
-  /// a temporary seat; it travels to SAP as PositionID. [machineId] is only
-  /// kept locally for display.
+  /// a temporary seat; it travels to SAP as PositionID, and [machineId] as
+  /// MachineID beside it.
   Future<MutationReceipt> createAssignment({
     required String workerId,
     required String orderId,
@@ -90,6 +90,19 @@ abstract class RecallRepository {
     required String shiftId,
     required String createdBy,
     String? workerPassword,
+
+    /// Recall with no worker password at all, for an account holding
+    /// `PP_RECALL_NOPASS`: the worker is away and what is left goes to someone
+    /// else. Frozen on the stored record, so a later retry sends the same
+    /// password-less command; [workerPassword] is ignored.
+    bool withoutWorkerPassword = false,
+
+    /// The pile's balance the form validated the recall against when it
+    /// showed the seat's (or group's) figure rather than this allocation's
+    /// own. SAP recalls against the worker's summed balance on the operation
+    /// (decided 2026-10-24), so this allocation's own ceiling must not refuse
+    /// what SAP will accept. Null keeps the allocation's own ceiling.
+    double? seatCeiling,
   });
 
   Future<double> getRecalledQuantity(String assignmentId);

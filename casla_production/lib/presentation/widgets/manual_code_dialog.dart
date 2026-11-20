@@ -2,22 +2,34 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../app/theme/casla_spacing.dart';
+import 'casla_dialog_header.dart';
 import '../../data/sap/sap_position_gateway.dart';
 
 /// Asks for a code typed by hand when a label cannot be scanned.
 ///
-/// Returns the trimmed text, or null when cancelled.
+/// With [codeMaxLength] the field only accepts what a SAP position or machine
+/// code may contain, up to that length. Returns the trimmed text, or null
+/// when cancelled.
 Future<String?> showManualCodeDialog(
   BuildContext context, {
   required String title,
   required String label,
   required String helperText,
+  int? codeMaxLength,
 }) async {
   final values = await showDialog<List<String>>(
     context: context,
     builder: (_) => _ManualCodeDialog(
       title: title,
-      fields: [_ManualField(label: label, helperText: helperText)],
+      fields: [
+        codeMaxLength == null
+            ? _ManualField(label: label, helperText: helperText)
+            : _ManualField.code(
+                label: label,
+                helperText: helperText,
+                maxLength: codeMaxLength,
+              ),
+      ],
     ),
   );
   return values?.single;
@@ -120,7 +132,9 @@ class _ManualCodeDialogState extends State<_ManualCodeDialog> {
   Widget build(BuildContext context) {
     final last = widget.fields.length - 1;
     return AlertDialog(
-      title: Text(widget.title),
+      titlePadding: CaslaDialog.titlePadding,
+      contentPadding: CaslaDialog.contentPadding,
+      title: CaslaDialogHeader(child: Text(widget.title)),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -149,12 +163,14 @@ class _ManualCodeDialogState extends State<_ManualCodeDialog> {
       ),
       actions: [
         TextButton(
+          style: CaslaDialog.actionStyle,
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Hủy'),
         ),
         ListenableBuilder(
           listenable: Listenable.merge(_controllers),
           builder: (context, _) => TextButton(
+            style: CaslaDialog.actionStyle,
             onPressed: _isComplete ? _submit : null,
             child: const Text('Xác nhận'),
           ),

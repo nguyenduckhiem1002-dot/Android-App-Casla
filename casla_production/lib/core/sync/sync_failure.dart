@@ -13,6 +13,8 @@ import 'package:dio/dio.dart';
 
 import '../../data/sap/odata_error.dart';
 import '../../data/sap/sap_odata_client.dart';
+import '../utils/quantity_formatter.dart';
+import '../auth/session_refresh.dart';
 
 /// What the sync engine should do about a failed push.
 enum SyncFailureKind {
@@ -114,6 +116,23 @@ SyncFailure classifySyncError(Object error) {
   }
 
   if (error is SapBusinessError) return _classifySapBusinessError(error);
+
+  // The request itself was fine; renewing the session for the retry was not
+  // possible because SAP could not be reached. Keep the record and try later.
+  if (error is SessionRefreshUnavailableException) {
+    return SyncFailure(
+      kind: SyncFailureKind.transient,
+      code: 'AUTH_REFRESH_UNAVAILABLE',
+      message: error.message,
+    );
+  }
+  if (error is SessionRefreshRejectedException) {
+    return SyncFailure(
+      kind: SyncFailureKind.auth,
+      code: error.code,
+      message: error.message,
+    );
+  }
 
   if (error is SapConfigurationException) {
     return SyncFailure(
@@ -284,6 +303,7 @@ const Set<String> _sapRetryableBusinessCodes = {
   'OPERATION_MASTER_AMBIGUOUS',
   'OPERATION_QUANTITY_EXCEEDED',
   'CONFIRM_QUANTITY_EXCEEDED',
+  'RECALL_QUANTITY_EXCEEDED',
   'SOURCE_BALANCE_INSUFFICIENT',
   'WORKER_BALANCE_NOT_FOUND',
   'REVERSE_BALANCE_INCONSISTENT',
@@ -302,9 +322,16 @@ const Set<String> _codeFirstBusinessCodes = {
   'PASSWORD_CHANGE_REQUIRED',
   'USER_INACTIVE',
   'WORKER_AUTH_FAILED',
+  'WORKER_NO_ACCOUNT',
+  'WORKER_IS_INACTIVE',
   'MANAGER_OPERATION_NOT_ALLOWED',
   'WORKER_OPERATION_NOT_ALLOWED',
+  'MANAGER_WORKER_NOT_ALLOWED',
+  'WORKER_NOT_IN_WORK_CENTER',
   'WORKER_ASSIGNMENT_EXPIRED',
+  'POSITION_GROUP_MISMATCH',
+  'NO_REMAINING_QUANTITY',
+  'RECALL_QUANTITY_EXCEEDED',
   'WORK_NOT_FOUND',
   'MISSING_PERMISSION',
   'WORK_CONTEXT_MISMATCH',
@@ -342,6 +369,7 @@ const Set<String> _codeFirstBusinessCodes = {
   'CONFIRM_ORIGINAL_CONTEXT_MISMATCH',
   'ASSIGNMENT_GROUP_INVALID',
   'RECALL_NOT_ALLOWED',
+  'RECALL_NOPASS_NOT_ALLOWED',
   'RECALL_ORIGINAL_CONTEXT_MISMATCH',
   // getWorkHistory (zcl_pp_work_history).
   'OPERATION_FILTER_INCOMPLETE',
@@ -381,6 +409,7 @@ const Set<String> liveDeliveryHoldCodes = {
   'ERR_CONFIG',
   'HTTP_502',
   'HTTP_503',
+  'AUTH_REFRESH_UNAVAILABLE',
   // SAP may have committed; the receipt must be reconciled, never dropped.
   'SYNC_RECEIPT_NOT_FOUND',
   'SYNC_RECEIPT_DUPLICATE',
@@ -415,6 +444,9 @@ const Map<String, String> _sapBusinessMessages = {
       'Token không thuộc thiết bị này. Vui lòng đăng nhập lại trên thiết bị này.',
   'MISSING_PERMISSION': 'Tài khoản không có quyền thực hiện chức năng này.',
   'WORKER_AUTH_FAILED': 'Mật khẩu xác nhận của công nhân không đúng.',
+  // Administrative data problems, not a wrong password: no re-entry helps.
+  'WORKER_NO_ACCOUNT': 'Công nhân chưa có tài khoản.',
+  'WORKER_IS_INACTIVE': 'Tài khoản công nhân đã vô hiệu hóa.',
   'AUTH_FAILED': 'Không thể xác thực yêu cầu. Vui lòng đăng nhập lại.',
   'EMPTY_TOKEN': 'Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại.',
   'TOKEN_INVALID_OR_EXPIRED':
@@ -424,7 +456,14 @@ const Map<String, String> _sapBusinessMessages = {
   'MANAGER_OPERATION_NOT_ALLOWED':
       'Quản lý không có quyền với công đoạn trong phiên làm việc này.',
   'WORKER_OPERATION_NOT_ALLOWED':
-      'Công nhân không có quyền với bộ phận của công đoạn.',
+      'Công nhân không có quyền với tổ của công đoạn.',
+  // The role granting the supervisor this function and the worker's role
+  // share no department (bo_phan); the operation and WorkID are not checked.
+  'MANAGER_WORKER_NOT_ALLOWED':
+      'Bạn không có quyền thao tác với công nhân này.',
+  // The worker has no row at all in the operation's Work Center, regardless
+  // of validity dates; distinct from an expired assignment.
+  'WORKER_NOT_IN_WORK_CENTER': 'Công nhân không thuộc WorkCenter này.',
   'WORKER_ASSIGNMENT_EXPIRED':
       'Phân công của công nhân đã hết hiệu lực trong ngày làm việc.',
   'WORK_NOT_FOUND': 'Không tìm thấy phiên làm việc. Vui lòng chọn lại.',
@@ -436,21 +475,26 @@ const Map<String, String> _sapBusinessMessages = {
   // the one its assignment group already uses. The form checks this before
   // sending; SAP has to refuse it too for other devices and queued writes.
   'POSITION_GROUP_MISMATCH':
-      'Tồn tại phân công của lệnh, công đoạn tại vị trí khác.',
+      'Công nhân còn dư ở vị trí khác của lệnh, công đoạn này. Xác nhận hoặc '
+      'thu hồi hết ở vị trí cũ trước khi giao vị trí mới.',
+  // submitConfirm: the worker's balance on the operation is 0 or below (an
+  // earlier confirmation used it all up); SAP takes a confirmation only
+  // while something is left.
+  'NO_REMAINING_QUANTITY': 'Không còn số lượng để xác nhận',
   'WORK_OPERATION_MISMATCH':
       'Vị trí làm việc không khớp với công đoạn. Vui lòng chọn lại.',
   'OPERATION_DEPARTMENT_MISMATCH':
-      'Bộ phận của công đoạn không khớp cấu hình vị trí làm việc.',
+      'Tổ của công đoạn không khớp cấu hình vị trí làm việc.',
   'WORK_CONTEXT_NOT_ALLOWED':
       'Công đoạn được giao không thuộc phiên làm việc được chọn.',
   'WORKER_NOT_ALLOWED':
       'Công đoạn được giao không thuộc phiên làm việc được chọn.',
   'WORK_CONTEXT_MISMATCH':
       'Công đoạn được giao không thuộc phiên làm việc được chọn.',
-  'WORK_CONTEXT_REQUIRED': 'Chưa chọn bộ phận làm việc cho thao tác này.',
+  'WORK_CONTEXT_REQUIRED': 'Chưa chọn tổ làm việc cho thao tác này.',
   'INVALID_PARAMETER': 'Thông tin công đoạn hoặc ca làm việc không hợp lệ.',
-  'OPERATION_NOT_ALLOWED': 'Công đoạn không thuộc bộ phận hoặc ca đang chọn.',
-  'OPERATION_ACCESS_DENIED': 'Công đoạn không thuộc bộ phận hoặc ca đang chọn.',
+  'OPERATION_NOT_ALLOWED': 'Công đoạn không thuộc tổ hoặc ca đang chọn.',
+  'OPERATION_ACCESS_DENIED': 'Công đoạn không thuộc tổ hoặc ca đang chọn.',
   'UNIT_OF_MEASURE_MISMATCH':
       'Đơn vị số lượng không khớp với đơn vị của công đoạn trên SAP.',
   'SYNC_ITEM_REQUIRED': 'Thiếu mã đồng bộ trong yêu cầu (lỗi ứng dụng).',
@@ -502,8 +546,8 @@ const Map<String, String> _sapBusinessMessages = {
       'Giờ trên máy đang nhanh hơn giờ SAP. Giao dịch sẽ tự gửi lại sau ít '
       'phút.',
   'ALLOCATION_SCOPE_MISMATCH':
-      'Lần giao gốc thuộc bộ phận, ca hoặc ngày làm việc khác với giao dịch '
-      'này. Hãy chọn đúng ca và bộ phận của lần giao rồi thử lại.',
+      'Lần giao gốc thuộc tổ, ca hoặc ngày làm việc khác với giao dịch '
+      'này. Hãy chọn đúng ca và tổ của lần giao rồi thử lại.',
   'OPERATION_QUANTITY_EXCEEDED':
       'Tổng giao vượt sản lượng công đoạn. Vui lòng cập nhật số dư.',
   'CONFIRM_QUANTITY_EXCEEDED':
@@ -521,13 +565,25 @@ const Map<String, String> _sapBusinessMessages = {
       'Xác nhận vượt số lượng còn lại của nhóm giao (gồm tồn từ ngày trước và '
       'phần giao bổ sung). Vui lòng tải lại số còn lại.',
   'CONFIRM_ORIGINAL_CONTEXT_MISMATCH':
-      'Bộ phận hoặc ca đang chọn khác với nhóm giao gốc. Hãy chọn đúng ca và '
-      'bộ phận của lần giao.',
+      'Tổ hoặc ca đang chọn khác với nhóm giao gốc. Hãy chọn đúng ca và '
+      'tổ của lần giao.',
   'ASSIGNMENT_GROUP_INVALID':
       'Nhóm giao trong ngày có liên kết giao dịch gốc không hợp lệ. Dừng giao '
       'bổ sung và báo quản trị kiểm tra dữ liệu.',
   'RECALL_NOT_ALLOWED':
-      'Không thể thu hồi theo giao dịch gốc này hoặc số dư công nhân không đủ.',
+      'Không thể thu hồi theo giao dịch gốc này hoặc công nhân chưa có số dư '
+      'trên công đoạn.',
+  // submitRecall with an empty WorkerPassword from an account that does not
+  // (or no longer) hold PP_RECALL_NOPASS. Retrying cannot help: the recall
+  // has to be entered again with the worker's password.
+  'RECALL_NOPASS_NOT_ALLOWED':
+      'Tài khoản không có quyền thu hồi không cần mật khẩu công nhân.',
+  // submitRecall: more than the worker's summed balance on the operation,
+  // SAP's recall cap since 2026-10-24. The backend appends that cap after the
+  // colon (`RECALL_QUANTITY_EXCEEDED: 200.000 CHC`); _sapDetailMessage shows
+  // it, this text is the fallback without one.
+  'RECALL_QUANTITY_EXCEEDED':
+      'Không được thu hồi vượt mức tối đa có thể thu hồi.',
   'OPERATION_FILTER_INCOMPLETE': 'Bộ lọc cần cả lệnh sản xuất và mã công đoạn.',
   'RANGE_INVALID': 'Khoảng ngày xem lịch sử không hợp lệ.',
   'RANGE_IN_FUTURE':
@@ -539,8 +595,8 @@ const Map<String, String> _sapBusinessMessages = {
   'WORKER_NOT_MAPPED':
       'Tài khoản chưa được gắn mã công nhân trên SAP. Liên hệ quản trị.',
   'RECALL_ORIGINAL_CONTEXT_MISMATCH':
-      'Bộ phận hoặc ca đang chọn khác với nhóm giao gốc. Hãy chọn đúng ca và '
-      'bộ phận của lần giao rồi thu hồi.',
+      'Tổ hoặc ca đang chọn khác với nhóm giao gốc. Hãy chọn đúng ca và '
+      'tổ của lần giao rồi thu hồi.',
   'RECALL_ORIGINAL_QUANTITY_EXCEEDED':
       'Thu hồi vượt số lượng còn lại của nhóm giao. Vui lòng tải lại số còn lại.',
   'SYNC_RECEIPT_DUPLICATE':
@@ -558,9 +614,40 @@ const Map<String, String> _sapBusinessMessages = {
   'ORIGINAL_TRANSACTION_WORKER_MISMATCH': 'Giao dịch gốc thuộc công nhân khác.',
 };
 
+/// Messages whose backend text carries a figure for the user after the code
+/// (`RECALL_QUANTITY_EXCEEDED: 200.000 CHC`), formatted here rather than
+/// echoing SAP's raw number. Null when the code has no such detail.
+String? _sapDetailMessage(SapBusinessError error) {
+  final detail = error.message?.trim();
+  if (detail == null || detail.isEmpty) return null;
+  switch (error.code) {
+    case 'RECALL_QUANTITY_EXCEEDED':
+      final limit = _quantityDetail(detail);
+      if (limit == null) return null;
+      return 'Không được thu hồi vượt mức. Tối đa thu hồi được $limit.';
+    default:
+      return null;
+  }
+}
+
+/// `200.000 CHC` (SAP's raw number, dot decimal, optional unit) → `200 CHC`.
+String? _quantityDetail(String detail) {
+  final match = RegExp(
+    r'^(-?\d+(?:\.\d+)?)\s*([A-Za-z0-9]{1,3})?$',
+  ).firstMatch(detail);
+  if (match == null) return null;
+  final value = double.tryParse(match[1]!);
+  if (value == null) return null;
+  final uom = match[2]?.toUpperCase();
+  final figure = formatQuantity(value, uom: uom);
+  return uom == null ? figure : '$figure $uom';
+}
+
 /// Converts known SAP business codes and local exceptions into safe UI text.
 /// Raw OData payloads, tokens and password values are never shown to users.
 String _sapBusinessMessage(SapBusinessError error) {
+  final detailed = _sapDetailMessage(error);
+  if (detailed != null) return detailed;
   final mapped = _sapBusinessMessages[error.code];
   final nestedCode = error.message?.trim();
   final nestedMapped = nestedCode == null

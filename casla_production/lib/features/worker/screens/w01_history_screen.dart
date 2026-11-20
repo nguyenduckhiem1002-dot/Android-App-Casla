@@ -10,15 +10,51 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../../app/theme/casla_colors.dart';
+import '../../../core/config/app_config.dart';
 import '../../../core/sync/sync_failure.dart';
 import '../../../core/utils/quantity_formatter.dart';
 import '../../../data/sap/sap_shift_controller.dart';
+import '../../../domain/entities/entities.dart';
 import '../../../domain/entities/work_history.dart';
+import '../../../domain/policies/history_totals.dart';
+import '../../../domain/policies/history_work_context.dart';
+import '../../../domain/policies/history_worker_filter.dart';
 import '../../../main.dart';
+import '../../../presentation/widgets/barcode_scan_listener.dart';
 import '../../../presentation/widgets/casla_skeleton.dart';
+import '../../../presentation/widgets/history_department_sheet.dart';
+import '../../../presentation/widgets/worker_search_field.dart';
+import '../../../presentation/widgets/worker_totals_header.dart';
 
 class W01HistoryScreen extends ConsumerStatefulWidget {
-  const W01HistoryScreen({super.key});
+  /// Opens on one worker's history, pushed from the team overview or the
+  /// search tab: the search box starts on [workerCode], the period on
+  /// [initialRange], and the app bar gets a back button.
+  final String? workerCode;
+  final String? workerName;
+  final HistoryRange? initialRange;
+
+  /// Opens on one operation's history instead, every worker who took it:
+  /// SAP is asked for this production order and operation alone.
+  final String? productionOrder;
+  final String? operation;
+  final String? operationName;
+
+  const W01HistoryScreen({
+    super.key,
+    this.workerCode,
+    this.workerName,
+    this.initialRange,
+    this.productionOrder,
+    this.operation,
+    this.operationName,
+  });
+
+  bool get _byOperation =>
+      (productionOrder ?? '').trim().isNotEmpty &&
+      (operation ?? '').trim().isNotEmpty;
+
+  bool get _standalone => (workerCode ?? '').trim().isNotEmpty || _byOperation;
 
   @override
   ConsumerState<W01HistoryScreen> createState() => _W01HistoryScreenState();
@@ -34,9 +70,14 @@ class _WorkerHistoryGroupData {
   String productCode;
   String salesOrder;
   String salesOrderItem;
+
+  /// `Tên · mã` of the worker the group belongs to; empty when the view
+  /// holds one worker only and so groups by operation alone.
+  String workerLabel;
   final List<WorkHistoryEntry> entries = [];
 
   _WorkerHistoryGroupData({
+    this.workerLabel = '',
     required this.key,
     required this.date,
     required this.productionOrder,
@@ -65,10 +106,51 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
   bool _historyDataReady = false;
   WorkHistoryResult? _lastHistoryResult;
 
+  /// Work context (WorkID) the history is asked for; null for every
+  /// authorized one, which is where it starts so the department list
+  /// holds every department SAP lets this account see.
+  String? _selectedWorkId;
+  String _selectedWorkLabel = 'Tất cả tổ';
+
+  /// Department the shown history is narrowed to on the device; null for
+  /// all. A department seen only in the history (not one of the session's
+  /// contexts) is narrowed here without asking SAP again.
+  String? _localWorkId;
+
+  /// Every department seen in a report this screen has shown, by WorkID
+  /// (upper-cased). Hôm nay / Tuần này often hold one department or none, so
+  /// the list must not shrink to what the current period holds: the filter
+  /// would vanish while still narrowing the rows.
+  final Map<String, HistoryDepartmentOption> _knownDepartments = {};
+
+  /// Narrows a team history to matching workers, by code or name.
+  final _workerSearchController = TextEditingController();
+  String _workerQuery = '';
+
+  @override
+  void dispose() {
+    _workerSearchController.dispose();
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
     _syncActiveContext();
+    final range = widget.initialRange;
+    if (range != null && range != HistoryRange.custom) _range = range;
+    if (widget._byOperation) {
+      _localWorkId = null;
+      _selectedWorkLabel = 'Tất cả tổ';
+    }
+    final code = widget.workerCode?.trim() ?? '';
+    if (code.isNotEmpty) {
+      // One worker, across every department they worked in.
+      _workerSearchController.text = code;
+      _workerQuery = code;
+      _localWorkId = null;
+      _selectedWorkLabel = 'Tất cả tổ';
+    }
     _replaceHistoryStream();
   }
 
@@ -80,6 +162,18 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
         '${state.activeShift?.shiftId ?? ''}|${state.activeWorkContext?.workId ?? ''}';
     if (key == _activeContextKey) return false;
     _activeContextKey = key;
+    // Departments remembered under another shift may be of another work
+    // center.
+    _knownDepartments.clear();
+    final active = state.activeWorkContext;
+    final activeWorkId = active?.workId.trim() ?? '';
+    // Ask SAP for the whole authorized scope; show the active department
+    // first by narrowing on the device.
+    _selectedWorkId = null;
+    _localWorkId = activeWorkId.isEmpty ? null : activeWorkId;
+    _selectedWorkLabel = active == null || activeWorkId.isEmpty
+        ? 'Tất cả tổ'
+        : _workContextLabel(active);
     if (state.activeShift != null) {
       _range = HistoryRange.custom;
       _customDateFrom = DateTime(date.year, date.month, date.day);
@@ -118,7 +212,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
   }
 
   Stream<WorkHistoryResult> _watchHistory() {
-    final workId = ref.read(appStateProvider).activeWorkContext?.workId;
+    final workId = _selectedWorkId;
     return ref
         .read(appStateProvider)
         .workHistoryRepo
@@ -128,11 +222,15 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
           dateTo: _filterTo,
           shiftId: _historyShiftId,
           workId: workId,
+          productionOrder: widget._byOperation
+              ? widget.productionOrder!.trim()
+              : null,
+          operation: widget._byOperation ? widget.operation!.trim() : null,
         );
   }
 
   Future<WorkHistoryResult> _load({bool forceRefresh = false}) {
-    final workId = ref.read(appStateProvider).activeWorkContext?.workId;
+    final workId = _selectedWorkId;
     return ref
         .read(appStateProvider)
         .workHistoryRepo
@@ -142,6 +240,10 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
           dateTo: _filterTo,
           shiftId: _historyShiftId,
           workId: workId,
+          productionOrder: widget._byOperation
+              ? widget.productionOrder!.trim()
+              : null,
+          operation: widget._byOperation ? widget.operation!.trim() : null,
           forceRefresh: forceRefresh,
         );
   }
@@ -580,7 +682,7 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
       appBar: AppBar(
         backgroundColor: CaslaColors.primaryNavy,
         foregroundColor: Colors.white,
-        automaticallyImplyLeading: false,
+        automaticallyImplyLeading: widget._standalone,
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -594,7 +696,20 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
             ),
             const SizedBox(height: 2),
             Text(
-              session?.fullName ?? '',
+              widget._byOperation
+                  ? [
+                      'LSX ${widget.productionOrder!.trim()}',
+                      'CĐ ${widget.operation!.trim()}',
+                      if ((widget.operationName ?? '').trim().isNotEmpty)
+                        widget.operationName!.trim(),
+                    ].join(' · ')
+                  : widget._standalone
+                  ? [
+                      if ((widget.workerName ?? '').trim().isNotEmpty)
+                        widget.workerName!.trim(),
+                      widget.workerCode!.trim(),
+                    ].join(' · ')
+                  : session?.fullName ?? '',
               style: const TextStyle(
                 fontFamily: 'Inter',
                 fontSize: 12.5,
@@ -605,55 +720,59 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
           ],
         ),
       ),
-      body: RefreshIndicator(
-        onRefresh: _refresh,
-        child: StreamBuilder<WorkHistoryResult>(
-          stream: _historyStream,
-          builder: (context, snapshot) {
-            // StreamBuilder drops the previous `data` when a later refresh
-            // emits an error. Keep the last successful result so a temporary
-            // SAP/network failure does not replace usable cached content with
-            // a full-screen error.
-            if (snapshot.hasData &&
-                snapshot.connectionState != ConnectionState.waiting) {
-              _lastHistoryResult = snapshot.data;
-              _historyDataReady = true;
-            }
-            final result = _historyDataReady
-                ? snapshot.data ?? _lastHistoryResult
-                : null;
+      body: BarcodeScanListener(
+        // The PDA trigger finds a worker by their card, like the QR button.
+        onScan: _applyScannedWorker,
+        child: RefreshIndicator(
+          onRefresh: _refresh,
+          child: StreamBuilder<WorkHistoryResult>(
+            stream: _historyStream,
+            builder: (context, snapshot) {
+              // StreamBuilder drops the previous `data` when a later refresh
+              // emits an error. Keep the last successful result so a temporary
+              // SAP/network failure does not replace usable cached content with
+              // a full-screen error.
+              if (snapshot.hasData &&
+                  snapshot.connectionState != ConnectionState.waiting) {
+                _lastHistoryResult = snapshot.data;
+                _historyDataReady = true;
+              }
+              final result = _historyDataReady
+                  ? snapshot.data ?? _lastHistoryResult
+                  : null;
 
-            return CustomScrollView(
-              key: PageStorageKey<String>('worker-history-${_range.code}'),
-              physics: const AlwaysScrollableScrollPhysics(),
-              slivers: [
-                _boxSliver(
-                  _buildRangeTabs(),
-                  padding: const EdgeInsets.fromLTRB(18, 18, 18, 0),
-                ),
-                const SliverToBoxAdapter(child: SizedBox(height: 14)),
-                if (snapshot.connectionState == ConnectionState.waiting &&
-                    result == null)
+              return CustomScrollView(
+                key: PageStorageKey<String>('worker-history-${_range.code}'),
+                physics: const AlwaysScrollableScrollPhysics(),
+                slivers: [
                   _boxSliver(
-                    const _HistorySkeleton(),
-                    padding: const EdgeInsets.symmetric(horizontal: 18),
-                  )
-                else if (result != null) ...[
-                  if (snapshot.hasError)
+                    _buildRangeTabs(),
+                    padding: const EdgeInsets.fromLTRB(18, 18, 18, 0),
+                  ),
+                  const SliverToBoxAdapter(child: SizedBox(height: 14)),
+                  if (snapshot.connectionState == ConnectionState.waiting &&
+                      result == null)
                     _boxSliver(
-                      _buildCachedRefreshWarning(),
+                      const _HistorySkeleton(),
+                      padding: const EdgeInsets.symmetric(horizontal: 18),
+                    )
+                  else if (result != null) ...[
+                    if (snapshot.hasError)
+                      _boxSliver(
+                        _buildCachedRefreshWarning(),
+                        padding: const EdgeInsets.symmetric(horizontal: 18),
+                      ),
+                    ..._buildContentSlivers(result),
+                  ] else if (snapshot.hasError)
+                    _boxSliver(
+                      _buildError(snapshot.error!),
                       padding: const EdgeInsets.symmetric(horizontal: 18),
                     ),
-                  ..._buildContentSlivers(result),
-                ] else if (snapshot.hasError)
-                  _boxSliver(
-                    _buildError(snapshot.error!),
-                    padding: const EdgeInsets.symmetric(horizontal: 18),
-                  ),
-                const SliverToBoxAdapter(child: SizedBox(height: 18)),
-              ],
-            );
-          },
+                  const SliverToBoxAdapter(child: SizedBox(height: 18)),
+                ],
+              );
+            },
+          ),
         ),
       ),
     );
@@ -744,31 +863,92 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
             ),
           ),
         ],
-        const SizedBox(height: 10),
-        SizedBox(
-          height: 44,
-          child: OutlinedButton.icon(
-            onPressed: _showHistoryShiftSheet,
-            icon: const Icon(Icons.schedule_outlined, size: 17),
-            label: Expanded(
-              child: Text(
+        if (AppConfig.showShiftLookup) ...[
+          const SizedBox(height: 10),
+          SizedBox(
+            height: 44,
+            child: OutlinedButton.icon(
+              onPressed: _showHistoryShiftSheet,
+              icon: const Icon(Icons.schedule_outlined, size: 17),
+              // The button already places its label in a Flexible; a second
+              // flex wrapper is a ParentDataWidget conflict in debug builds.
+              label: Text(
                 'Ca tra cứu: $_historyShiftLabel',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
-            ),
-            style: OutlinedButton.styleFrom(
-              alignment: Alignment.centerLeft,
-              foregroundColor: CaslaColors.primaryNavy,
-              side: const BorderSide(color: CaslaColors.line),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
+              style: OutlinedButton.styleFrom(
+                alignment: Alignment.centerLeft,
+                foregroundColor: CaslaColors.primaryNavy,
+                side: const BorderSide(color: CaslaColors.line),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 12),
               ),
-              padding: const EdgeInsets.symmetric(horizontal: 12),
             ),
           ),
-        ),
+        ],
       ],
+    );
+  }
+
+  List<UserWorkContext> get _workContexts =>
+      uniqueWorkContexts(ref.read(appStateProvider).currentSession);
+
+  static String _workContextLabel(UserWorkContext context) =>
+      workContextLabel(context);
+
+  bool _applyScannedWorker(String raw) {
+    final scan = classifyHistoryScan(raw);
+    if (scan == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Mã QR không phải thẻ công nhân hay QR công đoạn.'),
+        ),
+      );
+      return false;
+    }
+    if (scan is OperationHistoryScan) {
+      openOperationHistory(context, scan, range: _range);
+      return true;
+    }
+    final code = (scan as WorkerHistoryScan).code;
+    _workerSearchController.text = code;
+    setState(() {
+      _workerQuery = code;
+      _visibleEntryCount = _historyEntryPageSize;
+    });
+    return true;
+  }
+
+  void _selectDepartment(HistoryDepartmentOption? option) {
+    setState(() {
+      _localWorkId = option?.workId;
+      _selectedWorkLabel = option?.label ?? 'Tất cả tổ';
+      _visibleEntryCount = _historyEntryPageSize;
+      // The whole scope is asked of SAP and narrowed on the device. Only
+      // when SAP cut that report short is one of the session's own
+      // contexts asked for alone, so its rows come back complete.
+      final truncated = _lastHistoryResult?.isTruncated == true;
+      final requested = option != null && option.inSession && truncated
+          ? option.workId
+          : null;
+      if (requested != _selectedWorkId) {
+        _selectedWorkId = requested;
+        _replaceHistoryStream();
+      }
+    });
+  }
+
+  Widget _buildWorkerSearch() {
+    return WorkerSearchField(
+      controller: _workerSearchController,
+      onChanged: (value) => setState(() {
+        _workerQuery = value;
+        _visibleEntryCount = _historyEntryPageSize;
+      }),
+      onScanned: _applyScannedWorker,
     );
   }
 
@@ -917,17 +1097,71 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
     );
   }
 
-  List<Widget> _buildContentSlivers(WorkHistoryResult result) {
+  List<Widget> _buildContentSlivers(WorkHistoryResult reported) {
+    // A team history (PP_HIST_TEAM) holds many workers: offer the search
+    // box and group the cards per worker.
+    final teamView =
+        reported.scopeCode.trim().toUpperCase() == 'T' ||
+        historyWorkerCount(reported) > 1;
+    final contexts = _workContexts;
+    final departments = _rememberDepartments(
+      historyDepartmentOptions(
+        contexts: contexts,
+        result: reported,
+        // With a shift set up, only the departments of its work center.
+        within: historyFilterWorkIds(
+          reported,
+          contexts,
+          active: ref.read(appStateProvider).activeWorkContext,
+        ),
+      ),
+    );
+    // Shown on every period as soon as one department is known, and always
+    // while a department is chosen, so the choice can be changed or cleared.
+    final showDepartments =
+        teamView || departments.isNotEmpty || _localWorkId != null;
+    final inDepartment = filterHistoryByWorkId(reported, _localWorkId);
+    final result = teamView
+        ? filterHistoryByWorker(inDepartment, _workerQuery)
+        : inDepartment;
     final visibleCount = _visibleEntryCount < result.entries.length
         ? _visibleEntryCount
         : result.entries.length;
     final visibleEntryCount = visibleCount;
     final slivers = <Widget>[];
 
-    if (result.workers.isNotEmpty) {
+    if (showDepartments) {
       slivers.add(
         _boxSliver(
-          _buildSummary(result.workers),
+          HistoryDepartmentButton(
+            label: _selectedWorkLabel,
+            onPressed: () => showHistoryDepartmentSheet(
+              context,
+              options: departments,
+              selectedWorkId: _localWorkId,
+              onSelected: _selectDepartment,
+            ),
+          ),
+          padding: const EdgeInsets.fromLTRB(18, 0, 18, 10),
+        ),
+      );
+    }
+
+    if (teamView) {
+      slivers.add(
+        _boxSliver(
+          _buildWorkerSearch(),
+          padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
+        ),
+      );
+    }
+
+    if (result.workers.isNotEmpty) {
+      // The supervisor's header: given, recalled, completed, scrap and
+      // remaining, per unit, adding up to the given quantity.
+      slivers.add(
+        _boxSliver(
+          WorkerTotalsHeader(units: historyUnitTotals(result.workers)),
           padding: const EdgeInsets.symmetric(horizontal: 18),
         ),
       );
@@ -978,9 +1212,12 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
               border: Border.all(color: CaslaColors.line),
               borderRadius: BorderRadius.circular(14),
             ),
-            child: const Center(
+            child: Center(
               child: Text(
-                'Không có giao dịch nào trong khoảng thời gian này.',
+                (_workerQuery.trim().isNotEmpty || _localWorkId != null) &&
+                        reported.entries.isNotEmpty
+                    ? 'Không tìm thấy nhân viên phù hợp.'
+                    : 'Không có giao dịch nào trong khoảng thời gian này.',
                 style: TextStyle(color: CaslaColors.muted, fontSize: 13),
               ),
             ),
@@ -992,10 +1229,27 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
       final visibleEntries = result.entries
           .take(visibleEntryCount)
           .toList(growable: false);
-      final groups = _groupHistoryEntries(visibleEntries);
+      final groups = _groupHistoryEntries(
+        visibleEntries,
+        byWorker: teamView,
+        workers: result.workers,
+      );
+      // A card's figures count all of its rows, also those past the page.
+      final rowsByGroup = <String, List<WorkHistoryEntry>>{};
+      for (final entry in result.entries) {
+        rowsByGroup
+            .putIfAbsent(_groupKeyOf(entry, byWorker: teamView), () => [])
+            .add(entry);
+      }
+      final totalsByGroup = {
+        for (final group in groups)
+          group.key: historyGroupTotals(
+            rowsByGroup[group.key] ?? group.entries,
+          ),
+      };
       slivers.add(
         _boxSliver(
-          _buildHistoryGroups(groups),
+          _buildHistoryGroups(groups, totalsByGroup),
           padding: const EdgeInsets.symmetric(horizontal: 18),
         ),
       );
@@ -1032,8 +1286,22 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
   }
 
   List<_WorkerHistoryGroupData> _groupHistoryEntries(
-    List<WorkHistoryEntry> entries,
-  ) {
+    List<WorkHistoryEntry> entries, {
+    bool byWorker = false,
+    List<WorkHistorySummary> workers = const [],
+  }) {
+    final workerNames = <String, String>{
+      for (final worker in workers)
+        worker.workerId.trim().toUpperCase(): worker.workerName.trim(),
+    };
+    String workerLabelOf(WorkHistoryEntry entry) {
+      final code = entry.workerId.trim();
+      final name = entry.workerName.trim().isNotEmpty
+          ? entry.workerName.trim()
+          : workerNames[code.toUpperCase()] ?? '';
+      return name.isEmpty || name == code ? code : '$name · $code';
+    }
+
     final grouped = <String, _WorkerHistoryGroupData>{};
     for (final entry in entries) {
       // The shift's business day: night-shift work posted after midnight
@@ -1045,11 +1313,11 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
       final operation = entry.operation.trim().isEmpty
           ? 'Chưa có mã CĐ'
           : entry.operation.trim();
-      final key =
-          '${DateFormat('yyyy-MM-dd').format(date)}|$productionOrder|$operation';
+      final key = _groupKeyOf(entry, byWorker: byWorker);
       final group = grouped.putIfAbsent(
         key,
         () => _WorkerHistoryGroupData(
+          workerLabel: byWorker ? workerLabelOf(entry) : '',
           key: key,
           date: date,
           productionOrder: productionOrder,
@@ -1093,7 +1361,45 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
     return result;
   }
 
-  Widget _buildHistoryGroups(List<_WorkerHistoryGroupData> groups) {
+  /// The card a row belongs to: its business day, order and operation, and
+  /// in a team history its worker.
+  static String _groupKeyOf(WorkHistoryEntry entry, {required bool byWorker}) {
+    final productionOrder = entry.productionOrder.trim().isEmpty
+        ? 'Chưa có LSX'
+        : entry.productionOrder.trim();
+    final operation = entry.operation.trim().isEmpty
+        ? 'Chưa có mã CĐ'
+        : entry.operation.trim();
+    final workerKey = byWorker ? entry.workerId.trim().toUpperCase() : '';
+    return '${DateFormat('yyyy-MM-dd').format(entry.workDate)}'
+        '|$productionOrder|$operation|$workerKey';
+  }
+
+  /// [found] merged into the departments seen so far; a name learned once is
+  /// kept when a later report omits it.
+  List<HistoryDepartmentOption> _rememberDepartments(
+    List<HistoryDepartmentOption> found,
+  ) {
+    for (final option in found) {
+      final key = option.workId.trim().toUpperCase();
+      final known = _knownDepartments[key];
+      _knownDepartments[key] = known == null
+          ? option
+          : HistoryDepartmentOption(
+              workId: known.workId,
+              name: option.name.isNotEmpty ? option.name : known.name,
+              detail: known.inSession ? known.detail : option.detail,
+              inSession: known.inSession || option.inSession,
+            );
+    }
+    return _knownDepartments.values.toList()
+      ..sort((a, b) => a.label.compareTo(b.label));
+  }
+
+  Widget _buildHistoryGroups(
+    List<_WorkerHistoryGroupData> groups,
+    Map<String, HistoryGroupTotals> totalsByGroup,
+  ) {
     final children = <Widget>[];
     DateTime? lastDate;
     for (final group in groups) {
@@ -1131,6 +1437,13 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
                 splashColor: CaslaColors.navy100,
               ),
               child: ExpansionTile(
+                // Its own PageStorage slot. Without a key the tile reads
+                // its expanded flag from the slot of the list around it,
+                // which holds the scroll offset: a double cast to bool?
+                // after the list has been scrolled.
+                key: PageStorageKey<String>(
+                  'worker-history-group-${group.key}',
+                ),
                 initiallyExpanded: true,
                 tilePadding: const EdgeInsets.fromLTRB(14, 6, 10, 6),
                 childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
@@ -1139,7 +1452,10 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
                   color: CaslaColors.primaryNavy,
                   size: 20,
                 ),
-                title: _buildHistoryGroupSummary(group),
+                title: _buildHistoryGroupSummary(
+                  group,
+                  totalsByGroup[group.key],
+                ),
                 children: [
                   for (final entry in group.entries) _buildHistoryChild(entry),
                 ],
@@ -1152,12 +1468,40 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
     return Column(children: children);
   }
 
-  Widget _buildHistoryGroupSummary(_WorkerHistoryGroupData group) {
+  Widget _buildHistoryGroupSummary(
+    _WorkerHistoryGroupData group,
+    HistoryGroupTotals? totals,
+  ) {
     return Padding(
       padding: const EdgeInsets.only(top: 5, bottom: 4),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (group.workerLabel.isNotEmpty) ...[
+            Row(
+              children: [
+                const Icon(
+                  Icons.person_outline,
+                  size: 15,
+                  color: CaslaColors.muted,
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    group.workerLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w700,
+                      color: CaslaColors.navy900,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+          ],
           Text(
             group.operationName.isEmpty
                 ? 'Chưa có tên công đoạn'
@@ -1227,8 +1571,77 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
               ),
             ),
           ],
+          if (totals != null) ...[
+            const SizedBox(height: 10),
+            _buildGroupTotals(totals),
+          ],
         ],
       ),
+    );
+  }
+
+  /// The card's figures, the same badges as the supervisor's employee
+  /// detail: given (+ carried over) = completed + scrap + recalled + left.
+  Widget _buildGroupTotals(HistoryGroupTotals totals) {
+    final unit = totals.unit;
+    Widget badge(String label, double value, Color color, Color background) {
+      return Container(
+        key: ValueKey('history-group-total-$label'),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(
+          color: background,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: color.withValues(alpha: 0.22)),
+        ),
+        child: Text(
+          '$label ${formatQuantity(value, uom: unit)}'
+          '${unit.isEmpty ? '' : ' $unit'}',
+          style: TextStyle(
+            color: color,
+            fontSize: 10.5,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      );
+    }
+
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      children: [
+        badge(
+          'Giao',
+          totals.given,
+          CaslaColors.primaryNavy,
+          CaslaColors.navy100,
+        ),
+        if (totals.carriedOver != 0)
+          badge(
+            'Tồn chuyển',
+            totals.carriedOver,
+            CaslaColors.carryOver,
+            CaslaColors.carryOverBg,
+          ),
+        badge(
+          'Hoàn thành',
+          totals.completed,
+          CaslaColors.success,
+          CaslaColors.successBg,
+        ),
+        badge('Phế', totals.defect, CaslaColors.scrap, CaslaColors.scrapBg),
+        badge(
+          'Thu hồi',
+          totals.recalled,
+          CaslaColors.danger,
+          CaslaColors.dangerBg,
+        ),
+        badge(
+          'Còn lại',
+          totals.remaining,
+          CaslaColors.pending,
+          CaslaColors.pendingBg,
+        ),
+      ],
     );
   }
 
@@ -1289,7 +1702,10 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
           Expanded(
             child: Text(
               '${_transactionTypeLabel(entry.transactionType)}: '
-              '${isNegative ? '-' : ''}${formatQuantity(entry.quantity, uom: entry.unitOfMeasure)} ${entry.unitOfMeasure}',
+              '${isNegative ? '-' : ''}${formatQuantity(entry.quantity, uom: entry.unitOfMeasure)} ${entry.unitOfMeasure}'
+              // SAP keeps the scrap of a confirmation apart from its good
+              // quantity; both consumed the allocation.
+              '${entry.defectQuantity > 0 ? ' · Phế ${isNegative ? '-' : ''}${formatQuantity(entry.defectQuantity, uom: entry.unitOfMeasure)}' : ''}',
               style: TextStyle(
                 fontFamily: 'Manrope',
                 fontWeight: FontWeight.w700,
@@ -1373,68 +1789,6 @@ class _W01HistoryScreenState extends ConsumerState<W01HistoryScreen> {
       'FAILED' => 'SAP TỪ CHỐI',
       _ => status.isEmpty ? (isNegative ? 'THU HỒI' : 'HOÀN THÀNH') : status,
     };
-  }
-
-  Widget _buildSummary(List<WorkHistorySummary> summaries) {
-    final first = summaries.first;
-    final assigned = summaries.fold<double>(
-      0,
-      (total, summary) => total + summary.assignedQuantity,
-    );
-    final completed = summaries.fold<double>(
-      0,
-      (total, summary) => total + summary.completedQuantity,
-    );
-    final remaining = summaries.fold<double>(
-      0,
-      (total, summary) => total + summary.remainingQuantity,
-    );
-    final uom = first.unitOfMeasure;
-    return Row(
-      children: [
-        _summaryTile(
-          summaries.length == 1 ? 'Đã giao' : 'Tổng đã giao',
-          assigned,
-          uom,
-          CaslaColors.primaryNavy,
-        ),
-        const SizedBox(width: 8),
-        _summaryTile('Đã hoàn thành', completed, uom, CaslaColors.success),
-        const SizedBox(width: 8),
-        _summaryTile('Còn lại', remaining, uom, CaslaColors.pending),
-      ],
-    );
-  }
-
-  Widget _summaryTile(String label, double value, String uom, Color color) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
-        decoration: BoxDecoration(
-          color: CaslaColors.surface,
-          border: Border.all(color: CaslaColors.line),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Column(
-          children: [
-            Text(
-              formatQuantity(value, uom: uom),
-              style: TextStyle(
-                fontWeight: FontWeight.w800,
-                fontSize: 18,
-                color: color,
-              ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              '$label${uom.isNotEmpty ? ' ($uom)' : ''}',
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 10.5, color: CaslaColors.muted),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
   static String _transactionTypeLabel(String type) {

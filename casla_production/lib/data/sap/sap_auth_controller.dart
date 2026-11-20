@@ -14,6 +14,7 @@ import 'package:dio/dio.dart';
 
 import 'odata_error.dart';
 import 'sap_odata_client.dart';
+import '../../core/auth/session_refresh.dart';
 
 /// `com.sap.gateway.srvd_a2x.zui_mob_auth.v0001` — from the published EDMX.
 /// If the tenant republishes this service under a different binding, this
@@ -21,6 +22,10 @@ import 'sap_odata_client.dart';
 /// without fetching and parsing `$metadata`.
 const String _kNamespace = 'com.sap.gateway.srvd_a2x.zui_mob_auth.v0001';
 const String _kEntitySet = 'MobileAuthentication';
+
+/// `refresh` only: a temporary technical failure, not a refusal. Contract in
+/// the backend's `docs/MOBILE_ERROR_MAPPING.md`.
+const String _kRefreshUnavailableCode = 'AUTH_REFRESH_UNAVAILABLE';
 
 const Map<String, String> _authBusinessMessages = {
   'AUTH_FAILED': 'Không thể xác thực yêu cầu. Vui lòng đăng nhập lại.',
@@ -32,6 +37,8 @@ const Map<String, String> _authBusinessMessages = {
   'PASSWORD_CHANGE_REQUIRED': 'Tài khoản cần đổi mật khẩu trước khi tiếp tục.',
   'USER_INACTIVE': 'Tài khoản đã bị vô hiệu hoá trên SAP.',
   'WORKER_AUTH_FAILED': 'Mật khẩu xác nhận của công nhân không đúng.',
+  'WORKER_NO_ACCOUNT': 'Công nhân chưa có tài khoản.',
+  'WORKER_IS_INACTIVE': 'Tài khoản công nhân đã vô hiệu hóa.',
 };
 
 /// One `ZA_MOB_Permission` row from a login/refresh result.
@@ -102,13 +109,16 @@ class SapWorkContext {
 /// `ZA_MOB_LoginResult` — the body of a successful `login`/`refresh` call.
 ///
 /// `status` here is the *account* status the backend chose to reveal to an
-/// unauthenticated caller: `'F'` covers wrong password, inactive account, AND
-/// a lockout, deliberately collapsed into one outcome so a failed login
-/// cannot be used to enumerate which of those is true. `'A'`/`'P'` both mean
-/// the credentials were correct; `'P'` additionally requires a password change
-/// before anything else. HTTP-level failure (a thrown [DioException]) means
-/// something else entirely — a malformed request or a dead refresh token —
-/// not a wrong password.
+/// unauthenticated caller: `'F'` covers wrong password AND inactive account,
+/// deliberately collapsed into one outcome so a failed login cannot be used to
+/// enumerate which of those is true. `'L'` means the account is temporarily
+/// locked after too many consecutive failures (backend rule: 5 wrong passwords
+/// within 1 minute lock the account for 10 minutes) — a correct password is
+/// still refused until the lock expires, so the user must be told to wait
+/// rather than retype. `'A'`/`'P'` both mean the credentials were correct;
+/// `'P'` additionally requires a password change before anything else.
+/// HTTP-level failure (a thrown [DioException]) means something else entirely
+/// — a malformed request or a dead refresh token — not a wrong password.
 class SapLoginResult {
   final String userUuid;
   final String sessionId;
@@ -139,6 +149,11 @@ class SapLoginResult {
   });
 
   bool get isSuccess => status == 'A' || status == 'P';
+
+  /// Backend refused the login because the account is temporarily locked
+  /// after repeated wrong passwords. Distinct from [isSuccess] == false with
+  /// `'F'`: retyping the password will not help until the lock expires.
+  bool get isLocked => status == 'L';
 
   factory SapLoginResult.fromJson(Map<String, dynamic> json) {
     final permissionRows = (json['_Permissions'] as List? ?? const [])
@@ -178,9 +193,11 @@ class SapAuthController {
 
   /// `login(Username, Password, DeviceID)`.
   ///
-  /// Returns a result with `status == 'F'` for any wrong-credentials/inactive/
-  /// locked case — check [SapLoginResult.isSuccess], don't assume a returned
-  /// result means success. Throws only on a genuine transport/server failure.
+  /// Returns a result with `status == 'F'` for any wrong-credentials/inactive
+  /// case and `'L'` for a temporarily locked account — check
+  /// [SapLoginResult.isSuccess] / [SapLoginResult.isLocked], don't assume a
+  /// returned result means success. Throws only on a genuine transport/server
+  /// failure.
   Future<SapLoginResult> login({
     required String username,
     required String password,
@@ -207,8 +224,15 @@ class SapAuthController {
   /// `refresh(RefreshToken, DeviceID)`.
   ///
   /// The backend rotates the refresh token on every call — the token in the
-  /// returned result must replace whatever was stored, not be discarded; the
-  /// old one is single-use and this call already consumed it.
+  /// returned result must replace whatever was stored, not be discarded. The
+  /// token this call used stays acceptable for 15 minutes only (backend grace
+  /// since 2026-11-16, for a refresh whose answer never arrived); anything
+  /// older is refused.
+  ///
+  /// SAP answers a failed refresh with one of two codes: a refusal
+  /// (`TOKEN_INVALID_OR_EXPIRED`, the session is over) or
+  /// [_kRefreshUnavailableCode] (nothing changed on SAP, keep the session and
+  /// try again later).
   Future<SapLoginResult> refresh({
     required String refreshToken,
     required String deviceId,
@@ -221,8 +245,30 @@ class SapAuthController {
       );
       return SapLoginResult.fromJson(odataActionResult(response));
     } on DioException catch (error) {
-      throw Exception(
-        _friendlyMessage(error, fallback: 'Phiên đăng nhập đã hết hạn.'),
+      // Only an answer from the RAP handler itself (an OData error envelope
+      // on a 4xx) means the refresh token was refused. A timeout, a dropped
+      // connection, a 5xx or a proxy page says nothing about the session.
+      final status = error.response?.statusCode ?? 0;
+      final business = odataErrorMessage(error);
+      // The handler's own "could not do it right now" (a lock held by a
+      // parallel refresh, a hashing or UUID failure) leaves the session on
+      // SAP untouched, so it must not end the session here either.
+      if (odataSafeDiagnostic(error) == _kRefreshUnavailableCode) {
+        throw const SessionRefreshUnavailableException(
+          'Chưa làm mới được phiên SAP. Sẽ tự động thử lại.',
+        );
+      }
+      if (status >= 400 && status < 500 && business != null) {
+        throw SessionRefreshRejectedException(
+          code: odataSafeDiagnostic(error) ?? 'TOKEN_INVALID_OR_EXPIRED',
+          message: _friendlyMessage(
+            error,
+            fallback: 'Phiên đăng nhập đã hết hạn.',
+          ),
+        );
+      }
+      throw SessionRefreshUnavailableException(
+        'Chưa làm mới được phiên SAP (${error.type.name}).',
       );
     }
   }
@@ -285,6 +331,17 @@ class SapAuthController {
         },
       );
     } on DioException catch (error) {
+      // The handler answers an invalid token with the validator's bare code
+      // (before 2026-11-16: "Token không hợp lệ: TOKEN_INVALID_OR_EXPIRED",
+      // which `contains` still covers). An expired access token is
+      // recoverable with a refresh, so it gets its own type instead of a
+      // message telling the user to log in again.
+      final raw = odataErrorMessage(error) ?? '';
+      if (raw.contains('TOKEN_INVALID_OR_EXPIRED')) {
+        throw AccessTokenExpiredException(
+          _authBusinessMessages['TOKEN_INVALID_OR_EXPIRED']!,
+        );
+      }
       throw Exception(
         _friendlyMessage(error, fallback: 'Đổi mật khẩu thất bại.'),
       );
@@ -297,9 +354,9 @@ class SapAuthController {
   }) {
     final code = odataErrorMessage(error);
     if (code == null || code.isEmpty) return fallback;
-    // These codes are already short, human-readable Vietnamese text set by the
-    // ABAP handler (e.g. 'Refresh token không hợp lệ hoặc hết hạn') — unlike
-    // ZUI_PP_OPALLOC's machine codes, there is nothing to translate here.
+    // Known machine codes get their Vietnamese message; anything else is
+    // already short, human-readable Vietnamese text set by the ABAP handler
+    // (e.g. 'Mật khẩu hiện tại không đúng') and is shown as it is.
     return _authBusinessMessages[code] ?? code;
   }
 }

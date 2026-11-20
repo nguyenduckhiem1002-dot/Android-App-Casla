@@ -8,7 +8,9 @@
 import 'package:casla_production/core/config/app_config.dart';
 import 'package:casla_production/core/database/casla_database.dart';
 import 'package:casla_production/core/sync/sap_write_gateway.dart';
+import 'package:casla_production/core/sync/sync_failure.dart';
 import 'package:casla_production/core/utils/operation_qr_parser.dart';
+import 'package:casla_production/core/auth/session_refresh.dart';
 import 'package:casla_production/data/repositories/repositories_impl.dart';
 import 'package:casla_production/data/sap/sap_odata_client.dart';
 import 'package:casla_production/data/sap/sap_pp_opalloc_gateway.dart';
@@ -28,7 +30,9 @@ class _Session implements SapSessionProvider {
   @override
   bool isGenerationCurrent(int generation) => generation == 1;
   @override
-  Future<bool> refreshSession() async => false;
+  Future<SessionRefreshOutcome> refreshSession({
+    String? staleAccessToken,
+  }) async => SessionRefreshOutcome.rejected;
 }
 
 class _OfflineClient extends SapODataClient {
@@ -260,7 +264,7 @@ void main() {
     expect(payload.containsKey('PostingDate'), isFalse);
   });
 
-  test('the chosen position is stored and sent as PositionID', () async {
+  test('the chosen position and machine are stored and sent', () async {
     final orderId = await scan('KG');
     final receipt = await repo.createAssignment(
       workerId: 'emp-1',
@@ -279,8 +283,7 @@ void main() {
     expect(row!['position_id'], 'G07');
     expect(row['machine_id'], 'M107');
     expect(payloads.single['PositionID'], 'G07');
-    // The ledger has no machine column; it stays on the device.
-    expect(payloads.single.containsKey('MachineID'), isFalse);
+    expect(payloads.single['MachineID'], 'M107');
   });
 
   test('an assignment without a position still sends PositionID', () async {
@@ -289,6 +292,7 @@ void main() {
     await assign(orderId: await scan('KG'), quantity: 5);
 
     expect(payloads.single['PositionID'], '');
+    expect(payloads.single['MachineID'], '');
   });
 
   test('confirm and recall send no PositionID', () async {
@@ -336,7 +340,67 @@ void main() {
     ]);
     for (final payload in payloads) {
       expect(payload.containsKey('PositionID'), isFalse);
+      expect(payload.containsKey('MachineID'), isFalse);
     }
+  });
+
+  group('recall without the worker password (PP_RECALL_NOPASS)', () {
+    Future<void> pushRecall(
+      String assignmentId, {
+      required Object? flag,
+      String? workerPassword,
+    }) => gateway.push(
+      SyncPushRequest(
+        queueItem: {
+          'id': 'contract-nopass',
+          'entity_type': 'RECALL',
+          'entity_id': 'rec-nopass',
+          'action': 'CREATE',
+        },
+        source: {
+          'id': 'rec-nopass',
+          'phan_cong_id': assignmentId,
+          'quantity': 5.0,
+          'unit_of_measure': 'KG',
+          'business_date': '2026-09-07',
+          'shift_id': 'SHIFT_1',
+          'occurred_at_utc': DateTime.utc(2026, 9, 7, 3).millisecondsSinceEpoch,
+          'reason_code': 'NOT_FINISHED',
+          'idempotency_key': '00000000-0000-4000-8000-0000000000e1',
+          'without_worker_password': flag,
+        },
+        workerPassword: workerPassword,
+      ),
+    );
+
+    test('a marked recall sends WorkerPassword empty, never absent', () async {
+      // ZA_PP_Recall declares WorkerPassword, and the gateway refuses a call
+      // missing a declared parameter; empty is what the backend reads as
+      // "no password" for an account holding PP_RECALL_NOPASS.
+      final assignmentId = await assign(orderId: await scan('KG'), quantity: 5);
+      payloads.clear();
+      requestPaths.clear();
+
+      await pushRecall(assignmentId, flag: 1);
+
+      expect(requestPaths.single.split('.').last, 'submitRecall');
+      expect(payloads.single.containsKey('WorkerPassword'), isTrue);
+      expect(payloads.single['WorkerPassword'], '');
+      expect(payloads.single['Quantity'], '5.000');
+    });
+
+    test('an unmarked recall still needs the worker password', () async {
+      final assignmentId = await assign(orderId: await scan('KG'), quantity: 5);
+      payloads.clear();
+
+      for (final flag in [0, null]) {
+        await expectLater(
+          pushRecall(assignmentId, flag: flag),
+          throwsA(isA<WorkerVerificationRequiredException>()),
+        );
+      }
+      expect(payloads, isEmpty);
+    });
   });
 
   test('a confirmation sends good and defective quantities apart', () async {
@@ -560,6 +624,46 @@ void main() {
     expect(result.workers[0].recalledQuantity, 300);
     expect(result.workers[1].recalledQuantity, 300);
   });
+
+  test(
+    'work history reads the worker department beside the booking one',
+    () async {
+      Map<String, dynamic> worker(String id, {Object? department}) => {
+        'WorkerID': id,
+        'AssignedQuantity': '100',
+        'CompletedQuantity': '0',
+        'RemainingQuantity': '100',
+        'UnitOfMeasure': 'CHC',
+        'WorkID': 'XM1-LT',
+        'BoPhan': 'MAY QUAI LẬP TRÌNH 1',
+        'WorkerBoPhan': ?department,
+      };
+      historyResponse = {
+        'ScopeCode': 'T',
+        'DateFrom': '2026-11-13',
+        'DateTo': '2026-11-13',
+        '_Entries': const [],
+        '_Workers': [
+          worker('NV01', department: 'MAY MIỆNG 2 '),
+          // No declaration in the worker register, or an older service
+          // binding without the field.
+          worker('NV02', department: ''),
+          worker('NV03'),
+        ],
+      };
+
+      final workers = (await gateway.getWorkHistory(
+        range: HistoryRange.day,
+        dateFrom: DateTime(2026, 11, 13),
+        dateTo: DateTime(2026, 11, 13),
+      )).workers;
+
+      expect(workers[0].workerBoPhan, 'MAY MIỆNG 2');
+      expect(workers[0].boPhan, 'MAY QUAI LẬP TRÌNH 1');
+      expect(workers[1].workerBoPhan, isEmpty);
+      expect(workers[2].workerBoPhan, isEmpty);
+    },
+  );
 
   test(
     'operation access check sends the live scope and parses quantities',

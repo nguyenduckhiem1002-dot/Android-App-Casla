@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('shows Xưởng and Bộ phận code - name, never the plant', (
+  testWidgets('shows Xưởng and Tổ code - name, never the plant', (
     tester,
   ) async {
     const work = UserWorkContext(
@@ -46,7 +46,7 @@ void main() {
     expect(
       find.text(
         'Xưởng: CL100077 (Xưởng may 2)\n'
-        'Bộ phận: XM2.002 - MAY CHI TIẾT PHỤ-XM2',
+        'Tổ: XM2.002 - MAY CHI TIẾT PHỤ-XM2',
       ),
       findsOneWidget,
     );

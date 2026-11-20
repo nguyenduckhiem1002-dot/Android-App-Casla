@@ -9,6 +9,29 @@ import '../../supervisor/screens/s10_confirm_scan_screen.dart';
 import '../../sync/screens/s12_sync_screen.dart';
 import '../../supervisor/screens/s14_worker_position_screen.dart';
 
+/// Which bottom-menu tab opens for which permissions (any one of them), in
+/// display order.
+///
+/// Tổng quan comes with PP_HIST_TEAM next to any of Giao, Xác nhận, Thu hồi
+/// or Vị trí; Đồng bộ with any of the three operations. Phân công follows
+/// PP_INITIAL_ASSIGN. Xác nhận opens for PP_CONFIRM, and for PP_RECALL so the
+/// scan flow can reach the assignment to recall; only PP_CONFIRM may enter a
+/// confirmed quantity there. Vị trí follows PP_POS_MANAGE.
+const _tabGates = <(String, Set<Permission>)>[
+  ('overview', {Permission.viewTeamProduction}),
+  ('assign', {Permission.assignQuantity}),
+  ('confirm', {Permission.confirmProduction, Permission.recallAssignment}),
+  ('positions', {Permission.managePositions}),
+  ('sync', {Permission.viewSyncStatus}),
+];
+
+/// The tab ids a session holding [permissions] sees, in display order.
+@visibleForTesting
+List<String> supervisorTabIds(Set<Permission> permissions) => [
+  for (final (id, gates) in _tabGates)
+    if (gates.any(permissions.contains)) id,
+];
+
 class SupervisorShell extends ConsumerStatefulWidget {
   const SupervisorShell({super.key});
 
@@ -46,8 +69,9 @@ class _SupervisorShellState extends ConsumerState<SupervisorShell> {
       syncScope.add(activeWorkId.trim());
     }
     _ensureScopedSyncCount(session.maNv, syncScope.toList());
+    final visible = supervisorTabIds(session.permissions).toSet();
     final tabs = <({String id, Widget screen, BottomNavigationBarItem item})>[
-      if (session.hasPermission(Permission.viewTeamProduction))
+      if (visible.contains('overview'))
         (
           id: 'overview',
           screen: const S06SupervisorOverviewScreen(),
@@ -56,7 +80,7 @@ class _SupervisorShellState extends ConsumerState<SupervisorShell> {
             label: 'Tổng quan',
           ),
         ),
-      if (session.hasPermission(Permission.assignQuantity))
+      if (visible.contains('assign'))
         (
           id: 'assign',
           screen: const S07CreateAssignmentWizardScreen(),
@@ -65,7 +89,7 @@ class _SupervisorShellState extends ConsumerState<SupervisorShell> {
             label: 'Phân công',
           ),
         ),
-      if (session.hasPermission(Permission.viewTeamProduction))
+      if (visible.contains('confirm'))
         (
           id: 'confirm',
           screen: const S10ConfirmScanScreen(),
@@ -74,7 +98,7 @@ class _SupervisorShellState extends ConsumerState<SupervisorShell> {
             label: 'Xác nhận',
           ),
         ),
-      if (session.hasPermission(Permission.managePositions))
+      if (visible.contains('positions'))
         (
           id: 'positions',
           screen: const S14WorkerPositionScreen(),
@@ -84,7 +108,7 @@ class _SupervisorShellState extends ConsumerState<SupervisorShell> {
             label: 'Vị trí',
           ),
         ),
-      if (session.hasPermission(Permission.viewSyncStatus))
+      if (visible.contains('sync'))
         (
           id: 'sync',
           screen: const S12SyncScreen(),

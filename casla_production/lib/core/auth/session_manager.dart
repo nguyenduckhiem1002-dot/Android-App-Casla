@@ -13,6 +13,7 @@ import '../../data/sap/sap_session_provider.dart';
 import '../../domain/entities/entities.dart';
 import '../../domain/entities/enums.dart';
 import '../../domain/entities/work_history.dart';
+import '../../domain/policies/business_day_policy.dart';
 import '../config/app_config.dart';
 import '../utils/shift_execution_validation.dart';
 import '../database/casla_database.dart';
@@ -21,6 +22,7 @@ import '../sync/sync_engine.dart';
 import '../sync/sync_access_scope.dart';
 import '../sync/verified_sync_coordinator.dart';
 import 'session_coordinator.dart';
+import 'session_refresh.dart';
 import '../../data/sap/sap_shift_controller.dart';
 
 /// App-level state holder (simple ChangeNotifier for MVP, upgrade to Riverpod later)
@@ -40,6 +42,11 @@ class AppState extends ChangeNotifier {
   UserWorkContext? _activeWorkContext;
   SapShift? _activeShift;
   DateTime _activeBusinessDate = DateTime.now();
+
+  /// When [_activeBusinessDate] was last put in place (picked, restored or
+  /// reset). A date chosen today stays; one left over from an earlier day
+  /// moves on — see [rollBusinessDateIfNewDay].
+  DateTime _businessDateSetAt = DateTime.now();
   DateTime? _setupExpiresAt;
   Timer? _setupExpiryTimer;
   StreamSubscription<void>? _remotePostingSubscription;
@@ -301,6 +308,7 @@ class AppState extends ChangeNotifier {
       businessDate.month,
       businessDate.day,
     );
+    _businessDateSetAt = DateTime.now();
     // The selection lasts while late entry for the chosen shift is allowed:
     // until the end of the day the SAP shift ends on.
     _setupExpiresAt = _setupExpiryFor(shift, _activeBusinessDate);
@@ -327,6 +335,7 @@ class AppState extends ChangeNotifier {
     _activeShift = null;
     final today = DateTime.now();
     _activeBusinessDate = DateTime(today.year, today.month, today.day);
+    _businessDateSetAt = today;
     if (session.role != UserRole.supervisor || session.passwordChangeRequired) {
       return;
     }
@@ -370,9 +379,17 @@ class AppState extends ChangeNotifier {
         businessDate.month,
         businessDate.day,
       );
+      // Builds before this field existed stored no pick time: treat the
+      // selection as an old one, so a date from an earlier day still moves on.
+      final selectedAtMs = data['selected_at_local_ms'];
+      _businessDateSetAt = DateTime.fromMillisecondsSinceEpoch(
+        selectedAtMs is num ? selectedAtMs.toInt() : 0,
+      );
       _setupExpiresAt = effectiveExpiresAt;
       _scheduleSetupExpiry();
-      notifyListeners();
+      // A selection restored from an earlier day follows the same rule as one
+      // left open overnight.
+      if (!rollBusinessDateIfNewDay()) notifyListeners();
     } catch (_) {
       // A corrupt/stale preference must never block login. The setup screen
       // will ask for a fresh selection instead.
@@ -404,6 +421,7 @@ class AppState extends ChangeNotifier {
         'bo_phan': work.boPhan,
         'location': work.location,
         'business_date': _activeBusinessDate.toIso8601String(),
+        'selected_at_local_ms': _businessDateSetAt.millisecondsSinceEpoch,
         'expires_at_local_ms': expiresAt.millisecondsSinceEpoch,
         'shift': {
           'WorkCenter': shift.workCenter,
@@ -442,8 +460,12 @@ class AppState extends ChangeNotifier {
       return await action();
     } finally {
       _criticalOperations--;
-      if (_criticalOperations == 0 && _setupDeadlinePassed) {
-        _expireSupervisorSetup();
+      if (_criticalOperations == 0) {
+        if (_setupDeadlinePassed) {
+          _expireSupervisorSetup();
+        } else {
+          rollBusinessDateIfNewDay();
+        }
       }
     }
   }
@@ -455,7 +477,54 @@ class AppState extends ChangeNotifier {
     _activeShift = null;
     final now = DateTime.now();
     _activeBusinessDate = DateTime(now.year, now.month, now.day);
+    _businessDateSetAt = now;
     notifyListeners();
+  }
+
+  /// Brings the working date back in step with the clock when the app returns
+  /// to the foreground.
+  ///
+  /// The expiry timer does not run while the PDA sleeps, so a device left on
+  /// overnight would otherwise wake up showing yesterday's shift selection
+  /// until the overdue timer finally fired.
+  void handleAppResumed() {
+    if (_setupExpired) _expireSupervisorSetup();
+    rollBusinessDateIfNewDay();
+  }
+
+  /// Moves a working date left over from an earlier day to today, once the
+  /// new day has started ([businessDayStartHour]) and the selected shift, if
+  /// any, is over. The shift selection is cleared with it: shifts are valid
+  /// per date, so the supervisor confirms today's shift on the setup screen,
+  /// which now opens on today's date. Returns whether the date moved.
+  bool rollBusinessDateIfNewDay({DateTime? now}) {
+    // Never pull the work date out from under a write in progress;
+    // [runCriticalOperation] checks again when the last one ends.
+    if (_criticalOperations > 0) return false;
+    final at = now ?? DateTime.now();
+    final shift = _setupDeadlinePassed ? null : _activeShift;
+    final shiftEndsAt = shift == null
+        ? null
+        : shiftEndInstant(
+            shift: shift,
+            businessDate: _activeBusinessDate,
+          )?.toLocal();
+    if (!shouldRollBusinessDate(
+      businessDate: _activeBusinessDate,
+      selectedAt: _businessDateSetAt,
+      now: at,
+      shiftEndsAt: shiftEndsAt,
+    )) {
+      return false;
+    }
+    _setupExpiryTimer?.cancel();
+    _setupExpiresAt = null;
+    _activeWorkContext = null;
+    _activeShift = null;
+    _activeBusinessDate = DateTime(at.year, at.month, at.day);
+    _businessDateSetAt = at;
+    notifyListeners();
+    return true;
   }
 
   Future<bool> loginByCredentials(String username, String password) async {
@@ -492,6 +561,34 @@ class AppState extends ChangeNotifier {
     } catch (_) {
       rethrow;
     }
+  }
+
+  /// A notice for the login screen about why the last session ended, read
+  /// once by that screen. Set when SAP refused to renew the session, so the
+  /// supervisor is told "đăng nhập lại" instead of finding a silent logout.
+  String? _pendingLoginNotice;
+
+  String? takePendingLoginNotice() {
+    final notice = _pendingLoginNotice;
+    _pendingLoginNotice = null;
+    return notice;
+  }
+
+  /// Refreshes the SAP session and acts on a refusal: SAP will not renew a
+  /// dead refresh token, so the session is ended here and the login screen
+  /// gets to say why. An unreachable SAP leaves the session as it is.
+  Future<SessionRefreshOutcome> refreshSessionDetailed({
+    String? staleAccessToken,
+  }) async {
+    final outcome = await _session.refreshDetailed(
+      staleAccessToken: staleAccessToken,
+    );
+    if (outcome == SessionRefreshOutcome.rejected && _session.isLoggedIn) {
+      _pendingLoginNotice =
+          'Phiên đăng nhập đã hết hạn hoặc bị thu hồi. Vui lòng đăng nhập lại.';
+      await logout();
+    }
+    return outcome;
   }
 
   Future<void> logout() async {
@@ -551,5 +648,6 @@ class _AppStateSapSession implements SapSessionProvider {
       _app._session.isGenerationCurrent(generation);
 
   @override
-  Future<bool> refreshSession() => _app._session.refresh();
+  Future<SessionRefreshOutcome> refreshSession({String? staleAccessToken}) =>
+      _app.refreshSessionDetailed(staleAccessToken: staleAccessToken);
 }

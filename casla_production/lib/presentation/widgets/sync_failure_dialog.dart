@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../app/theme/casla_colors.dart';
+import '../../app/theme/casla_spacing.dart';
 
 class SyncFailureDialogData {
   final String title;
@@ -62,13 +63,14 @@ class SyncFailureDialog extends StatelessWidget {
       explicitChildNodes: true,
       label: data.title,
       child: Dialog(
-        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
         clipBehavior: Clip.antiAlias,
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 420),
           child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+            padding: const EdgeInsets.symmetric(
+              horizontal: CaslaDialog.padding,
+              vertical: CaslaDialog.verticalPadding,
+            ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -77,16 +79,16 @@ class SyncFailureDialog extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Container(
-                      width: 44,
-                      height: 44,
+                      width: 36,
+                      height: 36,
                       decoration: BoxDecoration(
                         color: CaslaColors.dangerBg,
-                        borderRadius: BorderRadius.circular(14),
+                        borderRadius: BorderRadius.circular(CaslaRadius.md),
                       ),
                       child: const Icon(
                         Icons.sync_problem_rounded,
                         color: CaslaColors.danger,
-                        size: 24,
+                        size: 20,
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -100,13 +102,13 @@ class SyncFailureDialog extends StatelessWidget {
                               data.title,
                               style: const TextStyle(
                                 fontFamily: 'Manrope',
-                                fontSize: 20,
-                                height: 1.2,
+                                fontSize: CaslaDialog.titleSize,
+                                height: 1.25,
                                 fontWeight: FontWeight.w800,
                                 color: CaslaColors.primaryNavy,
                               ),
                             ),
-                            const SizedBox(height: 8),
+                            const SizedBox(height: 6),
                             _StatusLabel(label: data.statusLabel),
                           ],
                         ),
@@ -114,32 +116,34 @@ class SyncFailureDialog extends StatelessWidget {
                     ),
                     IconButton(
                       tooltip: 'Đóng',
-                      visualDensity: VisualDensity.standard,
+                      visualDensity: VisualDensity.compact,
                       onPressed: () => Navigator.of(context).pop(),
                       icon: const Icon(Icons.close_rounded),
                       color: CaslaColors.muted,
                     ),
                   ],
                 ),
-                const SizedBox(height: 18),
+                const SizedBox(height: CaslaDialog.headerGap),
+                const Divider(height: 1, thickness: 1, color: CaslaColors.line),
+                const SizedBox(height: CaslaDialog.headerGap),
                 Text(
                   data.message,
                   style: const TextStyle(
-                    fontSize: 14,
-                    height: 1.5,
+                    fontSize: CaslaDialog.bodySize,
+                    height: CaslaDialog.lineHeight,
                     color: CaslaColors.primaryNavy,
                   ),
                 ),
                 if (_hasTransactionDetails) ...[
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 12),
                   DecoratedBox(
                     decoration: BoxDecoration(
                       color: CaslaColors.background,
                       border: Border.all(color: CaslaColors.line),
-                      borderRadius: BorderRadius.circular(14),
+                      borderRadius: BorderRadius.circular(CaslaRadius.md),
                     ),
                     child: Padding(
-                      padding: const EdgeInsets.all(14),
+                      padding: const EdgeInsets.all(12),
                       child: Column(
                         children: [
                           if (data.transactionSummary.isNotEmpty)
@@ -184,7 +188,7 @@ class SyncFailureDialog extends StatelessWidget {
                         child: Text(
                           'Chuỗi đồng bộ của công nhân đã dừng tại giao dịch này.',
                           style: TextStyle(
-                            fontSize: 12.5,
+                            fontSize: 13.5,
                             height: 1.4,
                             color: CaslaColors.muted,
                           ),
@@ -193,13 +197,13 @@ class SyncFailureDialog extends StatelessWidget {
                     ],
                   ),
                 ],
-                const SizedBox(height: 16),
+                const SizedBox(height: 14),
                 Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.all(14),
+                  padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
                     color: CaslaColors.gold100,
-                    borderRadius: BorderRadius.circular(14),
+                    borderRadius: BorderRadius.circular(CaslaRadius.md),
                   ),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -217,17 +221,17 @@ class SyncFailureDialog extends StatelessWidget {
                             const Text(
                               'Cách xử lý',
                               style: TextStyle(
-                                fontSize: 12.5,
+                                fontSize: 14,
                                 fontWeight: FontWeight.w800,
                                 color: CaslaColors.gold700,
                               ),
                             ),
-                            const SizedBox(height: 3),
+                            const SizedBox(height: 4),
                             Text(
                               data.guidance,
                               style: const TextStyle(
-                                fontSize: 12.5,
-                                height: 1.45,
+                                fontSize: 14,
+                                height: CaslaDialog.lineHeight,
                                 color: CaslaColors.bannerText,
                               ),
                             ),
@@ -247,7 +251,7 @@ class SyncFailureDialog extends StatelessWidget {
                       title: const Text(
                         'Chi tiết kỹ thuật',
                         style: TextStyle(
-                          fontSize: 13,
+                          fontSize: 14,
                           fontWeight: FontWeight.w700,
                           color: CaslaColors.muted,
                         ),
@@ -301,17 +305,20 @@ class SyncFailureDialog extends StatelessWidget {
                   width: double.infinity,
                   child: FilledButton(
                     style: FilledButton.styleFrom(
-                      minimumSize: const Size(0, 52),
+                      minimumSize: const Size(0, CaslaDialog.buttonHeight),
                       backgroundColor: CaslaColors.primaryNavy,
                       foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
+                        borderRadius: BorderRadius.circular(CaslaRadius.md),
                       ),
                     ),
                     onPressed: () => Navigator.of(context).pop(),
                     child: const Text(
                       'Quay lại danh sách',
-                      style: TextStyle(fontWeight: FontWeight.w800),
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
                   ),
                 ),
@@ -356,7 +363,7 @@ class _StatusLabel extends StatelessWidget {
             child: Text(
               label,
               style: const TextStyle(
-                fontSize: 11.5,
+                fontSize: 12.5,
                 fontWeight: FontWeight.w800,
                 color: CaslaColors.danger,
               ),
@@ -384,15 +391,15 @@ class _InfoRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: EdgeInsets.only(bottom: isLast ? 0 : 9),
+      padding: EdgeInsets.only(bottom: isLast ? 0 : 10),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: 76,
+            width: 84,
             child: Text(
               label,
-              style: const TextStyle(fontSize: 11.5, color: CaslaColors.muted),
+              style: const TextStyle(fontSize: 13, color: CaslaColors.muted),
             ),
           ),
           const SizedBox(width: 8),
@@ -400,9 +407,9 @@ class _InfoRow extends StatelessWidget {
             child: Text(
               value,
               style: TextStyle(
-                fontSize: 12.5,
-                height: 1.35,
-                fontWeight: emphasize ? FontWeight.w800 : FontWeight.w600,
+                fontSize: 14,
+                height: 1.4,
+                fontWeight: emphasize ? FontWeight.w800 : FontWeight.w700,
                 color: CaslaColors.primaryNavy,
               ),
             ),

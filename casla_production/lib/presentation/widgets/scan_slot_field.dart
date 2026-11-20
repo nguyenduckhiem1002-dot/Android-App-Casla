@@ -52,6 +52,9 @@ class ScanSlotField extends StatelessWidget {
   final VoidCallback onOpenScanner;
   final VoidCallback? onClear;
 
+  /// What the clear button does when it is not just dropping a scan.
+  final String clearTooltip;
+
   /// Extra controls before the clear button, e.g. the fold arrow an operation
   /// card gets once several operations are being assigned together.
   final Widget? trailing;
@@ -70,6 +73,7 @@ class ScanSlotField extends StatelessWidget {
     required this.placeholder,
     required this.onOpenScanner,
     this.onClear,
+    this.clearTooltip = 'Xóa lựa chọn',
     this.trailing,
   });
 
@@ -142,7 +146,7 @@ class ScanSlotField extends StatelessWidget {
                       ?trailing,
                       if (onClear != null)
                         IconButton(
-                          tooltip: 'Xóa lựa chọn',
+                          tooltip: clearTooltip,
                           onPressed: onClear,
                           icon: const Icon(Icons.close, size: 20),
                           color: CaslaColors.muted,

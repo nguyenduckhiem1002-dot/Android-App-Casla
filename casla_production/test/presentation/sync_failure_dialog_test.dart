@@ -1,3 +1,4 @@
+import 'package:casla_production/app/theme/casla_theme.dart';
 import 'package:casla_production/presentation/widgets/sync_failure_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -15,6 +16,7 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        theme: CaslaTheme.light,
         home: Scaffold(
           body: Builder(
             builder: (context) => FilledButton(
@@ -50,8 +52,12 @@ void main() {
     expect(find.text('SHIFT_WORK_DATE_MISMATCH'), findsNothing);
     expect(tester.takeException(), isNull);
 
+    // The dialog scrolls; the technical details sit at its end.
+    await tester.ensureVisible(find.text('Chi tiết kỹ thuật'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Chi tiết kỹ thuật'));
     await tester.pumpAndSettle();
+    await tester.ensureVisible(find.textContaining('SHIFT_WORK_DATE_MISMATCH'));
 
     expect(find.textContaining('SHIFT_WORK_DATE_MISMATCH'), findsOneWidget);
     expect(tester.takeException(), isNull);

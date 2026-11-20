@@ -54,15 +54,55 @@ void main() {
       expect(plan.warnings.single.message, contains('M101'));
       // SAP keeps the seated worker on a machine change; say so.
       expect(plan.warnings.single.message, contains('Nguyễn Văn An'));
+      expect(
+        plan.warnings.single.details.map((d) => '${d.label}: ${d.value}'),
+        ['Máy hiện tại: M101', 'Máy mới: M109'],
+      );
       expect(_kinds(plan), [PositionCommandKind.changeMachine]);
     });
 
-    test('a machine used at another position is not checked', () {
-      // M102 already sits at G02: the same code may serve several positions.
+    test('a machine attached at another position is moved after a warning', () {
+      // M102 sits at G02: SAP moves it and G02 is left without a machine.
       final plan = _plan('G01', 'M102');
 
-      expect(plan.warnings.single.kind, PositionCase.changeMachine);
+      expect(plan.warnings.map((w) => w.kind), [
+        PositionCase.changeMachine,
+        PositionCase.moveMachine,
+      ]);
+      final move = plan.warnings.last;
+      expect(
+        move.message,
+        'Máy M102 đang gắn ở vị trí G02. Có chuyển máy sang vị trí G01 không? '
+        'Vị trí G02 sẽ trống mã máy. CN Trần Thị Bình vẫn ngồi vị trí G02.',
+      );
+      expect(move.details.map((d) => '${d.label}: ${d.value}'), [
+        'Vị trí đang gắn: G02',
+        'Vị trí mới: G01',
+      ]);
+      // Still one command: SAP clears the old position in the same request.
       expect(_kinds(plan), [PositionCommandKind.changeMachine]);
+    });
+
+    test('a new position taking a machine from another one warns too', () {
+      final plan = _plan('G05', 'm106');
+
+      expect(plan.warnings.map((w) => w.kind), [
+        PositionCase.newPosition,
+        PositionCase.moveMachine,
+      ]);
+      // G06 has nobody: nothing to say about a worker.
+      expect(
+        plan.warnings.last.message,
+        'Máy m106 đang gắn ở vị trí G06. Có chuyển máy sang vị trí G05 không? '
+        'Vị trí G06 sẽ trống mã máy.',
+      );
+      expect(_kinds(plan), [PositionCommandKind.createPosition]);
+    });
+
+    test('a free machine moves nothing', () {
+      expect(_plan('G01', 'M109').warnings.map((w) => w.kind), [
+        PositionCase.changeMachine,
+      ]);
     });
 
     test('the same position and machine needs no update', () {
@@ -86,6 +126,15 @@ void main() {
         PositionCase.replaceWorker,
       ]);
       expect(plan.warnings.last.message, contains('Trần Thị Bình'));
+      expect(plan.warnings.first.details.map((d) => d.label), [
+        'Vị trí hiện tại',
+        'Vị trí mới',
+      ]);
+      expect(plan.warnings.first.details.last.value, 'G02 · M102');
+      expect(plan.warnings.last.details.map((d) => d.label), [
+        'CN hiện tại',
+        'CN mới',
+      ]);
       expect(_kinds(plan), [PositionCommandKind.transferWorker]);
     });
 
@@ -109,10 +158,143 @@ void main() {
     test('a machine used elsewhere does not stop seating a worker', () {
       final plan = _plan('G06', 'M101', worker: _cuong);
 
+      expect(plan.warnings.map((w) => w.kind), [
+        PositionCase.changeMachine,
+        PositionCase.moveMachine,
+      ]);
       expect(_kinds(plan), [
         PositionCommandKind.changeMachine,
         PositionCommandKind.transferWorker,
       ]);
+    });
+  });
+
+  group('machine optional', () {
+    test('a known position without a machine scan keeps its machine', () {
+      final plan = _plan('G01', '', worker: _cuong);
+      expect(_kinds(plan), [PositionCommandKind.transferWorker]);
+      expect(plan.needsMachine, isFalse);
+    });
+
+    test('a new position without a machine cannot be created', () {
+      final plan = _plan('G05', '');
+      expect(plan.needsMachine, isTrue);
+      expect(plan.commands, isEmpty);
+      expect(plan.isNoop, isFalse);
+    });
+
+    test('a position that had no machine gets one', () {
+      final plan = planPositionUpdate(
+        board: const [
+          PositionSeat(workCenter: _wc, positionId: 'G09', machineId: ''),
+        ],
+        slot: const PositionSlot(
+          workCenter: _wc,
+          positionId: 'G09',
+          machineId: 'M1',
+        ),
+      );
+      expect(_kinds(plan), [PositionCommandKind.changeMachine]);
+      expect(plan.warnings.single.message, contains('chưa gắn máy'));
+      expect(plan.warnings.single.details.first.value, 'Chưa có');
+    });
+  });
+
+  group('taking the machine off', () {
+    PositionUpdatePlan detach(
+      String position, {
+      String machine = '',
+      PositionWorker? worker,
+      List<PositionSeat> board = _board,
+    }) => planPositionUpdate(
+      board: board,
+      slot: PositionSlot(
+        workCenter: _wc,
+        positionId: position,
+        machineId: machine,
+        detachMachine: true,
+      ),
+      worker: worker,
+    );
+
+    test('the position keeps running without a machine after a warning', () {
+      final plan = detach('G01');
+
+      expect(plan.warnings.single.kind, PositionCase.detachMachine);
+      expect(
+        plan.warnings.single.message,
+        'Vị trí G01 đang gắn máy M101. Có gỡ máy khỏi vị trí không? Vị trí '
+        'vẫn đang dùng, máy M101 thành máy rảnh. CN Nguyễn Văn An vẫn ngồi '
+        'vị trí này.',
+      );
+      expect(
+        plan.warnings.single.details.map((d) => '${d.label}: ${d.value}'),
+        ['Máy hiện tại: M101', 'Sau khi gỡ: Chưa gắn máy'],
+      );
+      expect(_kinds(plan), [PositionCommandKind.detachMachine]);
+      expect(plan.commands.single.description, 'Gỡ máy M101 khỏi vị trí G01');
+    });
+
+    test('an empty position says nothing about a worker', () {
+      expect(
+        detach('G06').warnings.single.message,
+        'Vị trí G06 đang gắn máy M106. Có gỡ máy khỏi vị trí không? Vị trí '
+        'vẫn đang dùng, máy M106 thành máy rảnh.',
+      );
+    });
+
+    test('a position already without a machine needs no update', () {
+      final plan = detach(
+        'G09',
+        board: const [
+          PositionSeat(workCenter: _wc, positionId: 'G09', machineId: ''),
+        ],
+      );
+      expect(plan.isNoop, isTrue);
+    });
+
+    test('a scanned machine is a change, not a removal', () {
+      final plan = detach('G01', machine: 'M109');
+      expect(_kinds(plan), [PositionCommandKind.changeMachine]);
+    });
+
+    test('a position SAP does not have still needs a machine', () {
+      expect(detach('G05').needsMachine, isTrue);
+    });
+
+    test('the worker is seated after the machine is taken off', () {
+      final plan = detach('G06', worker: _cuong);
+      expect(_kinds(plan), [
+        PositionCommandKind.detachMachine,
+        PositionCommandKind.transferWorker,
+      ]);
+    });
+  });
+
+  group('parsePositionLabel', () {
+    test('reads a label naming one field or both', () {
+      final position = parsePositionLabel('VT=a-01')!;
+      expect(position.positionId, 'A-01');
+      expect(position.machineId, '');
+      final machine = parsePositionLabel('{"MachineID":"vlt16"}')!;
+      expect(machine.positionId, '');
+      expect(machine.machineId, 'VLT16');
+      final both = parsePositionLabel('A-01@A1')!;
+      expect((both.positionId, both.machineId), ('A-01', 'A1'));
+    });
+
+    test('a bare code is not a label', () {
+      expect(parsePositionLabel('A-01'), isNull);
+      expect(parsePositionLabel('A1'), isNull);
+      expect(parsePositionLabel('{"MaNV":"10000003"}'), isNull);
+    });
+
+    test('parsePositionCode accepts SAP codes only', () {
+      expect(parsePositionCode(' a-01 '), 'A-01');
+      expect(parsePositionCode('VLT16'), 'VLT16');
+      expect(parsePositionCode('A B'), isNull);
+      expect(parsePositionCode('ABCDEFGHIJK'), isNull);
+      expect(parsePositionCode(''), isNull);
     });
   });
 

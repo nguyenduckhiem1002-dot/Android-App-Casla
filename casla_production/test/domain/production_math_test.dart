@@ -9,6 +9,14 @@ void main() {
       expect(ProductionMath.calculateMaxRecall(100, 30, 20), 50);
     });
 
+    test('confirmed is good output and scrap together', () {
+      expect(ProductionMath.confirmedQuantity(480, 5), 485);
+      expect(ProductionMath.confirmedQuantity(730, 0), 730);
+      // Binary noise does not leak a 4th decimal into the figure.
+      expect(ProductionMath.confirmedQuantity(0.1, 0.2), 0.3);
+      expect(ProductionMath.confirmedQuantity(double.nan, 5), 0);
+    });
+
     test('never returns negative quantities', () {
       expect(ProductionMath.calculateEffectiveAssigned(10, 20), 0);
       expect(ProductionMath.calculateRemaining(10, 20), 0);

@@ -1,9 +1,10 @@
 // SAP Integration — Worker position API
 // SAP Service: ZUI_PP_POS (binding ZAPI_PP_POS, RAP OData V4)
 //
-// Four static facade actions, one command per request:
-//   Positions/getPositionBoard, Positions/submitPositionCreate,
-//   Positions/submitMachineChange, PositionAssignments/submitPositionTransfer.
+// Five static facade actions, one command per request:
+//   Positions/getPositionBoard, Positions/getMachines,
+//   Positions/submitPositionCreate, Positions/submitMachineChange,
+//   PositionAssignments/submitPositionTransfer.
 // Every call carries AccessToken + DeviceID like ZUI_PP_OPALLOC. SAP treats a
 // repeated command that already took effect as SUCCESS, so a retry after a
 // timeout is safe.
@@ -12,6 +13,7 @@ import 'package:dio/dio.dart';
 
 import '../../core/sync/sync_failure.dart';
 import '../../core/utils/device_info.dart';
+import '../../core/auth/session_refresh.dart';
 import '../../domain/entities/worker_position.dart';
 import 'odata_error.dart';
 import 'sap_odata_client.dart';
@@ -36,8 +38,22 @@ abstract final class PositionFieldLimits {
 /// the screen without a network.
 abstract interface class PositionApi {
   /// Active positions and who sits there. An empty [workCenter] returns every
-  /// Work Center the account may manage.
-  Future<PositionBoard> getBoard({String workCenter = ''});
+  /// Work Center the account may manage. A [workerId] narrows the answer to
+  /// the seat that worker holds (none: an empty board, not an error), so a
+  /// screen that needs one worker's seat does not download the whole board
+  /// (SAP since 2026-11-13). SAP treats every parameter of the action as
+  /// mandatory, so WorkerID is always sent, empty for the whole board; an
+  /// older backend rejects the parameter it does not know.
+  Future<PositionBoard> getBoard({
+    String workCenter = '',
+    String workerId = '',
+  });
+
+  /// Every active machine of the catalog, with the position each one is
+  /// attached to. Not filtered by Work Center: picking a machine attached
+  /// elsewhere moves it, or is refused (MACHINE_IN_USE) when that Work Center
+  /// is outside the account's scope, so the supervisor has to see it.
+  Future<MachineCatalog> getMachines();
 
   Future<PositionCommandResult> createPosition({
     required String workCenter,
@@ -49,6 +65,15 @@ abstract interface class PositionApi {
     required String workCenter,
     required String positionId,
     required String machineId,
+  });
+
+  /// Takes the machine off an active position: the position stays active
+  /// without a machine and whoever sits there keeps the seat. Sent as
+  /// submitMachineChange with an empty MachineID (SAP since 2026-11-10; an
+  /// older backend answers INPUT_INVALID).
+  Future<PositionCommandResult> detachMachine({
+    required String workCenter,
+    required String positionId,
   });
 
   Future<PositionCommandResult> transferWorker({
@@ -71,14 +96,27 @@ class SapPositionGateway implements PositionApi {
   }
 
   @override
-  Future<PositionBoard> getBoard({String workCenter = ''}) async {
+  Future<PositionBoard> getBoard({
+    String workCenter = '',
+    String workerId = '',
+  }) async {
     final normalized = _code(workCenter);
     _checkLength(normalized, PositionFieldLimits.workCenter);
+    final worker = _code(workerId);
+    _checkLength(worker, PositionFieldLimits.workerId);
     final body = await _call(_kPositionSet, 'getPositionBoard', {
       'WorkCenter': normalized,
+      // Always sent, empty for the whole board: SAP answers 400 "No value
+      // for mandatory parameter" when a parameter of the action is missing.
+      'WorkerID': worker,
     });
     return PositionBoard.fromJson(body);
   }
+
+  @override
+  Future<MachineCatalog> getMachines() async => MachineCatalog.fromJson(
+    await _call(_kPositionSet, 'getMachines', const {}),
+  );
 
   @override
   Future<PositionCommandResult> createPosition({
@@ -118,6 +156,21 @@ class SapPositionGateway implements PositionApi {
   }
 
   @override
+  Future<PositionCommandResult> detachMachine({
+    required String workCenter,
+    required String positionId,
+  }) async {
+    final params = {
+      'WorkCenter': _required(workCenter, PositionFieldLimits.workCenter),
+      'PositionID': _required(positionId, PositionFieldLimits.positionId),
+      'MachineID': '',
+    };
+    return PositionCommandResult.fromJson(
+      await _call(_kPositionSet, 'submitMachineChange', params),
+    );
+  }
+
+  @override
   Future<PositionCommandResult> transferWorker({
     required String workCenter,
     required String positionId,
@@ -140,14 +193,26 @@ class SapPositionGateway implements PositionApi {
     String action,
     Map<String, String> params,
   ) async {
+    final usedToken = session.accessToken;
     try {
       return await _callOnce(entitySet, action, params);
     } on SapSessionInvalidatedException {
       rethrow;
     } catch (error) {
       if (classifySyncError(error).kind != SyncFailureKind.auth) rethrow;
-      if (!await session.refreshSession()) rethrow;
-      return _callOnce(entitySet, action, params);
+      final outcome = await session.refreshSession(staleAccessToken: usedToken);
+      switch (outcome) {
+        case SessionRefreshOutcome.refreshed:
+          return _callOnce(entitySet, action, params);
+        case SessionRefreshOutcome.unavailable:
+          // Not an expired session: SAP was not reachable for the refresh.
+          throw const SessionRefreshUnavailableException(
+            'Chưa làm mới được phiên SAP. Sẽ tự động thử lại.',
+          );
+        case SessionRefreshOutcome.rejected:
+        case SessionRefreshOutcome.skipped:
+          rethrow;
+      }
     }
   }
 
@@ -167,10 +232,10 @@ class SapPositionGateway implements PositionApi {
     _ensureSessionCurrent(sessionGeneration, accessToken);
 
     try {
-      await client.fetchCsrfToken();
-      _ensureSessionCurrent(sessionGeneration, accessToken);
-      final response = await client.dio.post(
+      // CSRF token reuse and the one resend on 403 live in postWithCsrf.
+      final response = await client.postWithCsrf(
         '$entitySet/$_kStaticActionBinding.$action',
+        guard: () => _ensureSessionCurrent(sessionGeneration, accessToken),
         data: {
           'AccessToken': accessToken,
           'DeviceID': DeviceInfoHelper.deviceId,

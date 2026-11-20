@@ -18,7 +18,7 @@ Future<List<Assignment>?> pickConfirmationGroup(
   // operation's full totals; a group needs at least one open allocation.
   final groups = groupConfirmationTargets(
     targets,
-  ).where((group) => group.any((target) => target.canRecord)).toList();
+  ).where((group) => group.any((target) => target.canConfirm)).toList();
   if (groups.isEmpty) return null;
   if (groups.length == 1) return groups.single;
   return showModalBottomSheet<List<Assignment>>(
@@ -77,7 +77,7 @@ class _GroupTile extends StatelessWidget {
       ),
       subtitle: Text(
         'LSX ${total.productionOrder} · CĐ ${total.operation}$lots\n'
-        'Còn ${formatQuantity(total.remaining, uom: uom)} $uom · '
+        'Còn ${formatQuantity(total.groupRemaining, uom: uom)} $uom · '
         'Đã giao ${formatQuantity(total.assignedQuantity, uom: uom)} $uom',
       ),
       isThreeLine: true,

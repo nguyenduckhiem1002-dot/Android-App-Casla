@@ -63,8 +63,9 @@ enum SyncStatus {
 
 /// Vai trò người dùng (Spec 2)
 /// Chỉ hai vai trò này tồn tại: `parseAuthorization` suy ra vai trò từ FuncID
-/// SAP trả về, và nó chỉ có thể trả về `supervisor` (có `PP_INITIAL_ASSIGN`)
-/// hoặc `worker` (chỉ có quyền xem lịch sử).
+/// SAP trả về, và nó chỉ có thể trả về `supervisor` (có ít nhất một trong
+/// `PP_INITIAL_ASSIGN` / `PP_CONFIRM` / `PP_RECALL`, kèm `PP_HIST_TEAM`) hoặc
+/// `worker` (chỉ có quyền xem lịch sử).
 enum UserRole {
   worker,
   supervisor;
@@ -82,16 +83,26 @@ enum UserRole {
 /// Ma trận quyền chi tiết (Spec 2.1)
 ///
 /// Đây là các cổng chặn màn hình *nội bộ app*, không phải FuncID của SAP.
-/// SAP chỉ phát hành ba FuncID (`PP_INITIAL_ASSIGN`, `PP_HIST_SELF`,
-/// `PP_HIST_TEAM`); `AuthRepositoryImpl.parseAuthorization` đọc ba mã đó rồi
-/// suy ra tập quyền dưới đây từ vai trò. Trước kia enum này còn mang một
+/// `AuthRepositoryImpl.parseAuthorization` đọc các FuncID SAP trả về
+/// (`PP_INITIAL_ASSIGN`, `PP_CONFIRM`, `PP_RECALL`, `PP_HIST_SELF`,
+/// `PP_HIST_TEAM`, `PP_POS_MANAGE`) rồi suy ra tập quyền dưới đây. Trước kia enum này còn mang một
 /// getter `code` sinh ra các chuỗi kiểu `ASSIGN_QUANTITY` để so khớp với
 /// FuncID — chúng chưa bao giờ tồn tại trong `ztb_mob_func`, và việc so khớp
 /// đó chính là thứ đã xếp nhầm tài khoản quản lý thành công nhân. Getter đã
 /// bị bỏ để không ai vô tình dùng lại.
 enum Permission {
+  // Ba quyền thao tác chính, ánh xạ 1-1 với FuncID mà `zbp_r_pp_opalloc`
+  // kiểm tra trên từng action: PP_INITIAL_ASSIGN (giao), PP_CONFIRM (xác nhận),
+  // PP_RECALL (thu hồi). Có một trong ba là vào được Tổng quan; mỗi quyền chỉ
+  // mở menu/nút của chính nó.
   assignQuantity,
+  confirmProduction,
   recallAssignment,
+  // PP_RECALL_NOPASS, chỉ có nghĩa khi đi kèm PP_RECALL: quản lý được thu hồi
+  // toàn bộ phần còn lại của công nhân mà không cần mật khẩu công nhân (công
+  // nhân nghỉ, bàn giao cho người khác). `zbp_r_pp_opalloc` nhận WorkerPassword
+  // rỗng ở `recall` chỉ khi tài khoản có function này.
+  recallWithoutPassword,
   viewTeamProduction,
   viewEmployeeHistory,
   viewSyncStatus,

@@ -26,6 +26,11 @@ class OperationAccessResult {
   final double transferredOutQuantity;
   final double unassignedQuantity;
 
+  /// Sum of the positive worker balances only: what can still be confirmed.
+  /// [remainingQuantity] is the plain net and may hide an over-confirmation
+  /// behind another worker's open balance (SAP decision 2026-10-28).
+  final double openQuantity;
+
   const OperationAccessResult({
     required this.isAllowed,
     this.errorCode = '',
@@ -49,6 +54,7 @@ class OperationAccessResult {
     this.transferredInQuantity = 0,
     this.transferredOutQuantity = 0,
     this.unassignedQuantity = 0,
+    this.openQuantity = 0,
   });
 
   factory OperationAccessResult.fromJson(Map<String, dynamic> json) {
@@ -90,6 +96,7 @@ class OperationAccessResult {
       transferredInQuantity: number(json['TransferredInQuantity']),
       transferredOutQuantity: number(json['TransferredOutQuantity']),
       unassignedQuantity: number(json['UnassignedQuantity']),
+      openQuantity: number(json['OpenQuantity']),
     );
   }
 }

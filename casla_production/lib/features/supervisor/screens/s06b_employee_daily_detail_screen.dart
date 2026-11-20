@@ -18,11 +18,10 @@ import '../../../domain/policies/history_work_context.dart';
 import '../../../domain/policies/unit_totals.dart';
 import '../../../presentation/widgets/worker_totals_header.dart';
 import '../../../domain/policies/local_history_overlay.dart';
-import '../../../domain/policies/production_math.dart';
+import '../../../domain/policies/seat_balance.dart';
 import '../../../main.dart';
 import '../../../presentation/widgets/casla_skeleton.dart';
 import '../../../presentation/widgets/stale_history_banner.dart';
-import '../../../presentation/widgets/status_chip.dart';
 
 /// SAP rejects a history window that extends beyond the current business day.
 /// Keep this pure so preset ranges can be regression-tested without mounting
@@ -75,7 +74,6 @@ class _DailyAssignmentChild {
   final String status;
   final DateTime occurredAt;
   final String transactionType;
-  final Assignment? localAssignment;
 
   const _DailyAssignmentChild({
     required this.quantity,
@@ -84,7 +82,6 @@ class _DailyAssignmentChild {
     required this.status,
     required this.occurredAt,
     this.transactionType = 'INITIAL_ASSIGN',
-    this.localAssignment,
   });
 }
 
@@ -154,8 +151,6 @@ class _DailyAssignmentGroupData {
 
 class _S06bEmployeeDailyDetailScreenState
     extends ConsumerState<S06bEmployeeDailyDetailScreen> {
-  bool get _showLegacySplitActivitySections => false;
-
   late DateTime _dateFrom;
   late DateTime _dateTo;
   late Stream<WorkHistoryResult> _historyStream;
@@ -825,7 +820,7 @@ class _S06bEmployeeDailyDetailScreenState
             ),
             const SizedBox(height: 2),
             Text(
-              'Bộ phận: $workerTeam',
+              'Tổ: $workerTeam',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
@@ -1084,6 +1079,14 @@ class _S06bEmployeeDailyDetailScreenState
                           // 3. Figures per unit. "Tất cả" in the header is
                           // their sum, whatever the unit.
                           final List<UnitTotals> unitTotals;
+                          // The seat-settled balance the cards below show,
+                          // so the header cannot say 0 while an operation
+                          // still offers 500. A cut report cannot be
+                          // replayed; SAP's own figure stands then.
+                          final settledRemaining =
+                              scopedResult == null || scopedResult.isTruncated
+                              ? null
+                              : settledRemainingByUnit(workerSapEntries);
                           if (sapWorkerRows.isNotEmpty) {
                             unitTotals = workerUnitTotalsFromSap(
                               sapRows: sapWorkerRows,
@@ -1092,12 +1095,19 @@ class _S06bEmployeeDailyDetailScreenState
                                 sap: scopedResult,
                                 rows: _ledgerRows,
                               ),
+                              settledRemaining: settledRemaining,
                             );
                           } else {
                             // No SAP summary: add up the rows themselves.
                             final byUnit = <String, List<double>>{};
                             List<double> acc(String unit) =>
                                 byUnit[unit.trim()] ??= [0, 0, 0, 0];
+                            // This device's rows apart from SAP's: the
+                            // seat figure replaces only the SAP part.
+                            final localByUnit = <String, double>{};
+                            void localDelta(String unit, double delta) =>
+                                localByUnit[unit.trim()] =
+                                    (localByUnit[unit.trim()] ?? 0) + delta;
                             for (final a in [
                               ...sapInitialAssigns,
                               // Opening balance: only the From day's.
@@ -1121,20 +1131,29 @@ class _S06bEmployeeDailyDetailScreenState
                               t[1] += a.completedQuantity;
                               t[2] += a.recalledQuantity;
                               t[3] += a.defectQuantity;
+                              localDelta(
+                                a.uom,
+                                a.assignedQuantity -
+                                    a.completedQuantity -
+                                    a.recalledQuantity -
+                                    a.defectQuantity,
+                              );
                             }
                             // Local production records if not already counted.
                             if (sapConfirms.isEmpty &&
                                 visibleLocalAssignments.isEmpty) {
                               for (final r in productionRecords) {
-                                acc(
-                                      r['unit_of_measure']?.toString() ?? '',
-                                    )[1] +=
+                                final unit =
+                                    r['unit_of_measure']?.toString() ?? '';
+                                final quantity =
                                     (r['quantity'] as num?)?.toDouble() ?? 0.0;
-                                acc(
-                                  r['unit_of_measure']?.toString() ?? '',
-                                )[3] += (r['defect_quantity'] as num?)
+                                final defect =
+                                    (r['defect_quantity'] as num?)
                                         ?.toDouble() ??
                                     0.0;
+                                acc(unit)[1] += quantity;
+                                acc(unit)[3] += defect;
+                                localDelta(unit, -(quantity + defect));
                               }
                             }
                             unitTotals = [
@@ -1146,32 +1165,15 @@ class _S06bEmployeeDailyDetailScreenState
                                   completed: t[1],
                                   defect: t[3],
                                   recalled: t[2],
-                                  remaining: t[0] - t[2] - t[1] - t[3],
+                                  remaining: switch (settledRemaining?[unit
+                                      .toUpperCase()]) {
+                                    final settled? =>
+                                      settled + (localByUnit[unit] ?? 0),
+                                    null => t[0] - t[2] - t[1] - t[3],
+                                  },
                                 ),
                             ]..sort((a, b) => b.given.compareTo(a.given));
                           }
-                          // The legacy sections below show one unit.
-                          final uom =
-                              unitTotals.isNotEmpty &&
-                                  unitTotals.first.unit.isNotEmpty
-                              ? unitTotals.first.unit
-                              : (widget.worker['uom'] as String?) ?? 'cái';
-
-                          final hasNoAssignments =
-                              visibleLocalAssignments.isEmpty &&
-                              sapInitialAssigns.isEmpty &&
-                              sapReassigns.isEmpty;
-                          final assignmentGroups = _groupAssignments(
-                            sapInitialAssigns,
-                            visibleLocalAssignments,
-                          );
-                          final confirmationGroups = _groupHistoryRows(
-                            sapConfirms,
-                            productionRecords,
-                            isRecall: false,
-                          );
-                          final hasNoConfirms =
-                              productionRecords.isEmpty && sapConfirms.isEmpty;
 
                           return ListView(
                             padding: const EdgeInsets.all(18),
@@ -1194,345 +1196,6 @@ class _S06bEmployeeDailyDetailScreenState
                                     sapSnapshot.hasError && sapResult == null,
                                 productionError: prodSnapshot.hasError,
                               ),
-                              if (_showLegacySplitActivitySections) ...[
-                                // Legacy split sections kept below temporarily
-                                // for reference while the unified card is rolled out.
-                                // Section: Phân công
-                                Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Text(
-                                      _isSameDay
-                                          ? 'Phân công trong ngày'
-                                          : 'Phân công theo kỳ',
-                                      style: const TextStyle(
-                                        fontFamily: 'Manrope',
-                                        fontWeight: FontWeight.w800,
-                                        fontSize: 14,
-                                        color: CaslaColors.primaryNavy,
-                                      ),
-                                    ),
-                                    Text(
-                                      '(${visibleLocalAssignments.length + sapInitialAssigns.length})',
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        color: CaslaColors.muted,
-                                        fontFamily: 'monospace',
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 10),
-
-                                if (hasNoAssignments)
-                                  Container(
-                                    padding: const EdgeInsets.all(16),
-                                    decoration: BoxDecoration(
-                                      color: CaslaColors.surface,
-                                      border: Border.all(
-                                        color: CaslaColors.line,
-                                      ),
-                                      borderRadius: BorderRadius.circular(14),
-                                    ),
-                                    child: Center(
-                                      child: Text(
-                                        _isSameDay
-                                            ? 'Không có phân công nào trong ngày này.'
-                                            : 'Không có phân công nào trong khoảng thời gian này.',
-                                        style: const TextStyle(
-                                          color: CaslaColors.muted,
-                                          fontSize: 13,
-                                        ),
-                                      ),
-                                    ),
-                                  )
-                                else ...[
-                                  _buildAssignmentGroups(assignmentGroups),
-                                ],
-
-                                const SizedBox(height: 20),
-
-                                // Section: Lịch sử xác nhận hoàn thành
-                                _buildRecallHistory(sapRecalls),
-                                const SizedBox(height: 20),
-                                Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    const Text(
-                                      'Lịch sử xác nhận hoàn thành',
-                                      style: TextStyle(
-                                        fontFamily: 'Manrope',
-                                        fontWeight: FontWeight.w800,
-                                        fontSize: 14,
-                                        color: CaslaColors.primaryNavy,
-                                      ),
-                                    ),
-                                    Text(
-                                      '(${productionRecords.length + sapConfirms.length})',
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        color: CaslaColors.muted,
-                                        fontFamily: 'monospace',
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 10),
-
-                                if ((sapSnapshot.hasError &&
-                                        sapResult == null) ||
-                                    (prodSnapshot.hasError &&
-                                        sapSnapshot.hasError))
-                                  Container(
-                                    padding: const EdgeInsets.all(16),
-                                    decoration: BoxDecoration(
-                                      color: CaslaColors.dangerBg,
-                                      border: Border.all(
-                                        color: CaslaColors.danger.withValues(
-                                          alpha: 0.35,
-                                        ),
-                                      ),
-                                      borderRadius: BorderRadius.circular(14),
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        Icon(
-                                          Icons.history_toggle_off_outlined,
-                                          color: CaslaColors.danger,
-                                        ),
-                                        SizedBox(width: 10),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              const Text(
-                                                'Chưa tải được lịch sử sản lượng. Danh sách phân công phía trên vẫn dùng được.',
-                                                style: TextStyle(
-                                                  color: CaslaColors.danger,
-                                                  fontSize: 12.5,
-                                                  height: 1.4,
-                                                ),
-                                              ),
-                                              if (sapSnapshot.error
-                                                  is SapBusinessError) ...[
-                                                const SizedBox(height: 4),
-                                                Text(
-                                                  'Mã lỗi: ${(sapSnapshot.error! as SapBusinessError).code}',
-                                                  style: const TextStyle(
-                                                    color: CaslaColors.danger,
-                                                    fontFamily: 'monospace',
-                                                    fontSize: 11,
-                                                    fontWeight: FontWeight.w700,
-                                                  ),
-                                                ),
-                                                const SizedBox(height: 2),
-                                                Text(
-                                                  friendlySapErrorMessage(
-                                                    sapSnapshot.error!,
-                                                  ),
-                                                  style: const TextStyle(
-                                                    color: CaslaColors.danger,
-                                                    fontSize: 12,
-                                                    height: 1.35,
-                                                  ),
-                                                ),
-                                              ],
-                                            ],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  )
-                                else if (hasNoConfirms)
-                                  Container(
-                                    padding: const EdgeInsets.all(16),
-                                    decoration: BoxDecoration(
-                                      color: CaslaColors.surface,
-                                      border: Border.all(
-                                        color: CaslaColors.line,
-                                      ),
-                                      borderRadius: BorderRadius.circular(14),
-                                    ),
-                                    child: const Center(
-                                      child: Text(
-                                        'Chưa có lượt xác nhận sản lượng nào.',
-                                        style: TextStyle(
-                                          color: CaslaColors.muted,
-                                          fontSize: 13,
-                                        ),
-                                      ),
-                                    ),
-                                  )
-                                else ...[
-                                  _buildTransactionGroups(
-                                    confirmationGroups,
-                                    isRecall: false,
-                                  ),
-                                  if (confirmationGroups.isEmpty) ...[
-                                    // SAP Confirmations
-                                    for (final e in sapConfirms)
-                                      Container(
-                                        margin: const EdgeInsets.only(
-                                          bottom: 8,
-                                        ),
-                                        padding: const EdgeInsets.all(12),
-                                        decoration: BoxDecoration(
-                                          color: CaslaColors.surface,
-                                          border: Border.all(
-                                            color: CaslaColors.line,
-                                          ),
-                                          borderRadius: BorderRadius.circular(
-                                            12,
-                                          ),
-                                        ),
-                                        child: Row(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.spaceBetween,
-                                          children: [
-                                            Expanded(
-                                              child: Column(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                children: [
-                                                  Text(
-                                                    '${e.productionOrder} · CĐ: ${e.operation}',
-                                                    maxLines: 1,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
-                                                    style: const TextStyle(
-                                                      fontWeight:
-                                                          FontWeight.w700,
-                                                      fontSize: 13,
-                                                      color: CaslaColors
-                                                          .primaryNavy,
-                                                    ),
-                                                  ),
-                                                  Text(
-                                                    '${DateFormat('dd/MM HH:mm').format(e.executionDate)} · Trạng thái: ${e.transactionStatus}',
-                                                    maxLines: 1,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
-                                                    style: const TextStyle(
-                                                      fontFamily: 'monospace',
-                                                      fontSize: 11,
-                                                      color: CaslaColors.muted,
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                            const SizedBox(width: 12),
-                                            Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.end,
-                                              children: [
-                                                _buildHistoryStatusBadge(
-                                                  label:
-                                                      e.transactionStatus ==
-                                                          'POSTED'
-                                                      ? 'ĐÃ GHI SỔ'
-                                                      : _historyStatusLabel(
-                                                          e.transactionStatus,
-                                                        ),
-                                                  isRecall: false,
-                                                ),
-                                                const SizedBox(height: 6),
-                                                Text(
-                                                  '+${formatQuantity(e.quantity, uom: e.unitOfMeasure)} ${e.unitOfMeasure}',
-                                                  style: const TextStyle(
-                                                    fontFamily: 'monospace',
-                                                    fontWeight: FontWeight.w700,
-                                                    fontSize: 14,
-                                                    color: CaslaColors.success,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    // Local production records
-                                    for (final r in productionRecords)
-                                      Container(
-                                        margin: const EdgeInsets.only(
-                                          bottom: 8,
-                                        ),
-                                        padding: const EdgeInsets.all(12),
-                                        decoration: BoxDecoration(
-                                          color: CaslaColors.surface,
-                                          border: Border.all(
-                                            color: CaslaColors.line,
-                                          ),
-                                          borderRadius: BorderRadius.circular(
-                                            12,
-                                          ),
-                                        ),
-                                        child: Row(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.spaceBetween,
-                                          children: [
-                                            Expanded(
-                                              child: Column(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                children: [
-                                                  Text(
-                                                    r['ten_sp'] ?? '',
-                                                    maxLines: 2,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
-                                                    style: const TextStyle(
-                                                      fontWeight:
-                                                          FontWeight.w700,
-                                                      fontSize: 13,
-                                                      color: CaslaColors
-                                                          .primaryNavy,
-                                                    ),
-                                                  ),
-                                                  Text(
-                                                    '${DateFormat('dd/MM HH:mm').format(DateTime.fromMillisecondsSinceEpoch(r['occurred_at_utc'] ?? 0))} · Người xác nhận: ${r['nguoi_xac_nhan']}',
-                                                    maxLines: 1,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
-                                                    style: const TextStyle(
-                                                      fontFamily: 'monospace',
-                                                      fontSize: 11,
-                                                      color: CaslaColors.muted,
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                            const SizedBox(width: 12),
-                                            Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.end,
-                                              children: [
-                                                _buildHistoryStatusBadge(
-                                                  label: 'ĐÃ GHI SỔ',
-                                                  isRecall: false,
-                                                ),
-                                                const SizedBox(height: 6),
-                                                Text(
-                                                  '+${formatQuantity((r['quantity'] as num).toDouble(), uom: uom)} $uom',
-                                                  style: const TextStyle(
-                                                    fontFamily: 'monospace',
-                                                    fontWeight: FontWeight.w700,
-                                                    fontSize: 14,
-                                                    color: CaslaColors.success,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                  ],
-                                ],
-                              ],
                             ],
                           );
                         },
@@ -1720,7 +1383,6 @@ class _S06bEmployeeDailyDetailScreenState
               : assignment.syncStatus.label,
           occurredAt: occurredAt,
           transactionType: 'INITIAL_ASSIGN',
-          localAssignment: assignment,
         ),
       );
     }
@@ -2157,22 +1819,10 @@ class _S06bEmployeeDailyDetailScreenState
       CaslaColors.awaitingBg,
     );
     if (group.children.isNotEmpty) {
-      // Only posted allocations can be worked off; held confirmations and
-      // recalls already reserve their quantity.
-      final remaining = ProductionMath.calculateRemaining(
-        ProductionMath.calculateEffectiveAssigned(
-          (totals['INITIAL_ASSIGN'] ?? 0) + (totals['REASSIGN'] ?? 0),
-          (totals['RECALL'] ?? 0) + (totals['RECALL_HELD'] ?? 0),
-        ),
-        (totals['CONFIRM'] ?? 0) +
-            (totals['CONFIRM_HELD'] ?? 0) +
-            (totals['CONFIRM_DEFECT'] ?? 0) +
-            (totals['CONFIRM_DEFECT_HELD'] ?? 0),
-      );
       badges.add(
         _activityQuantityBadge(
           'Còn lại',
-          remaining,
+          _groupSeatRemaining(group),
           group.children.first.uom,
           CaslaColors.pending,
           CaslaColors.pendingBg,
@@ -2261,19 +1911,56 @@ class _S06bEmployeeDailyDetailScreenState
     );
   }
 
+  /// The seat's balance replayed in posting order: an over-confirmation
+  /// clears what was given before it, a later allocation opens anew. Held
+  /// confirmations and recalls already reserve their quantity. Rejected rows
+  /// never counted.
+  double _groupSeatRemaining(_DailyAssignmentGroup group) {
+    final events = <SeatEvent>[];
+    for (final child in group.children) {
+      if (_historyStatusLabel(child.status.toUpperCase()) ==
+          _rejectedStatusLabel) {
+        continue;
+      }
+      final delta = seatEffect(
+        transactionType: child.transactionType,
+        quantity: child.quantity,
+        defectQuantity: child.defectQuantity,
+      );
+      if (delta == null) continue;
+      events.add(SeatEvent(at: child.occurredAt, delta: delta));
+    }
+    return settleSeatBalance(events);
+  }
+
   /// The QR confirmation flow lands on the employee activity view. Keep the
   /// primary action visible on the group card so the supervisor does not have
   /// to expand a card and discover an assignment row before confirming.
   ///
   /// Resolve the durable target from the scoped ledger before navigating.
   Widget _buildActivityConfirmAction(_DailyAssignmentGroup group) {
+    // Confirming is its own SAP function (PP_CONFIRM); an account that only
+    // assigns or recalls still sees the activity, without this action.
+    final canConfirm =
+        ref
+            .read(appStateProvider)
+            .currentSession
+            ?.hasPermission(Permission.confirmProduction) ==
+        true;
     // Carried-over work (REASSIGN) is confirmable as well: SAP counts it and
     // today's top-ups as one group.
-    if (!group.children.any(
-      (child) =>
-          child.transactionType == 'INITIAL_ASSIGN' ||
-          (child.transactionType == 'REASSIGN' && child.quantity > 0),
-    )) {
+    if (!canConfirm ||
+        !group.children.any(
+          (child) =>
+              child.transactionType == 'INITIAL_ASSIGN' ||
+              (child.transactionType == 'REASSIGN' && child.quantity > 0),
+        )) {
+      return const SizedBox.shrink();
+    }
+    // A seat with nothing left (fully confirmed, recalled, or
+    // over-confirmed) has no production to post: the button would only open
+    // a form that cannot be submitted, so it is hidden rather than disabled.
+    if (_groupSeatRemaining(group) <= 0) {
       return const SizedBox.shrink();
     }
 
@@ -2333,7 +2020,7 @@ class _S06bEmployeeDailyDetailScreenState
           (widget.worker['work_context_id'] != null &&
               widget.worker['work_context_id'] != work.workId)) {
         throw const FormatException(
-          'Chọn đúng ngày, ca và bộ phận của phân công trước khi xác nhận.',
+          'Chọn đúng ngày, ca và tổ của phân công trước khi xác nhận.',
         );
       }
       final history = await loadConfirmationHistory(
@@ -2360,7 +2047,7 @@ class _S06bEmployeeDailyDetailScreenState
         includeSettled: true,
       );
       if (!mounted || !scopeCurrent()) return;
-      if (!targets.any((target) => target.canRecord)) {
+      if (!targets.any((target) => target.canConfirm)) {
         throw const FormatException(
           'Phân công không còn sản lượng cần xác nhận trong ca đang chọn.',
         );
@@ -2372,7 +2059,6 @@ class _S06bEmployeeDailyDetailScreenState
         extra: <String, dynamic>{
           'assignment': allocations.first,
           'group': allocations,
-          'openConfirmation': true,
         },
       );
     } catch (error, stackTrace) {
@@ -2529,489 +2215,6 @@ class _S06bEmployeeDailyDetailScreenState
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildAssignmentGroups(List<_DailyAssignmentGroup> groups) {
-    final children = <Widget>[];
-    DateTime? lastDate;
-    for (final group in groups) {
-      final date = _dateOnly(group.date);
-      if (lastDate == null || !date.isAtSameMomentAs(lastDate)) {
-        children.add(
-          Padding(
-            padding: const EdgeInsets.only(top: 4, bottom: 8),
-            child: Text(
-              DateFormat('dd/MM/yyyy').format(group.date),
-              style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-                color: CaslaColors.primaryNavy,
-              ),
-            ),
-          ),
-        );
-        lastDate = date;
-      }
-      children.add(
-        Container(
-          margin: const EdgeInsets.only(bottom: 10),
-          decoration: BoxDecoration(
-            color: CaslaColors.surface,
-            border: Border.all(color: CaslaColors.line),
-            borderRadius: BorderRadius.circular(14),
-          ),
-          clipBehavior: Clip.antiAlias,
-          // ExpansionTile's ListTile paints its ink on a Material surface;
-          // keep that surface inside the rounded card so taps remain visible.
-          child: Material(
-            color: CaslaColors.surface,
-            clipBehavior: Clip.antiAlias,
-            child: Theme(
-              data: Theme.of(context).copyWith(
-                dividerColor: Colors.transparent,
-                splashColor: CaslaColors.navy100,
-              ),
-              child: ExpansionTile(
-                initiallyExpanded: true,
-                tilePadding: const EdgeInsets.fromLTRB(14, 6, 10, 6),
-                childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
-                leading: const Icon(
-                  Icons.account_tree_outlined,
-                  color: CaslaColors.primaryNavy,
-                  size: 20,
-                ),
-                title: _buildAssignmentGroupSummary(group),
-                children: [
-                  for (final child in group.children)
-                    _buildAssignmentChild(group, child),
-                ],
-              ),
-            ),
-          ),
-        ),
-      );
-    }
-    return Column(children: children);
-  }
-
-  Widget _buildTransactionGroups(
-    List<_DailyAssignmentGroup> groups, {
-    required bool isRecall,
-  }) {
-    final children = <Widget>[];
-    DateTime? lastDate;
-    for (final group in groups) {
-      final date = _dateOnly(group.date);
-      if (lastDate == null || !date.isAtSameMomentAs(lastDate)) {
-        children.add(
-          Padding(
-            padding: const EdgeInsets.only(top: 4, bottom: 8),
-            child: Text(
-              DateFormat('dd/MM/yyyy').format(group.date),
-              style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-                color: CaslaColors.primaryNavy,
-              ),
-            ),
-          ),
-        );
-        lastDate = date;
-      }
-      children.add(
-        Container(
-          margin: const EdgeInsets.only(bottom: 10),
-          decoration: BoxDecoration(
-            color: CaslaColors.surface,
-            border: Border.all(color: CaslaColors.line),
-            borderRadius: BorderRadius.circular(14),
-          ),
-          clipBehavior: Clip.antiAlias,
-          child: Material(
-            color: CaslaColors.surface,
-            clipBehavior: Clip.antiAlias,
-            child: Theme(
-              data: Theme.of(context).copyWith(
-                dividerColor: Colors.transparent,
-                splashColor: isRecall
-                    ? CaslaColors.dangerBg
-                    : CaslaColors.navy100,
-              ),
-              child: ExpansionTile(
-                initiallyExpanded: true,
-                tilePadding: const EdgeInsets.fromLTRB(14, 6, 10, 6),
-                childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
-                leading: Icon(
-                  isRecall ? Icons.undo_rounded : Icons.task_alt_outlined,
-                  color: isRecall
-                      ? CaslaColors.danger
-                      : CaslaColors.primaryNavy,
-                  size: 20,
-                ),
-                title: _buildAssignmentGroupSummary(group),
-                children: [
-                  for (final child in group.children)
-                    _buildTransactionChild(child, isRecall: isRecall),
-                ],
-              ),
-            ),
-          ),
-        ),
-      );
-    }
-    return Column(children: children);
-  }
-
-  Widget _buildTransactionChild(
-    _DailyAssignmentChild child, {
-    required bool isRecall,
-  }) {
-    final status = child.status.toUpperCase();
-    final statusLabel = isRecall
-        ? switch (status) {
-            'ĐÃ GHI SỔ' || 'SYNCED' || 'POSTED' => 'ĐÃ THU HỒI',
-            'CẦN XÁC MINH' || 'NEEDS_VERIFICATION' => 'CẦN XÁC MINH',
-            'SAP TỪ CHỐI' || 'FAILED' => 'SAP TỪ CHỐI',
-            _ => 'THU HỒI',
-          }
-        : _historyStatusLabel(status);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 7),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              '${isRecall ? 'Thu hồi' : 'Hoàn thành'}: '
-              '${formatQuantity(child.quantity, uom: child.uom)} ${child.uom}',
-              style: TextStyle(
-                fontFamily: 'Manrope',
-                fontWeight: FontWeight.w700,
-                fontSize: 13,
-                color: isRecall ? CaslaColors.danger : CaslaColors.primaryNavy,
-              ),
-            ),
-          ),
-          _buildHistoryStatusBadge(label: statusLabel, isRecall: isRecall),
-          const SizedBox(width: 8),
-          Text(
-            DateFormat('HH:mm').format(child.occurredAt),
-            style: const TextStyle(
-              fontFamily: 'monospace',
-              fontSize: 11,
-              color: CaslaColors.muted,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildAssignmentGroupSummary(_DailyAssignmentGroup group) {
-    final operationName = group.operationName.isEmpty
-        ? 'Chưa có tên công đoạn'
-        : group.operationName;
-    final product = group.productName.isEmpty
-        ? 'Chưa có tên hàng'
-        : group.productName;
-    final productCode = group.productCode.isEmpty ? '—' : group.productCode;
-    return Padding(
-      padding: const EdgeInsets.only(top: 5, bottom: 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            operationName,
-            style: const TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w800,
-              color: CaslaColors.primaryNavy,
-              height: 1.25,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'LSX ${group.productionOrder}  ·  CĐ ${group.operation}',
-            maxLines: 1,
-            overflow: TextOverflow.clip,
-            style: const TextStyle(
-              fontFamily: 'monospace',
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-              color: CaslaColors.muted,
-            ),
-          ),
-          const SizedBox(height: 10),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            decoration: BoxDecoration(
-              color: CaslaColors.navy100,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: CaslaColors.line),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildAssignmentInfoLine('Tên hàng', product),
-                const SizedBox(height: 5),
-                _buildAssignmentInfoLine(
-                  'Mã hàng',
-                  productCode,
-                  monospace: true,
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildAssignmentInfoLine(
-    String label,
-    String value, {
-    bool monospace = false,
-  }) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: 58,
-          child: Text(
-            label,
-            style: const TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-              color: CaslaColors.muted,
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            value,
-            style: TextStyle(
-              fontFamily: monospace ? 'monospace' : null,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: CaslaColors.navy900,
-              height: 1.3,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildAssignmentChild(
-    _DailyAssignmentGroup group,
-    _DailyAssignmentChild child,
-  ) {
-    final content = Padding(
-      padding: const EdgeInsets.symmetric(vertical: 7),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              'Giao: ${formatQuantity(child.quantity, uom: child.uom)} ${child.uom}',
-              style: const TextStyle(
-                fontFamily: 'Manrope',
-                fontWeight: FontWeight.w700,
-                fontSize: 13,
-                color: CaslaColors.primaryNavy,
-              ),
-            ),
-          ),
-          StatusChip(
-            status: child.status == 'POSTED' ? 'SYNCED' : child.status,
-            label: child.status == 'POSTED' ? 'ĐÃ GHI SỔ' : null,
-          ),
-          const SizedBox(width: 8),
-          Text(
-            DateFormat('HH:mm').format(child.occurredAt),
-            style: const TextStyle(
-              fontFamily: 'monospace',
-              fontSize: 11,
-              color: CaslaColors.muted,
-            ),
-          ),
-        ],
-      ),
-    );
-    final assignment = child.localAssignment;
-    if (assignment == null) return content;
-    return InkWell(
-      onTap: () =>
-          context.push('/supervisor/assignment_detail', extra: assignment),
-      child: content,
-    );
-  }
-
-  Widget _buildRecallHistory(List<WorkHistoryEntry> sapRecalls) {
-    return StreamBuilder<List<Map<String, dynamic>>>(
-      stream: _recallStream,
-      builder: (context, snapshot) {
-        final ids =
-            sapRecalls
-                .map((e) => _normalizeHistoryId(e.transactionUuid))
-                .toSet()
-              ..remove('');
-        final local = (snapshot.data ?? []).where((r) {
-          final inScope = _inWorkScope(
-            r['work_context_id'],
-            plant: r['plant'],
-            workCenter: r['work_center'],
-          );
-          return inScope &&
-              !ids.contains(_normalizeHistoryId(r['sap_id'])) &&
-              !ids.contains(_normalizeHistoryId(r['idempotency_key']));
-        }).toList();
-        final recallGroups = _groupHistoryRows(
-          sapRecalls,
-          local,
-          isRecall: true,
-        );
-        Widget tile(
-          String order,
-          String operation,
-          double quantity,
-          String unit,
-          DateTime time,
-          String status,
-        ) {
-          final normalizedStatus = status.toUpperCase();
-          final badgeLabel = switch (normalizedStatus) {
-            'ĐÃ GHI SỔ' || 'SYNCED' || 'POSTED' => 'ĐÃ THU HỒI',
-            'CẦN XÁC MINH' || 'NEEDS_VERIFICATION' => 'CẦN XÁC MINH',
-            'SAP TỪ CHỐI · KHÔNG TÍNH VÀO SẢN LƯỢNG' ||
-            'FAILED' => 'SAP TỪ CHỐI',
-            _ => 'THU HỒI',
-          };
-          return Container(
-            margin: const EdgeInsets.only(top: 8),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: CaslaColors.surface,
-              border: Border.all(color: CaslaColors.line),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '$order · CĐ: $operation',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w700,
-                          color: CaslaColors.primaryNavy,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        '${DateFormat('dd/MM HH:mm').format(time)} · $status',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: CaslaColors.muted,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    _buildHistoryStatusBadge(label: badgeLabel, isRecall: true),
-                    const SizedBox(height: 6),
-                    Text(
-                      '−${formatQuantity(quantity, uom: unit)} $unit',
-                      style: const TextStyle(
-                        fontFamily: 'monospace',
-                        fontWeight: FontWeight.w700,
-                        fontSize: 14,
-                        color: CaslaColors.danger,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          );
-        }
-
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              'Lịch sử thu hồi (${sapRecalls.length + local.length})',
-              style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w800,
-                color: CaslaColors.primaryNavy,
-              ),
-            ),
-            if (snapshot.connectionState == ConnectionState.waiting &&
-                !snapshot.hasData)
-              const Padding(
-                padding: EdgeInsets.only(top: 8),
-                child: CaslaSkeleton(height: 68, radius: 12),
-              ),
-            if (snapshot.hasError)
-              TextButton(
-                onPressed: () => setState(_resetDataStreams),
-                child: const Text(
-                  'Chưa tải được thu hồi trên thiết bị. Thử lại',
-                ),
-              ),
-            if (sapRecalls.isEmpty &&
-                local.isEmpty &&
-                !snapshot.hasError &&
-                snapshot.connectionState != ConnectionState.waiting)
-              const Padding(
-                padding: EdgeInsets.only(top: 8),
-                child: Text('Chưa có giao dịch thu hồi trong kỳ này.'),
-              ),
-            _buildTransactionGroups(recallGroups, isRecall: true),
-            if (recallGroups.isEmpty) ...[
-              for (final e in sapRecalls)
-                tile(
-                  e.productionOrder,
-                  e.operation,
-                  e.quantity,
-                  e.unitOfMeasure,
-                  e.executionDate,
-                  e.transactionStatus == 'POSTED'
-                      ? 'Đã ghi sổ'
-                      : e.transactionStatus,
-                ),
-              for (final r in local)
-                tile(
-                  r['production_order']?.toString() ?? '',
-                  r['operation']?.toString() ?? '',
-                  (r['quantity'] as num).toDouble(),
-                  r['unit_of_measure']?.toString() ?? '',
-                  DateTime.fromMillisecondsSinceEpoch(
-                    (r['occurred_at_utc'] as num).toInt(),
-                  ),
-                  switch (r['sync_status']) {
-                    'SYNCED' => 'Đã đồng bộ',
-                    'FAILED' => 'SAP từ chối · Không tính vào sản lượng',
-                    'NEEDS_VERIFICATION' => 'Cần xác minh',
-                    _ => 'Chờ đồng bộ',
-                  },
-                ),
-            ],
-          ],
-        );
-      },
     );
   }
 

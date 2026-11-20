@@ -9,20 +9,27 @@ import 'package:go_router/go_router.dart';
 
 import '../../../app/theme/casla_colors.dart';
 import '../../../app/theme/casla_spacing.dart';
+import '../../../presentation/widgets/casla_dialog_header.dart';
 import '../../../core/auth/session_manager.dart';
+import '../../../core/utils/quantity_formatter.dart';
+import '../../../core/utils/shift_execution_validation.dart';
 import '../../../core/utils/vietnamese_text_normalizer.dart';
 import '../../../domain/entities/entities.dart';
+import '../../../domain/entities/enums.dart';
 import '../../../domain/entities/work_history.dart';
 import '../../../domain/policies/grouped_confirmation.dart';
 import '../../../domain/policies/local_history_overlay.dart';
+import '../../../domain/policies/recall_all.dart';
 import '../../../presentation/widgets/account_avatar_button.dart';
 import '../../../presentation/widgets/confirmation_target_picker.dart';
+import '../../../presentation/widgets/recall_all_confirm_dialog.dart';
 import '../../../data/repositories/confirmation_targets.dart';
 import '../../../main.dart';
 import '../../../presentation/widgets/adaptive_barcode_scanner_view.dart';
 import '../../../presentation/widgets/barcode_scan_listener.dart';
 import '../../../presentation/widgets/searchable_picker_sheet.dart';
 import '../../../presentation/widgets/worker_scan_acceptance.dart';
+import 's15_multi_confirm_screen.dart';
 
 class S10ConfirmScanScreen extends ConsumerStatefulWidget {
   const S10ConfirmScanScreen({super.key});
@@ -35,6 +42,7 @@ class S10ConfirmScanScreen extends ConsumerStatefulWidget {
 class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
   bool _isProcessing = false;
   bool _isOpeningWorker = false;
+  bool _isRecallingAll = false;
   String? _errorMessage;
   bool _isLoadingWorkers = true;
   bool _showScanner = false;
@@ -43,6 +51,12 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
   Map<String, dynamic>? _selectedWorker;
   Map<String, String> _cachedWorkContextLabels = const {};
   late final TextEditingController _workerSearchController;
+
+  /// The worker list's own scroll position. The supervisor shell keeps every
+  /// tab alive in one route, so the route's PrimaryScrollController already
+  /// holds another tab's list, and a scrollbar with a visible thumb needs
+  /// exactly one position.
+  final ScrollController _workerListScroll = ScrollController();
   late final AppState _observedState;
   String _loadedScope = '';
   int _workerLoadGeneration = 0;
@@ -81,6 +95,7 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
     _remoteReloadTimer?.cancel();
     unawaited(_remotePostingSubscription?.cancel());
     _workerSearchController.dispose();
+    _workerListScroll.dispose();
     super.dispose();
   }
 
@@ -222,6 +237,31 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
     }
   }
 
+  /// PP_CONFIRM may enter a confirmed quantity. An account with only
+  /// PP_RECALL also uses this tab: its "Xác nhận" sheet then holds only the
+  /// recall entry, and multi-confirm (all quantity entry) is skipped.
+  bool get _canConfirm =>
+      ref
+          .read(appStateProvider)
+          .currentSession
+          ?.hasPermission(Permission.confirmProduction) ==
+      true;
+
+  /// Work done off the line is given and confirmed in one go: that needs
+  /// both the assign and the confirm function.
+  bool get _canConfirmDirectly {
+    final session = ref.read(appStateProvider).currentSession;
+    return session?.hasPermission(Permission.assignQuantity) == true &&
+        session?.hasPermission(Permission.confirmProduction) == true;
+  }
+
+  Future<void> _openDirectConfirmation() async {
+    await context.push('/supervisor/confirm_direct');
+    // The wizard may have given and confirmed work for a worker of this
+    // shift: the list behind it carries the old balances.
+    if (mounted) unawaited(_loadCachedWorkers());
+  }
+
   Future<void> _openWorker(Map<String, dynamic> worker) async {
     if (_isOpeningWorker) return;
     setState(() => _isOpeningWorker = true);
@@ -232,53 +272,52 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
       final shiftId = appState.activeShift?.shiftId;
       final workContext = appState.activeWorkContext;
       if (shiftId == null || workContext == null) {
-        _showError('Vui lòng chọn ca và bộ phận trước khi xác nhận.');
+        _showError('Vui lòng chọn ca và tổ trước khi xác nhận.');
         return;
       }
-      final history = await loadConfirmationHistory(
-        appState.workHistoryRepo,
-        range: HistoryRange.day,
-        dateFrom: date,
-        dateTo: date,
+      final assignments = await _loadWorkerTargets(
+        appState,
+        worker,
+        date: date,
         shiftId: shiftId,
-        workId: workContext.workId,
+        workContext: workContext,
+        openingScope: openingScope,
       );
-      if (!mounted || openingScope != _scopeKey()) return;
-      final assignments = await resolveConfirmationTargets(
-        db: appState.db,
-        assignments: appState.assignmentRepo,
-        history: history,
-        workerId: worker['id']?.toString() ?? '',
-        workerCode: worker['ma_nv']?.toString() ?? '',
-        businessDate: _dateKey(date),
-        shiftId: shiftId,
-        workId: workContext.workId,
-        workCenter: workContext.workCenter,
-        includeSettled: true,
-      );
-      if (!mounted ||
+      if (assignments == null ||
+          !mounted ||
           openingScope != _scopeKey() ||
           ModalRoute.of(context)?.isCurrent != true) {
         return;
       }
 
-      if (!assignments.any((assignment) => assignment.canRecord)) {
+      final canConfirm = _canConfirm;
+      if (!assignments.any((assignment) => assignment.canConfirm)) {
         _showError(
-          'Nhân viên không còn sản lượng cần xác nhận trong ca và bộ phận đang chọn.',
+          canConfirm
+              ? 'Nhân viên không còn sản lượng cần xác nhận trong ca và tổ đang chọn.'
+              : 'Nhân viên không còn sản lượng chưa làm để thu hồi trong ca và tổ đang chọn.',
         );
         return;
       }
 
       // Several operations open: tick the ones to confirm together instead of
-      // picking a single one.
+      // picking a single one. That screen is all quantity entry, so a
+      // recall-only account picks one operation below instead.
       final openGroups = groupConfirmationTargets(
         assignments,
-      ).where((group) => group.any((target) => target.canRecord)).toList();
-      if (openGroups.length > 1) {
-        await context.push(
+      ).where((group) => group.any((target) => target.canConfirm)).toList();
+      if (canConfirm && openGroups.length > 1) {
+        final result = await context.push<Object?>(
           '/supervisor/confirm_multi',
           extra: <String, dynamic>{'worker': worker, 'groups': openGroups},
         );
+        // Its QR button asks for another worker: scan the next card here.
+        if (mounted && result == S15MultiConfirmScreen.scanAnotherWorker) {
+          setState(() {
+            _showScanner = true;
+            _errorMessage = null;
+          });
+        }
         return;
       }
 
@@ -289,8 +328,9 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
           '/supervisor/assignment_detail',
           extra: <String, dynamic>{
             'assignment': group.first,
+            // The "Xác nhận" form opens for PP_CONFIRM and PP_RECALL alike;
+            // without PP_CONFIRM it holds only the recall entry.
             'group': group,
-            'openConfirmation': true,
           },
         );
       }
@@ -310,6 +350,243 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
       if (mounted) setState(() => _isOpeningWorker = false);
       if (mounted) unawaited(_loadCachedWorkers());
     }
+  }
+
+  /// The worker's allocations of the selected day, shift and department,
+  /// reconciled with SAP. Null when the selection changed while loading.
+  Future<List<Assignment>?> _loadWorkerTargets(
+    AppState appState,
+    Map<String, dynamic> worker, {
+    required DateTime date,
+    required String shiftId,
+    required UserWorkContext workContext,
+    required String openingScope,
+  }) async {
+    final history = await loadConfirmationHistory(
+      appState.workHistoryRepo,
+      range: HistoryRange.day,
+      dateFrom: date,
+      dateTo: date,
+      shiftId: shiftId,
+      workId: workContext.workId,
+    );
+    if (!mounted || openingScope != _scopeKey()) return null;
+    return resolveConfirmationTargets(
+      db: appState.db,
+      assignments: appState.assignmentRepo,
+      history: history,
+      workerId: worker['id']?.toString() ?? '',
+      workerCode: worker['ma_nv']?.toString() ?? '',
+      businessDate: _dateKey(date),
+      shiftId: shiftId,
+      workId: workContext.workId,
+      workCenter: workContext.workCenter,
+      includeSettled: true,
+    );
+  }
+
+  /// PP_RECALL_NOPASS on top of PP_RECALL: the worker list offers "Thu hồi
+  /// không mật khẩu", which takes back everything the selected worker still
+  /// holds here. The Xác nhận sheet does the same for one order at a time.
+  bool get _canRecallWithoutPassword {
+    final session = ref.read(appStateProvider).currentSession;
+    return session?.hasPermission(Permission.recallAssignment) == true &&
+        session?.hasPermission(Permission.recallWithoutPassword) == true;
+  }
+
+  /// Recalls every open order/operation of the selected worker, each as one
+  /// password-less recall of what is left on it.
+  Future<void> _recallAllWithoutPassword() async {
+    final worker = _selectedWorker;
+    if (worker == null || _isProcessing || _isOpeningWorker) return;
+    setState(() {
+      _isProcessing = true;
+      _isRecallingAll = true;
+      _errorMessage = null;
+    });
+    try {
+      final appState = ref.read(appStateProvider);
+      final openingScope = _scopeKey();
+      final generation = appState.sessionGeneration;
+      final date = appState.activeBusinessDate;
+      final shift = appState.activeShift;
+      final workContext = appState.activeWorkContext;
+      if (shift == null || workContext == null) {
+        _showError('Vui lòng chọn ca và tổ trước khi thu hồi.');
+        return;
+      }
+      final assignments = await _loadWorkerTargets(
+        appState,
+        worker,
+        date: date,
+        shiftId: shift.shiftId,
+        workContext: workContext,
+        openingScope: openingScope,
+      );
+      if (assignments == null ||
+          !mounted ||
+          openingScope != _scopeKey() ||
+          ModalRoute.of(context)?.isCurrent != true) {
+        return;
+      }
+      final lines = planRecallAll(assignments);
+      if (lines.isEmpty) {
+        _showError(
+          'Nhân viên không còn sản lượng chưa làm để thu hồi trong ca và tổ đang chọn.',
+        );
+        return;
+      }
+      // SAP resolves the shift by the operation's Work Center + ShiftID.
+      final shiftWorkCenter = shift.workCenter.trim();
+      for (final line in lines) {
+        final lineWorkCenter = line.target.workCenter.trim();
+        if (lineWorkCenter.isNotEmpty && lineWorkCenter != shiftWorkCenter) {
+          _showError(
+            'Ca đang chọn thuộc Xưởng $shiftWorkCenter, nhưng công đoạn '
+            '${line.target.operation} thuộc Xưởng $lineWorkCenter. Hãy đổi '
+            'Xưởng và ca làm việc trước khi thu hồi.',
+          );
+          return;
+        }
+      }
+      final shiftError = validateShiftExecution(
+        shift: shift,
+        businessDate: DateTime.parse(_dateKey(date)),
+        executedAt: DateTime.now(),
+      );
+      if (shiftError != null) {
+        _showError(shiftError);
+        return;
+      }
+
+      final confirmed = await showRecallAllConfirmDialog(
+        context,
+        workerName: _workerName(worker),
+        workerCode: _workerCode(worker),
+        lines: lines,
+      );
+      if (!mounted || !confirmed) return;
+      if (openingScope != _scopeKey()) {
+        _showError('Ca hoặc tổ đã thay đổi. Hãy chọn lại công nhân.');
+        return;
+      }
+
+      final outcomes = await appState.runCriticalOperation(
+        () => recallAllWithoutPassword(
+          recallRepo: appState.recallRepo,
+          lines: lines,
+          reasonCode: RecallReason.notFinished.code,
+          businessDate: _dateKey(date),
+          shiftId: shift.shiftId,
+          createdBy: appState.currentSession?.maNv ?? '',
+          canContinue: () => appState.isSessionGenerationCurrent(generation),
+        ),
+      );
+      if (!mounted) return;
+      await _showRecallAllResult(worker, outcomes);
+    } on FormatException catch (error) {
+      if (mounted) _showError(error.message);
+    } catch (error, stackTrace) {
+      debugPrint('Thu hồi không mật khẩu từ tab Xác nhận thất bại: $error');
+      debugPrintStack(stackTrace: stackTrace);
+      if (mounted) {
+        _showError(
+          error is SapBusinessError
+              ? 'Không tải được lịch sử từ SAP: ${friendlySapErrorMessage(error)}'
+              : 'Chưa đối chiếu được số lượng với SAP. Kiểm tra kết nối rồi thử lại.',
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isProcessing = false;
+          _isRecallingAll = false;
+        });
+        unawaited(_loadCachedWorkers());
+      }
+    }
+  }
+
+  String _recallLineQuantity(RecallAllLine line) =>
+      '${formatQuantity(line.quantity, uom: line.target.uom)} ${line.target.uom}';
+
+  /// One line per order: SAP may take some and refuse others, and the
+  /// supervisor has to see which.
+  Future<void> _showRecallAllResult(
+    Map<String, dynamic> worker,
+    List<RecallAllOutcome> outcomes,
+  ) async {
+    final saved = outcomes.where((outcome) => outcome.saved).length;
+    final allSynced = outcomes.every((outcome) => outcome.synced);
+    String detail(RecallAllOutcome outcome) {
+      if (outcome.skipped) return 'Chưa gửi vì lệnh trước bị từ chối.';
+      final error = outcome.error;
+      if (error != null) return friendlySapErrorMessage(error);
+      final receipt = outcome.receipt!;
+      if (receipt.isRefused) {
+        return receipt.message ?? 'SAP chưa chấp nhận thu hồi.';
+      }
+      return outcome.synced
+          ? 'Đã thu hồi, SAP đã xác nhận.'
+          : 'Đã lưu trên thiết bị; mở Đồng bộ để theo dõi.';
+    }
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        titlePadding: CaslaDialog.titlePadding,
+        contentPadding: CaslaDialog.contentPadding,
+        backgroundColor: CaslaColors.surface,
+        surfaceTintColor: Colors.transparent,
+        title: CaslaDialogHeader(
+          child: Text(
+            allSynced
+                ? 'Đã thu hồi ${outcomes.length} lệnh'
+                : 'Thu hồi được $saved/${outcomes.length} lệnh',
+            style: TextStyle(
+              fontSize: CaslaDialog.titleSize,
+              fontWeight: FontWeight.w800,
+              color: saved == outcomes.length
+                  ? CaslaColors.primaryNavy
+                  : CaslaColors.danger,
+            ),
+          ),
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _workerName(worker),
+                style: const TextStyle(fontSize: 13, color: CaslaColors.muted),
+              ),
+              const SizedBox(height: 8),
+              for (final outcome in outcomes)
+                _RecallAllRow(
+                  label: recallAllLineLabel(outcome.line, [
+                    for (final other in outcomes) other.line,
+                  ]),
+                  detail: detail(outcome),
+                  trailing: _recallLineQuantity(outcome.line),
+                  failed: !outcome.saved,
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: CaslaColors.primaryNavy,
+              foregroundColor: Colors.white,
+            ).merge(CaslaDialog.actionStyle),
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Đã hiểu'),
+          ),
+        ],
+      ),
+    );
   }
 
   String _dateKey(DateTime value) =>
@@ -471,9 +748,6 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
 
   Widget _buildWorkerSelection(BuildContext context) {
     final workers = _visibleWorkers;
-    final selectedName = _selectedWorker == null
-        ? ''
-        : _workerName(_selectedWorker!);
     return Material(
       color: CaslaColors.background,
       child: SafeArea(
@@ -506,27 +780,6 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          'Chọn nhân viên từ thiết bị',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w800,
-                            fontSize: 14,
-                            color: CaslaColors.primaryNavy,
-                          ),
-                        ),
-                        Text(
-                          '${_cachedWorkers.length} nhân viên trong ca',
-                          style: const TextStyle(
-                            fontSize: 10.5,
-                            color: CaslaColors.muted,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
                     Expanded(
                       child: LayoutBuilder(
                         builder: (context, _) {
@@ -544,59 +797,24 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Text(
-                                  'Nhân viên xác nhận',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 15,
-                                    color: CaslaColors.primaryNavy,
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 10,
-                                    vertical: 8,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: CaslaColors.successBg,
-                                    borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(
-                                      color: CaslaColors.success.withValues(
-                                        alpha: 0.2,
-                                      ),
-                                    ),
-                                  ),
-                                  child: Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      const Text(
-                                        '✓ Đã sẵn sàng trên thiết bị',
-                                        style: TextStyle(
-                                          color: CaslaColors.success,
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w800,
-                                        ),
-                                      ),
-                                      Text(
-                                        '${_cachedWorkers.length} NV',
-                                        style: const TextStyle(
-                                          color: CaslaColors.success,
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w800,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
                                 TextField(
                                   controller: _workerSearchController,
                                   onChanged: (value) =>
                                       setState(() => _workerQuery = value),
                                   decoration: InputDecoration(
                                     prefixIcon: const Icon(Icons.search),
+                                    suffixIcon: IconButton(
+                                      key: const ValueKey('scan-worker-qr'),
+                                      tooltip: 'Quét QR nhân viên',
+                                      onPressed: _isProcessing
+                                          ? null
+                                          : () => setState(() {
+                                              _showScanner = true;
+                                              _errorMessage = null;
+                                            }),
+                                      icon: const Icon(Icons.qr_code_scanner),
+                                      color: CaslaColors.primaryNavy,
+                                    ),
                                     hintText: 'Tìm theo tên hoặc mã nhân viên',
                                     isDense: true,
                                     filled: true,
@@ -626,8 +844,10 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
                                           ),
                                         )
                                       : Scrollbar(
+                                          controller: _workerListScroll,
                                           thumbVisibility: workers.length > 4,
                                           child: ListView.separated(
+                                            controller: _workerListScroll,
                                             padding: const EdgeInsets.only(
                                               top: 6,
                                               right: 8,
@@ -723,7 +943,7 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
                                                                     if (_workerDepartment(
                                                                       worker,
                                                                     ).isNotEmpty)
-                                                                      'Bộ phận: ${_workerDepartment(worker)}',
+                                                                      'Tổ: ${_workerDepartment(worker)}',
                                                                   ]
                                                                   .where(
                                                                     (
@@ -776,21 +996,69 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
                                         ),
                                 ),
                                 const SizedBox(height: 12),
-                                SizedBox(
-                                  width: double.infinity,
-                                  height: 48,
-                                  child: OutlinedButton.icon(
-                                    onPressed: _isProcessing
-                                        ? null
-                                        : () => setState(() {
-                                            _showScanner = true;
-                                            _errorMessage = null;
-                                          }),
-                                    icon: const Icon(Icons.qr_code_scanner),
-                                    label: const Text('Quét QR nhân viên'),
+                                if (_canConfirmDirectly) ...[
+                                  SizedBox(
+                                    width: double.infinity,
+                                    height: 48,
+                                    child: OutlinedButton.icon(
+                                      key: const ValueKey(
+                                        'confirm-direct-button',
+                                      ),
+                                      onPressed:
+                                          _isProcessing || _isOpeningWorker
+                                          ? null
+                                          : _openDirectConfirmation,
+                                      icon: const Icon(Icons.bolt_outlined),
+                                      label: const Text(
+                                        'Xác nhận sản lượng không dải chuyền',
+                                      ),
+                                    ),
                                   ),
-                                ),
-                                const SizedBox(height: 10),
+                                  const SizedBox(height: 10),
+                                ],
+                                if (_canRecallWithoutPassword) ...[
+                                  SizedBox(
+                                    width: double.infinity,
+                                    height: 48,
+                                    child: OutlinedButton.icon(
+                                      key: const ValueKey(
+                                        'recall-all-without-password',
+                                      ),
+                                      onPressed:
+                                          _selectedWorker == null ||
+                                              _isProcessing ||
+                                              _isOpeningWorker
+                                          ? null
+                                          : _recallAllWithoutPassword,
+                                      icon: _isRecallingAll
+                                          ? const SizedBox(
+                                              width: 18,
+                                              height: 18,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                                semanticsLabel: 'Đang thu hồi',
+                                              ),
+                                            )
+                                          : const Icon(Icons.undo),
+                                      label: const Text(
+                                        'Thu hồi không mật khẩu',
+                                      ),
+                                      style: OutlinedButton.styleFrom(
+                                        foregroundColor: CaslaColors.danger,
+                                        side: BorderSide(
+                                          color:
+                                              _selectedWorker == null ||
+                                                  _isProcessing ||
+                                                  _isOpeningWorker
+                                              ? CaslaColors.line
+                                              : CaslaColors.danger,
+                                          width: 1.5,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 10),
+                                ],
                                 SizedBox(
                                   width: double.infinity,
                                   height: 50,
@@ -811,11 +1079,7 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
                                                   'Đang đối chiếu số lượng',
                                             ),
                                           )
-                                        : Text(
-                                            selectedName.isEmpty
-                                                ? 'Tiếp tục xác nhận'
-                                                : 'Tiếp tục xác nhận · $selectedName',
-                                          ),
+                                        : const Text('Tiếp tục xác nhận'),
                                   ),
                                 ),
                               ],
@@ -842,31 +1106,40 @@ class _S10ConfirmScanScreenState extends ConsumerState<S10ConfirmScanScreen> {
   }
 
   Widget _buildScanner(BuildContext context) {
-    return Stack(
-      children: [
-        AdaptiveBarcodeScannerView(
-          title: 'Quét QR nhân viên',
-          subtitle: 'Quét mã để mở thẳng màn hình xác nhận sản lượng.',
-          onScan: _handleWorkerCodeScanned,
-          onManualInput: _showCachedWorkerPicker,
-          manualInputLabel: 'Chọn nhân viên đã lưu',
-          manualInputIcon: Icons.people_alt_outlined,
-        ),
-        Positioned(
-          top: MediaQuery.paddingOf(context).top + 8,
-          left: 10,
-          child: Material(
-            color: Colors.black54,
-            borderRadius: BorderRadius.circular(24),
-            child: IconButton(
-              tooltip: 'Quay lại danh sách nhân viên',
-              onPressed: () => setState(() => _showScanner = false),
-              icon: const Icon(Icons.arrow_back, color: Colors.white),
+    // The scanner is a state of this tab, not a route: without this the
+    // system Back button leaves the app instead of closing the scanner.
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop || _isProcessing) return;
+        setState(() => _showScanner = false);
+      },
+      child: Stack(
+        children: [
+          AdaptiveBarcodeScannerView(
+            title: 'Quét QR nhân viên',
+            subtitle: 'Quét mã để mở thẳng màn hình xác nhận sản lượng.',
+            onScan: _handleWorkerCodeScanned,
+            onManualInput: _showCachedWorkerPicker,
+            manualInputLabel: 'Chọn nhân viên đã lưu',
+            manualInputIcon: Icons.people_alt_outlined,
+          ),
+          Positioned(
+            top: MediaQuery.paddingOf(context).top + 8,
+            left: 10,
+            child: Material(
+              color: Colors.black54,
+              borderRadius: BorderRadius.circular(24),
+              child: IconButton(
+                tooltip: 'Quay lại danh sách nhân viên',
+                onPressed: () => setState(() => _showScanner = false),
+                icon: const Icon(Icons.arrow_back, color: Colors.white),
+              ),
             ),
           ),
-        ),
-        if (_isProcessing) const _ProcessingOverlay(),
-      ],
+          if (_isProcessing) const _ProcessingOverlay(),
+        ],
+      ),
     );
   }
 
@@ -1031,6 +1304,69 @@ class _ProcessingOverlay extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// One order/operation in the recall-all question and in its result.
+class _RecallAllRow extends StatelessWidget {
+  final String label;
+  final String detail;
+  final String trailing;
+  final bool failed;
+
+  const _RecallAllRow({
+    required this.label,
+    required this.detail,
+    required this.trailing,
+    this.failed = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = failed ? CaslaColors.danger : CaslaColors.primaryNavy;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: color,
+                  ),
+                ),
+                if (detail.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    detail,
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.35,
+                      color: failed ? CaslaColors.danger : CaslaColors.muted,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            trailing,
+            style: TextStyle(
+              fontSize: CaslaDialog.figureSize,
+              fontWeight: FontWeight.w800,
+              color: color,
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -95,7 +95,7 @@ const _namedWork = UserWorkContext(
 );
 
 class _LabelsState extends _SupervisorState {
-  // Login returned the Bộ phận without its Work Center yet.
+  // Login returned the Tổ without its Work Center yet.
   UserWorkContext work = const UserWorkContext(
     workId: '6711_CLXM1VLT_MAY1_KQ3',
     workName: 'Tổ May 1 - Máy KQ-3',
@@ -178,7 +178,7 @@ void main() {
       }
       expect(find.text('Nhà máy'), findsNothing);
       expect(find.text(workshop), findsOneWidget);
-      // A Xưởng with one Bộ phận selects it; the label is code - name only.
+      // A Xưởng with one Tổ selects it; the label is code - name only.
       final department = find.text(
         '${_namedWork.workId} - ${_namedWork.workName}',
       );

@@ -39,6 +39,8 @@ class _S02bAccountLoginScreenState
       text: widget.initialUsername ?? '',
     );
     _loginMemory = ref.read(rememberedLoginProvider);
+    // Why the previous session ended, when SAP refused to renew it.
+    _errorMessage = ref.read(appStateProvider).takePendingLoginNotice();
     _restoreRememberedLogin();
   }
 
@@ -207,6 +209,18 @@ class _S02bAccountLoginScreenState
                 children: [
                   // Logo & Header Branding
                   const CaslaLogo(height: 72, isDarkBackground: false),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Xưởng may',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontFamily: 'Manrope',
+                      fontWeight: FontWeight.w700,
+                      fontSize: 16,
+                      letterSpacing: 0.4,
+                      color: CaslaColors.primaryNavy,
+                    ),
+                  ),
                   const SizedBox(height: 16),
                   const Text(
                     'Đăng nhập',

@@ -38,6 +38,8 @@ List<WorkHistorySummary> mergeWorkerSummaries(
       workName: pick(existing.workName, row.workName),
       boPhan: pick(existing.boPhan, row.boPhan),
       location: pick(existing.location, row.location),
+      // The worker's own department: the same on every row of a worker.
+      workerBoPhan: pick(existing.workerBoPhan, row.workerBoPhan),
     );
   }
   return merged.values.toList();

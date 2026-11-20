@@ -4,6 +4,7 @@
 // URI where SAP's required single quotes appear as %27. Every real request
 // therefore missed the filter and printed the password in full.
 
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:casla_production/core/config/app_config.dart';
 import 'package:casla_production/data/sap/sap_odata_client.dart';
@@ -147,6 +148,156 @@ void main() {
           'login?WorkerPassword=top-secret&AccessToken=token',
         ),
         'login',
+      );
+    });
+  });
+
+  group('SapODataClient.safeRequestPayload', () {
+    test('renders the action parameters with every credential masked', () {
+      final out = SapODataClient.safeRequestPayload({
+        'ProductionOrder': '010140000380',
+        'Operation': '0080',
+        'WorkerID': 'CL400111',
+        'Quantity': '100',
+        'DefectQuantity': '0',
+        'UnitOfMeasure': 'CHC',
+        'ShiftID': '1',
+        'EntryDate': '2026-10-27',
+        'EntryTime': '13:23:07',
+        'PostingDate': '2026-10-27',
+        'OriginalTransactionUUID': null,
+        'AccessToken': 'tok-secret-123',
+        'DeviceID': 'PDA-TC22-14-3',
+        'WorkerPassword': 'hunter2',
+        'SyncItemUUID': 'sync-1',
+      })!;
+
+      expect(out, isNot(contains('hunter2')));
+      expect(out, isNot(contains('tok-secret-123')));
+      expect(out, contains('"WorkerPassword":"[REDACTED]"'));
+      expect(out, contains('"AccessToken":"[REDACTED]"'));
+      expect(out, contains('"ProductionOrder":"010140000380"'));
+      expect(
+        out,
+        contains('"OriginalTransactionUUID":null'),
+        reason: 'a missing parameter must stay visible as null',
+      );
+      expect(out, contains('"EntryTime":"13:23:07"'));
+      expect(out, isNot(contains('\n')));
+    });
+
+    test('masks login credentials under their own key names', () {
+      final out = SapODataClient.safeRequestPayload({
+        'Username': 'cl400033',
+        'Password': 'hunter2',
+        'DeviceID': 'x',
+        'RefreshToken': 'rt-1',
+        'NewPassword': 'n3w',
+      })!;
+
+      expect(out, contains('"Username":"cl400033"'));
+      expect(out, isNot(contains('hunter2')));
+      expect(out, isNot(contains('rt-1')));
+      expect(out, isNot(contains('n3w')));
+    });
+
+    test('returns null for a body that is not a JSON object', () {
+      expect(SapODataClient.safeRequestPayload(null), isNull);
+      expect(SapODataClient.safeRequestPayload('raw'), isNull);
+    });
+
+    test('is bounded', () {
+      final out = SapODataClient.safeRequestPayload({'Note': 'x' * 5000})!;
+
+      expect(out.length, SapODataClient.maxLoggedPayloadLength + 1);
+      expect(out.endsWith('…'), isTrue);
+    });
+  });
+
+  group('SapODataClient.safeRejectionMessage', () {
+    DioException rejection(Object? body, {int status = 400}) => DioException(
+      requestOptions: RequestOptions(path: '/x'),
+      type: DioExceptionType.badResponse,
+      response: Response(
+        requestOptions: RequestOptions(path: '/x'),
+        statusCode: status,
+        data: body,
+      ),
+    );
+
+    test('keeps the free-text sentence a RAP validation answers with', () {
+      final error = rejection({
+        'error': {
+          'code': '/IWBEP/CM_V4S_RUN/000',
+          'message': 'Số lượng còn lại không khớp với sổ phân bổ',
+        },
+      });
+
+      final out = SapODataClient.safeRejectionMessage(
+        error,
+        diagnostic: '/IWBEP/CM_V4S_RUN/000',
+      );
+
+      expect(out, 'Số lượng còn lại không khớp với sổ phân bổ');
+    });
+
+    test(
+      'does not repeat a business code already logged as the diagnostic',
+      () {
+        final error = rejection({
+          'error': {
+            'code': '/IWBEP/CM_V4S_RUN/000',
+            'message': 'WORKER_AUTH_FAILED',
+          },
+        });
+
+        expect(
+          SapODataClient.safeRejectionMessage(
+            error,
+            diagnostic: 'WORKER_AUTH_FAILED',
+          ),
+          isNull,
+        );
+      },
+    );
+
+    test('logs nothing for a body without an OData error envelope', () {
+      final html = rejection(
+        '<html>Anmeldung fehlgeschlagen</html>',
+        status: 401,
+      );
+      final empty = rejection(null, status: 500);
+
+      expect(
+        SapODataClient.safeRejectionMessage(html, diagnostic: null),
+        isNull,
+      );
+      expect(
+        SapODataClient.safeRejectionMessage(empty, diagnostic: null),
+        isNull,
+      );
+    });
+
+    test('collapses newlines, redacts secrets and truncates', () {
+      final error = rejection({
+        'error': {
+          'code': 'X',
+          'message': {
+            'value': 'Line one\n  password=hunter2 then ${'x' * 300}',
+          },
+        },
+      });
+
+      final out = SapODataClient.safeRejectionMessage(error, diagnostic: 'X')!;
+
+      expect(out, isNot(contains('\n')));
+      expect(out, isNot(contains('hunter2')));
+      expect(out, startsWith('Line one password=[REDACTED] then'));
+      expect(out.endsWith('…'), isTrue);
+      expect(
+        out.length,
+        SapODataClient.maxLoggedRejectionLength + 1,
+        reason: 'bounded plus the ellipsis',
       );
     });
   });

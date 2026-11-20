@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 
 import '../../../app/theme/casla_colors.dart';
 import '../../../app/theme/casla_spacing.dart';
+import '../../../presentation/widgets/casla_dialog_header.dart';
 import '../../../core/scanner/barcode_scanner.dart';
 import '../../../core/scanner/scan_intent.dart';
 import '../../../core/scanner/scan_payload_logger.dart';
@@ -31,6 +32,7 @@ import '../../../presentation/widgets/adaptive_barcode_scanner_view.dart';
 import '../../../presentation/widgets/barcode_scan_listener.dart';
 import '../../../presentation/widgets/manual_code_dialog.dart';
 import '../../../presentation/widgets/mutation_feedback.dart';
+import '../../../presentation/widgets/defect_quantity_section.dart';
 import '../../../presentation/widgets/over_limit_line.dart';
 import '../../../presentation/widgets/position_slot_field.dart';
 import '../../../presentation/widgets/scan_slot_field.dart';
@@ -59,12 +61,19 @@ class S07CreateAssignmentWizardScreen extends ConsumerStatefulWidget {
   @visibleForTesting
   final PositionApi? positionApi;
 
+  /// "Xác nhận sản lượng không dải chuyền": work done off the line is given
+  /// and confirmed in one go. The form is the assignment form; on submit the
+  /// assignment is created and the same quantity is confirmed on it right
+  /// away, both SAP calls behind one worker-password prompt.
+  final bool confirmImmediately;
+
   const S07CreateAssignmentWizardScreen({
     super.key,
     this.scanner,
     this.scannerPreferences,
     this.now,
     this.positionApi,
+    this.confirmImmediately = false,
   });
 
   @visibleForTesting
@@ -82,6 +91,13 @@ class _S07CreateAssignmentWizardScreenState
   final TextEditingController _qtyController = TextEditingController();
   final TextEditingController _noteController = TextEditingController();
   final FocusNode _qtyFocus = FocusNode();
+
+  /// Defective output entered alongside the quantity when the form gives and
+  /// confirms in one go (`confirmImmediately`); unused otherwise.
+  final TextEditingController _defectController = TextEditingController();
+  final FocusNode _defectFocus = FocusNode();
+  bool _defectEnabled = false;
+  String? _defectError;
 
   Map<String, dynamic>? _selectedWorker;
   Map<String, dynamic>? _selectedOrder;
@@ -101,7 +117,7 @@ class _S07CreateAssignmentWizardScreenState
   bool _addOperationTarget = false;
   bool _primaryExpanded = true;
 
-  /// Bộ phận per operation label payload, so build does not re-parse QR text.
+  /// Tổ per operation label payload, so build does not re-parse QR text.
   final Map<String, String> _operationDepartments = {};
 
   // Optional position the worker operates from. Filled from the worker's seat
@@ -129,7 +145,7 @@ class _S07CreateAssignmentWizardScreenState
   static const bool _showBusinessDateField = false;
   String? _quantityError;
   String? _scanError;
-  bool _keepProductAfterSubmit = true;
+  late bool _keepProductAfterSubmit = !widget.confirmImmediately;
   Map<String, double> _operationQuantities = const {};
   bool _quantitiesLoading = false;
   int _quantityRequest = 0;
@@ -454,6 +470,8 @@ class _S07CreateAssignmentWizardScreenState
     _qtyController.dispose();
     _noteController.dispose();
     _qtyFocus.dispose();
+    _defectController.dispose();
+    _defectFocus.dispose();
     super.dispose();
   }
 
@@ -672,6 +690,16 @@ class _S07CreateAssignmentWizardScreenState
     return found;
   }
 
+  /// The position the worker's open group for [order] sits at, or null when
+  /// there is no group or it is settled.
+  ///
+  /// One group is one worker, operation, department, shift and work date.
+  /// Its balance is the seat's net total (`seat_balance.dart`): SAP's rows
+  /// for the group plus what this device has not sent yet. The lots held
+  /// here alone cannot tell it, because a confirmation is booked against
+  /// the oldest open lot, which may be carried-over work or a lot another
+  /// device gave: today's lot then looks untouched while the seat is already
+  /// at or below zero. Offline, this device's rows are all that is known.
   Future<String?> _fetchGroupPosition(
     Map<String, dynamic> worker,
     Map<String, dynamic> order, {
@@ -681,13 +709,15 @@ class _S07CreateAssignmentWizardScreenState
     final shift = appState.activeShift;
     if (shift == null) return null;
     final date = appState.activeBusinessDate;
-    String? found;
+    final workId = appState.activeWorkContext?.workId ?? '';
+    GroupAssignmentLedger? local;
     try {
-      found = await appState.db.getGroupAssignmentPosition(
+      local = await appState.db.getGroupAssignmentLedger(
         workerId: worker['id']?.toString() ?? '',
         orderId: order['id']?.toString() ?? '',
         businessDate: DateFormat('yyyy-MM-dd').format(date),
         shiftId: shift.shiftId,
+        workId: workId,
       );
     } catch (_) {
       // Fall through to SAP's history.
@@ -695,29 +725,33 @@ class _S07CreateAssignmentWizardScreenState
     final workerCode = worker['ma_nv']?.toString().trim() ?? '';
     final productionOrder = order['production_order']?.toString().trim() ?? '';
     final operation = order['operation']?.toString().trim() ?? '';
-    if (found == null &&
-        workerCode.isNotEmpty &&
+    WorkHistoryResult? history;
+    if (workerCode.isNotEmpty &&
         productionOrder.isNotEmpty &&
         operation.isNotEmpty) {
       try {
-        final history = await appState.workHistoryRepo
+        history = await appState.workHistoryRepo
             .getWorkHistory(
               range: HistoryRange.day,
               dateFrom: date,
               dateTo: date,
               shiftId: shift.shiftId,
-              workId: appState.activeWorkContext?.workId,
+              workId: workId.isEmpty ? null : workId,
               productionOrder: productionOrder,
               operation: operation,
               forceRefresh: force,
             )
             // Never hold the form on a slow network; SAP stays the judge.
             .timeout(const Duration(seconds: 8));
-        found = groupPositionFromHistory(history.entries, workerId: workerCode);
       } catch (_) {
         // Offline or slow: only this device's rows are known.
       }
     }
+    final found = openGroupPosition(
+      local: local,
+      history: history,
+      workerId: workerCode,
+    );
     return found?.trim().toUpperCase();
   }
 
@@ -746,7 +780,9 @@ class _S07CreateAssignmentWizardScreenState
     }
     try {
       final api = widget.positionApi ?? appState.positionGateway;
-      final board = await api.getBoard(workCenter: workCenter);
+      // Only this worker's seat: SAP filters, so the whole board is not
+      // downloaded on every worker code. The match below stays as a guard.
+      final board = await api.getBoard(workCenter: workCenter, workerId: code);
       if (!mounted || request != _positionRequest) return;
       final seat = board.seats
           .where(
@@ -900,7 +936,7 @@ class _S07CreateAssignmentWizardScreenState
     return '${capital ? 'Công đoạn' : 'công đoạn'} $name';
   }
 
-  /// Bộ phận printed on the operation label; empty when the label has none.
+  /// Tổ printed on the operation label; empty when the label has none.
   String _operationDepartment(Map<String, dynamic> order) {
     final payload = order['operation_qr_payload']?.toString() ?? '';
     return _operationDepartments.putIfAbsent(
@@ -920,8 +956,8 @@ class _S07CreateAssignmentWizardScreenState
         vietnameseLabelsEqual(department, selected)) {
       return null;
     }
-    return '${_operationPhrase(order, capital: true)} thuộc bộ phận '
-        '"$department", còn ca đang chọn thuộc bộ phận "$selected".';
+    return '${_operationPhrase(order, capital: true)} thuộc tổ '
+        '"$department", còn ca đang chọn thuộc tổ "$selected".';
   }
 
   void _selectAddOperationTarget() {
@@ -1131,12 +1167,22 @@ class _S07CreateAssignmentWizardScreenState
     onManualInput: () => _pickOrder(asExtra: true),
   );
 
+  /// What the password popup shows the worker: who signs and how much is
+  /// given in all.
+  WorkerQuantitySummary _assignedSummary(double assigned) =>
+      WorkerQuantitySummary(
+        workerCode: _selectedWorker?['ma_nv']?.toString().trim() ?? '',
+        uom: _selectedUom,
+        assigned: assigned,
+      );
+
   /// One assignment per operation behind a single password prompt. SAP takes
   /// them one at a time, so each gets its own outcome. Returns true when at
   /// least one was saved.
   Future<bool> _submitSeveral({
     required List<Map<String, dynamic>> orders,
     required double quantity,
+    required double assignedPerOperation,
     required Future<MutationReceipt> Function(
       Map<String, dynamic> order,
       String workerPassword,
@@ -1148,7 +1194,11 @@ class _S07CreateAssignmentWizardScreenState
     final run = await runWithWorkerPassword<List<_OperationOutcome>>(
       context,
       workerName: workerName,
-      actionLabel: 'gửi ${orders.length} phân công lên SAP',
+      actionLabel: widget.confirmImmediately
+          ? 'giao và xác nhận ${orders.length} công đoạn lên SAP'
+          : 'gửi ${orders.length} phân công lên SAP',
+      // Every operation gets the same quantity: the worker signs the total.
+      summary: _assignedSummary(assignedPerOperation * orders.length),
       // Only the first write can prove the password wrong. Once one is saved,
       // asking again would post it a second time.
       isWrongPassword: (outcomes) =>
@@ -1567,10 +1617,13 @@ class _S07CreateAssignmentWizardScreenState
         context: context,
         barrierDismissible: false,
         builder: (dialogContext) => AlertDialog(
-          title: const Text('Chưa thể phân công'),
+          titlePadding: CaslaDialog.titlePadding,
+          contentPadding: CaslaDialog.contentPadding,
+          title: const CaslaDialogHeader(child: Text('Chưa thể phân công')),
           content: SingleChildScrollView(child: Text(message)),
           actions: [
             TextButton(
+              style: CaslaDialog.actionStyle,
               onPressed: () => Navigator.of(dialogContext).pop(),
               child: const Text('Đã hiểu'),
             ),
@@ -1594,8 +1647,11 @@ class _S07CreateAssignmentWizardScreenState
       _selectedWorker = null;
       _resetPositionState();
       _qtyController.clear();
+      _defectController.clear();
+      _defectEnabled = false;
       _noteController.clear();
       _quantityError = null;
+      _defectError = null;
       _scanError = null;
       if (!_keepProductAfterSubmit) {
         _selectedOrder = null;
@@ -1615,6 +1671,60 @@ class _S07CreateAssignmentWizardScreenState
     for (final extra in _extraOperations) {
       unawaited(_loadExtraQuantities(extra));
     }
+  }
+
+  String get _submitLabel {
+    final verb = widget.confirmImmediately
+        ? 'Xác nhận sản lượng'
+        : 'Xác nhận phân công';
+    return _extraOperations.isEmpty
+        ? verb
+        : '$verb · ${_extraOperations.length + 1} công đoạn';
+  }
+
+  /// Saves the assignment and, in
+  /// [S07CreateAssignmentWizardScreen.confirmImmediately] mode, confirms the
+  /// same quantity on it right away with the same worker password: two SAP
+  /// calls (submitInitialAssign, then submitConfirm) behind one prompt. The
+  /// confirmation's receipt is what the form reports. An assignment SAP
+  /// refused is returned as is, so a wrong password is still caught on the
+  /// first write and nothing is confirmed on an assignment that never took.
+  Future<MutationReceipt> _deliver({
+    required String workerPassword,
+    required double quantity,
+    double defect = 0,
+    required String businessDate,
+    required String shiftId,
+    required String createdBy,
+    required Future<MutationReceipt> Function() create,
+  }) async {
+    final assignment = await create();
+    if (!widget.confirmImmediately || assignment.isRefused) return assignment;
+    final confirmation = await ref
+        .read(appStateProvider)
+        .productionRepo
+        .recordProduction(
+          assignmentId: assignment.id,
+          quantity: quantity,
+          defectQuantity: defect,
+          businessDate: businessDate,
+          shiftId: shiftId,
+          createdBy: createdBy,
+          workerPassword: workerPassword,
+        );
+    if (!confirmation.isRefused) return confirmation;
+    // The assignment is saved (and may be on SAP already); only the
+    // confirmation was refused. Say so instead of reporting a plain refusal
+    // that reads as if nothing happened.
+    return MutationReceipt(
+      id: confirmation.id,
+      state: confirmation.state,
+      code: confirmation.code,
+      message:
+          'Đã giao ${formatQuantity(quantity + defect, uom: _selectedUom)} '
+          '$_selectedUom, nhưng chưa xác nhận được: '
+          '${confirmation.message ?? 'SAP chưa chấp nhận.'}',
+    );
   }
 
   Future<void> _submitAssignment() =>
@@ -1657,6 +1767,34 @@ class _S07CreateAssignmentWizardScreenState
     if (wholeError != null) {
       setState(() => _quantityError = wholeError);
       await _showAssignmentError(wholeError);
+      return;
+    }
+    // Defective output only exists on the give-and-confirm form; it is
+    // optional there and never negative.
+    final defectText = widget.confirmImmediately && _defectEnabled
+        ? _defectController.text.trim()
+        : '';
+    final defect = defectText.isEmpty
+        ? 0.0
+        : (parseLocalizedQuantity(defectText) ?? double.nan);
+    if (widget.confirmImmediately && _defectEnabled && defectText.isEmpty) {
+      setState(() => _defectError = 'Nhập số lượng phế hợp lệ');
+      await _showAssignmentError(_defectError!);
+      return;
+    }
+    if (!defect.isFinite || defect < 0) {
+      setState(
+        () => _defectError = 'Số lượng phế phải là một số không âm hợp lệ.',
+      );
+      await _showAssignmentError(_defectError!);
+      return;
+    }
+    final defectWholeError = defectText.isEmpty
+        ? null
+        : wholeQuantityInputError(defectText, _selectedUom);
+    if (defectWholeError != null) {
+      setState(() => _defectError = defectWholeError);
+      await _showAssignmentError(defectWholeError);
       return;
     }
     // More than what is left on the operation may be given: the form warns
@@ -1730,17 +1868,21 @@ class _S07CreateAssignmentWizardScreenState
       );
       return;
     }
-    if (scannedContext != null &&
-        appState.activeWorkContext?.workId != scannedContext.workId) {
+    // Setup is the manager's selected scope and the WorkID SAP receives. A
+    // label that resolves to a sibling department of the same Work Center
+    // does not change it; only another Work Center stops the assignment.
+    final scope = assignmentWorkScope(
+      selected: appState.activeWorkContext,
+      scanned: scannedContext,
+    );
+    if (scope.blocked) {
       await _showAssignmentError(
-        'Mã công đoạn thuộc Xưởng ${scannedContext.workCenter}. '
-        'Hãy đổi phạm vi làm việc trước khi giao.',
+        'Mã công đoạn thuộc Xưởng ${scannedContext?.workCenter ?? ''}, '
+        'khác Xưởng của ca đang chọn. Hãy đổi Xưởng và ca cho đúng.',
       );
       return;
     }
-    // Setup is the manager's selected scope. A QR without Plant/WorkCenter
-    // uses that scope; a QR carrying both keeps the exact SAP-matched context.
-    final workContext = scannedContext ?? appState.activeWorkContext;
+    final workContext = scope.context;
     final toId = workContext?.workId ?? '';
     final createdBy = emp?.maNv ?? '';
 
@@ -1766,6 +1908,7 @@ class _S07CreateAssignmentWizardScreenState
         final saved = await _submitSeveral(
           orders: _allOrders,
           quantity: qty,
+          assignedPerOperation: qty + defect,
           create: (order, workerPassword) {
             final latestShiftError = validateShiftExecution(
               shift: activeShift,
@@ -1778,18 +1921,28 @@ class _S07CreateAssignmentWizardScreenState
                 'Phiên đăng nhập đã thay đổi. Vui lòng mở lại thao tác.',
               );
             }
-            return appState.assignmentRepo.createAssignment(
-              workerId: workerId,
-              orderId: order['id'] as String,
-              teamId: toId,
-              assignedQuantity: qty,
+            return _deliver(
+              workerPassword: workerPassword,
+              quantity: qty,
+              defect: defect,
               businessDate: dateFormatted,
               shiftId: activeShift.shiftId,
-              note: note.isEmpty ? null : note,
               createdBy: createdBy,
-              workerPassword: workerPassword,
-              positionId: _positionId,
-              machineId: _machineId,
+              create: () => appState.assignmentRepo.createAssignment(
+                workerId: workerId,
+                orderId: order['id'] as String,
+                teamId: toId,
+                // Off-line work is given as what was actually made, good and
+                // defective alike, so the confirmation that follows fits it.
+                assignedQuantity: qty + defect,
+                businessDate: dateFormatted,
+                shiftId: activeShift.shiftId,
+                note: note.isEmpty ? null : note,
+                createdBy: createdBy,
+                workerPassword: workerPassword,
+                positionId: _positionId,
+                machineId: _machineId,
+              ),
             );
           },
         );
@@ -1798,7 +1951,10 @@ class _S07CreateAssignmentWizardScreenState
         final run = await runWithWorkerPassword<MutationReceipt>(
           context,
           workerName: _selectedWorker!['ten'] as String? ?? 'Công nhân',
-          actionLabel: 'gửi phân công lên SAP',
+          actionLabel: widget.confirmImmediately
+              ? 'giao và xác nhận sản lượng lên SAP'
+              : 'gửi phân công lên SAP',
+          summary: _assignedSummary(qty + defect),
           isWrongPassword: (receipt) => receipt.isWrongWorkerPassword,
           submit: (workerPassword) {
             final latestShiftError = validateShiftExecution(
@@ -1812,20 +1968,30 @@ class _S07CreateAssignmentWizardScreenState
                 'Phiên đăng nhập đã thay đổi. Vui lòng mở lại thao tác.',
               );
             }
-            return appState.assignmentRepo.createAssignment(
-              workerId: workerId,
-              orderId: orderId,
-              teamId: toId,
-              assignedQuantity: qty,
+            return _deliver(
+              workerPassword: workerPassword,
+              quantity: qty,
+              defect: defect,
               businessDate: dateFormatted,
               shiftId: activeShift.shiftId,
-              note: _noteController.text.trim().isEmpty
-                  ? null
-                  : _noteController.text.trim(),
               createdBy: createdBy,
-              workerPassword: workerPassword,
-              positionId: _positionId,
-              machineId: _machineId,
+              create: () => appState.assignmentRepo.createAssignment(
+                workerId: workerId,
+                orderId: orderId,
+                teamId: toId,
+                // Off-line work is given as what was actually made, good and
+                // defective alike, so the confirmation that follows fits it.
+                assignedQuantity: qty + defect,
+                businessDate: dateFormatted,
+                shiftId: activeShift.shiftId,
+                note: _noteController.text.trim().isEmpty
+                    ? null
+                    : _noteController.text.trim(),
+                createdBy: createdBy,
+                workerPassword: workerPassword,
+                positionId: _positionId,
+                machineId: _machineId,
+              ),
             );
           },
         );
@@ -1863,7 +2029,11 @@ class _S07CreateAssignmentWizardScreenState
           context,
           receipt: receipt,
           persistNonSuccess: true,
-          successMessage: 'Đã giao $qty $submittedUom cho $workerName.',
+          successMessage: widget.confirmImmediately
+              ? 'Đã giao và xác nhận $qty $submittedUom'
+                    '${defect > 0 ? ', phế $defect $submittedUom' : ''} '
+                    'cho $workerName.'
+              : 'Đã giao $qty $submittedUom cho $workerName.',
         );
       }
     } on Exception catch (e) {
@@ -1904,19 +2074,23 @@ class _S07CreateAssignmentWizardScreenState
                   onPressed: () => context.pop(),
                 )
               : null,
-          title: const Column(
+          title: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Tạo phân công',
-                style: TextStyle(
+                widget.confirmImmediately
+                    ? 'Xác nhận không dải chuyền'
+                    : 'Tạo phân công',
+                style: const TextStyle(
                   fontWeight: FontWeight.w800,
                   fontSize: CaslaType.title,
                 ),
               ),
               Text(
-                'Chọn đúng ô rồi bấm quét',
-                style: TextStyle(
+                widget.confirmImmediately
+                    ? 'Giao và xác nhận sản lượng ngay'
+                    : 'Chọn đúng ô rồi bấm quét',
+                style: const TextStyle(
                   fontSize: CaslaType.caption,
                   fontWeight: FontWeight.w500,
                   color: CaslaColors.identityMeta,
@@ -2106,6 +2280,7 @@ class _S07CreateAssignmentWizardScreenState
                         source: _positionSource,
                         lookup: _positionLookup,
                         originPositionId: _originSeat?.positionId,
+                        originMachineId: _originSeat?.machineId,
                         onUseOrigin: _originSeat == null
                             ? null
                             : _useOriginPosition,
@@ -2133,8 +2308,10 @@ class _S07CreateAssignmentWizardScreenState
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               const SizedBox(height: CaslaSpacing.xs),
-                              const ScanFieldLabel(
-                                text: 'Số lượng giao',
+                              ScanFieldLabel(
+                                text: widget.confirmImmediately
+                                    ? 'Số lượng đạt'
+                                    : 'Số lượng giao',
                                 required: true,
                               ),
                               const SizedBox(height: CaslaSpacing.xs),
@@ -2238,6 +2415,39 @@ class _S07CreateAssignmentWizardScreenState
                                     ),
                                   ),
                                 ),
+                              if (widget.confirmImmediately) ...[
+                                const SizedBox(height: CaslaSpacing.sm),
+                                DefectQuantitySection(
+                                  enabled: _defectEnabled,
+                                  controller: _defectController,
+                                  focusNode: _defectFocus,
+                                  unit: _selectedUom,
+                                  error:
+                                      _defectError ??
+                                      (_defectEnabled
+                                          ? wholeQuantityInputError(
+                                              _defectController.text,
+                                              _selectedUom,
+                                            )
+                                          : null),
+                                  fieldKey: const ValueKey(
+                                    'direct-defect-quantity',
+                                  ),
+                                  note:
+                                      'Số phế được giao cùng số đạt và xác '
+                                      'nhận ngay trên phân công này.',
+                                  onToggle: (enabled) => setState(() {
+                                    _defectEnabled = enabled;
+                                    _defectError = null;
+                                    if (!enabled) _defectController.clear();
+                                  }),
+                                  onChanged: (_) {
+                                    if (_defectError != null) {
+                                      setState(() => _defectError = null);
+                                    }
+                                  },
+                                ),
+                              ],
                             ],
                           );
                         },
@@ -2287,18 +2497,6 @@ class _S07CreateAssignmentWizardScreenState
                         const SizedBox(height: CaslaSpacing.md),
                       ],
 
-                      const ScanFieldLabel(text: 'Ghi chú'),
-                      const SizedBox(height: CaslaSpacing.xs),
-                      TextField(
-                        controller: _noteController,
-                        textInputAction: TextInputAction.done,
-                        onSubmitted: (_) => FocusScope.of(context).unfocus(),
-                        decoration: const InputDecoration(
-                          hintText: 'Không bắt buộc',
-                        ),
-                      ),
-                      const SizedBox(height: CaslaSpacing.md),
-
                       CheckboxListTile(
                         value: _keepProductAfterSubmit,
                         onChanged: (value) => setState(
@@ -2337,12 +2535,7 @@ class _S07CreateAssignmentWizardScreenState
                               color: CaslaColors.navy900,
                             ),
                           )
-                        : Text(
-                            _extraOperations.isEmpty
-                                ? 'Xác nhận phân công'
-                                : 'Xác nhận phân công · '
-                                      '${_extraOperations.length + 1} công đoạn',
-                          ),
+                        : Text(_submitLabel),
                   ),
                 ),
               ),
@@ -2416,7 +2609,9 @@ class _BatchResultDialog extends StatelessWidget {
         ? 'Chưa giao được công đoạn nào'
         : 'Đã giao $saved/${outcomes.length} công đoạn';
     return AlertDialog(
-      title: Text(title),
+      titlePadding: CaslaDialog.titlePadding,
+      contentPadding: CaslaDialog.contentPadding,
+      title: CaslaDialogHeader(child: Text(title)),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -2471,6 +2666,7 @@ class _BatchResultDialog extends StatelessWidget {
       ),
       actions: [
         TextButton(
+          style: CaslaDialog.actionStyle,
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Đã hiểu'),
         ),
@@ -2816,10 +3012,7 @@ class _WorkerSummary extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _InfoRow(label: 'Mã NV', value: _text('ma_nv', 'Chưa có mã NV')),
-          _InfoRow(
-            label: 'Bộ phận',
-            value: _text('bo_phan', 'Chưa có bộ phận'),
-          ),
+          _InfoRow(label: 'Tổ', value: _text('bo_phan', 'Chưa có tổ')),
         ],
       ),
     );

@@ -6,7 +6,9 @@ import '../../core/utils/operation_qr_parser.dart';
 import '../../domain/entities/entities.dart';
 import '../../domain/entities/enums.dart';
 import '../../domain/entities/work_history.dart';
+import '../../domain/policies/grouped_confirmation.dart';
 import '../../domain/policies/history_work_context.dart';
+import '../../domain/policies/seat_balance.dart';
 import '../../domain/repositories/repositories.dart';
 
 /// Prefer a fresh report. Offline operation may use the last report for this
@@ -48,6 +50,48 @@ Future<WorkHistoryResult> loadConfirmationHistory(
     }
     return cached;
   }
+}
+
+/// The confirmation groups of one worker that still hold something to
+/// confirm in the given shift and work context, read against a fresh report
+/// (see [loadConfirmationHistory]). Empty when the worker is done.
+Future<List<List<Assignment>>> loadOpenConfirmationGroups({
+  required CaslaDatabase db,
+  required AssignmentRepository assignments,
+  required WorkHistoryRepository workHistory,
+  required String workerId,
+  required String workerCode,
+  required DateTime businessDate,
+  required String shiftId,
+  required String workId,
+  required String workCenter,
+}) async {
+  final history = await loadConfirmationHistory(
+    workHistory,
+    range: HistoryRange.day,
+    dateFrom: businessDate,
+    dateTo: businessDate,
+    shiftId: shiftId,
+    workId: workId,
+  );
+  final targets = await resolveConfirmationTargets(
+    db: db,
+    assignments: assignments,
+    history: history,
+    workerId: workerId,
+    workerCode: workerCode,
+    businessDate:
+        '${businessDate.year.toString().padLeft(4, '0')}-'
+        '${businessDate.month.toString().padLeft(2, '0')}-'
+        '${businessDate.day.toString().padLeft(2, '0')}',
+    shiftId: shiftId,
+    workId: workId,
+    workCenter: workCenter,
+    includeSettled: true,
+  );
+  return groupConfirmationTargets(
+    targets,
+  ).where((group) => group.any((target) => target.canConfirm)).toList();
 }
 
 /// Resolve against the same scoped SAP ledger as Overview even when a stale
@@ -123,6 +167,22 @@ Future<List<Assignment>> resolveConfirmationTargets({
         (workCenter.isEmpty ||
             normalized(e.workCenter) == normalized(workCenter)),
   );
+  // A row's position as SAP counts it on a seat (zcl_pp_alloc_lineage
+  // row_position): its own, else that of the row it consumed. Blank is a
+  // position of its own.
+  final byUuid = {for (final e in scoped) uuid(e.transactionUuid): e};
+  String positionOf(WorkHistoryEntry entry) {
+    var current = entry;
+    for (var hop = 0; hop < 5; hop++) {
+      final own = normalized(current.positionId);
+      if (own.isNotEmpty) return own;
+      final parent = byUuid[uuid(current.originalTransactionUuid)];
+      if (parent == null || identical(parent, current)) return '';
+      current = parent;
+    }
+    return normalized(current.positionId);
+  }
+
   final seen = <String>{};
   final groups = <(String, String, String), List<WorkHistoryEntry>>{};
   for (final entry in scoped) {
@@ -153,6 +213,110 @@ Future<List<Assignment>> resolveConfirmationTargets({
             [])
         .add(entry);
   }
+  // What SAP still holds open per seat (order, operation, unit, position):
+  // the day's rows added up, plus this device's rows SAP has not posted yet.
+  // Each target carries its seat's figure, so the confirmation form shows the
+  // pile SAP will settle against rather than the sum of the allocations' own
+  // remainders. The position is part of the seat (2026-11-11): a spent blank
+  // seat must not borrow the balance of a later allocation at TR1.
+  final seatEvents = <(String, String, String, String), List<SeatEvent>>{};
+  (String, String, String, String) seatKey(
+    String order,
+    String operationCode,
+    String unit,
+    String position,
+  ) => (
+    order.trim(),
+    operationCode.trim(),
+    normalized(unit),
+    normalized(position),
+  );
+  for (final entry in scoped) {
+    (seatEvents[seatKey(
+              entry.productionOrder,
+              entry.operation,
+              entry.unitOfMeasure,
+              positionOf(entry),
+            )] ??=
+            [])
+        .addAll(seatEventsFromHistory([entry]));
+  }
+  final posted = {for (final entry in scoped) uuid(entry.transactionUuid)};
+  for (final a in local) {
+    if (a.note == historyImportedAssignmentNote ||
+        posted.contains(uuid(a.sapId))) {
+      continue;
+    }
+    (seatEvents[seatKey(
+              a.productionOrder,
+              a.operation,
+              a.uom,
+              a.positionId,
+            )] ??=
+            [])
+        .add(
+          SeatEvent(
+            at: DateTime.fromMillisecondsSinceEpoch(a.createdAtUtc),
+            delta:
+                a.assignedQuantity -
+                a.recalledQuantity -
+                a.completedQuantity -
+                a.defectQuantity,
+            order: a.id,
+          ),
+        );
+  }
+  // Confirmations and recalls entered here on imported lots that SAP has not
+  // posted yet (queued, or waiting for the worker's password). The worker
+  // list already nets them off SAP's figure; the form must show the same
+  // pile, or the supervisor is invited to confirm the queued quantity again.
+  final importedById = {
+    for (final a in local)
+      if (a.note == historyImportedAssignmentNote) a.id: a,
+  };
+  if (importedById.isNotEmpty) {
+    final rows = await db.getConsumptionRowsForAssignments(
+      importedById.keys.toList(),
+    );
+    for (final row in rows) {
+      final lot = importedById[row['phan_cong_id']?.toString()];
+      if (lot == null) continue;
+      final idempotency = row['idempotency_key']?.toString() ?? '';
+      // Balance rows mirror SAP's own report; posted rows are in [scoped].
+      if (idempotency.startsWith('history-balance:') ||
+          posted.contains(uuid(row['sap_id']?.toString()))) {
+        continue;
+      }
+      final quantity = (row['quantity'] as num?)?.toDouble() ?? 0;
+      final defect = (row['defect_quantity'] as num?)?.toDouble() ?? 0;
+      final delta = row['kind'] == 'RECALL' ? -quantity : -(quantity + defect);
+      if (delta == 0) continue;
+      (seatEvents[seatKey(
+                lot.productionOrder,
+                lot.operation,
+                lot.uom,
+                lot.positionId,
+              )] ??=
+              [])
+          .add(
+            SeatEvent(
+              at: DateTime.fromMillisecondsSinceEpoch(lot.createdAtUtc),
+              delta: delta,
+              order: idempotency,
+            ),
+          );
+    }
+  }
+  double? seatRemainingFor(
+    String order,
+    String operationCode,
+    String unit,
+    String position,
+  ) {
+    final events = seatEvents[seatKey(order, operationCode, unit, position)];
+    return events == null ? null : settleSeatBalance(events);
+  }
+
   final targets = <Assignment>[];
   // Posted allocations with nothing left. Kept only on request, so a
   // confirmation form can show the operation's full assigned/confirmed totals
@@ -211,6 +375,7 @@ Future<List<Assignment>> resolveConfirmationTargets({
       );
     }
     final now = DateTime.now().millisecondsSinceEpoch;
+    final position = positionOf(source);
     final id = await db.reconcileHistoryConfirmationAssignment(
       assignment: {
         'id': IdGenerator.newId(),
@@ -230,11 +395,47 @@ Future<List<Assignment>> resolveConfirmationTargets({
         'idempotency_key': 'history-import:${uuid(source.transactionUuid)}',
         'sap_id': source.transactionUuid,
         'created_at_utc': now,
+        'position_id': position.isEmpty ? null : position,
       },
       entries: entries,
+      seatRemaining: seatRemainingFor(
+        source.productionOrder,
+        source.operation,
+        source.unitOfMeasure,
+        position,
+      ),
     );
     return assignments.getAssignmentById(id);
   }
+
+  /// One INITIAL_ASSIGN standing for several: [anchor]'s identity with the
+  /// members' quantities added up, so one local row can carry the balance
+  /// SAP keeps for the whole group.
+  WorkHistoryEntry lotTotal(
+    WorkHistoryEntry anchor,
+    Iterable<WorkHistoryEntry> members,
+  ) => WorkHistoryEntry(
+    transactionUuid: anchor.transactionUuid,
+    executionDate: anchor.executionDate,
+    reportedWorkDate: anchor.reportedWorkDate,
+    workerId: anchor.workerId,
+    workerName: anchor.workerName,
+    productionOrder: anchor.productionOrder,
+    operation: anchor.operation,
+    operationName: anchor.operationName,
+    productName: anchor.productName,
+    productCode: anchor.productCode,
+    salesOrder: anchor.salesOrder,
+    salesOrderItem: anchor.salesOrderItem,
+    plant: anchor.plant,
+    workCenter: anchor.workCenter,
+    workId: anchor.workId,
+    transactionType: 'INITIAL_ASSIGN',
+    quantity: members.fold(0.0, (sum, e) => sum + e.quantity),
+    unitOfMeasure: anchor.unitOfMeasure,
+    transactionStatus: anchor.transactionStatus,
+    positionId: positionOf(anchor),
+  );
 
   // Carried-over work. SAP's overnight job posts yesterday's open balance as
   // REASSIGN rows pointing at their allocation root A, and a top-up given
@@ -321,6 +522,7 @@ Future<List<Assignment>> resolveConfirmationTargets({
         ].fold(0.0, (sum, e) => sum + e.quantity),
         unitOfMeasure: marker.unitOfMeasure,
         transactionStatus: marker.transactionStatus,
+        positionId: positionOf(marker),
       );
       keep(await importLot(total, [total, ...consumption]));
       claimed.addAll(members);
@@ -416,42 +618,33 @@ Future<List<Assignment>> resolveConfirmationTargets({
                     a.note != historyImportedAssignmentNote,
               )
               .toList();
-          if (mine.length == memberIds.length) {
-            // Entered on this device: its own rows carry each allocation's
-            // balance, and SAP only checks the group total.
-            mine.forEach(keep);
-            continue;
-          }
-          if (mine.isNotEmpty) {
-            throw const FormatException(
-              'Một phần lần giao bổ sung của công đoạn được tạo trên thiết bị '
-              'khác. Hãy tải lại dữ liệu SAP rồi thử lại.',
-            );
-          }
-          // Never seen here: one local allocation carrying the group total.
-          final total = WorkHistoryEntry(
-            transactionUuid: root.transactionUuid,
-            executionDate: root.executionDate,
-            reportedWorkDate: root.reportedWorkDate,
-            workerId: root.workerId,
-            workerName: root.workerName,
-            productionOrder: root.productionOrder,
-            operation: root.operation,
-            operationName: root.operationName,
-            productName: root.productName,
-            productCode: root.productCode,
-            salesOrder: root.salesOrder,
-            salesOrderItem: root.salesOrderItem,
-            plant: root.plant,
-            workCenter: root.workCenter,
-            workId: root.workId,
-            transactionType: root.transactionType,
-            quantity: group.value.fold(0.0, (sum, e) => sum + e.quantity),
-            unitOfMeasure: root.unitOfMeasure,
-            transactionStatus: root.transactionStatus,
+          // Rows entered on this device carry each allocation's own balance,
+          // and SAP only checks the group total, so they are kept as they
+          // are. Whatever the group holds beyond them (all of it when nothing
+          // was entered here) becomes one imported lot: the root when it is
+          // among the missing, else the first missing top-up, since SAP
+          // resolves a CONFIRM on any member to the group.
+          mine.forEach(keep);
+          final mineIds = {for (final a in mine) uuid(a.sapId)};
+          final missing = group.value
+              .where((e) => !mineIds.contains(uuid(e.transactionUuid)))
+              .toList();
+          if (missing.isEmpty) continue;
+          final missingIds = {for (final e in missing) uuid(e.transactionUuid)};
+          final anchor = missing.firstWhere(
+            (e) => uuid(e.transactionUuid) == group.key,
+            orElse: () => missing.first,
           );
-          final target = await importLot(total, [total, ...groupConsumption]);
-          keep(target);
+          final total = lotTotal(anchor, missing);
+          final consumed = mine.isEmpty
+              ? groupConsumption
+              : groupConsumption
+                    .where(
+                      (e) =>
+                          missingIds.contains(uuid(e.originalTransactionUuid)),
+                    )
+                    .toList();
+          keep(await importLot(total, [total, ...consumed]));
         }
         continue;
       }
@@ -574,5 +767,45 @@ Future<List<Assignment>> resolveConfirmationTargets({
       'Hãy gửi xong rồi mới xác nhận.',
     );
   }
-  return includeSettled ? [...targets, ...settled] : targets;
+  Assignment withSeat(Assignment target) {
+    final events =
+        seatEvents[seatKey(
+          target.productionOrder,
+          target.operation,
+          target.uom,
+          target.positionId,
+        )];
+    if (events == null) return target;
+    return target.copyWith(seatRemaining: settleSeatBalance(events));
+  }
+
+  // A seat SAP still holds open while every allocation on it is spent on
+  // paper: an over-confirmation closed the earlier ones and a later
+  // allocation reopened the pile. The newest allocation of that seat takes
+  // the next confirmation; SAP settles it against the whole seat anyway.
+  for (final key in seatEvents.keys) {
+    if (settleSeatBalance(seatEvents[key]!) <= 0.0001) continue;
+    bool onSeat(Assignment a) =>
+        seatKey(a.productionOrder, a.operation, a.uom, a.positionId) == key;
+    if (targets.any(onSeat)) continue;
+    final closed = settled
+        .where((a) => onSeat(a) && a.status != AssignmentStatus.recalled)
+        .toList();
+    if (closed.isEmpty) continue;
+    closed.sort((a, b) {
+      final byCreated = a.createdAtUtc.compareTo(b.createdAtUtc);
+      return byCreated != 0 ? byCreated : a.id.compareTo(b.id);
+    });
+    final newest = closed.last;
+    await db.reopenAssignmentForSeat(newest.id);
+    final reopened = await assignments.getAssignmentById(newest.id);
+    if (reopened == null) continue;
+    settled.remove(newest);
+    targets.add(reopened);
+  }
+
+  return [
+    for (final target in includeSettled ? [...targets, ...settled] : targets)
+      withSeat(target),
+  ];
 }

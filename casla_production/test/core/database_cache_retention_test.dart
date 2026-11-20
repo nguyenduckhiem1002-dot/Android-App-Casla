@@ -52,4 +52,40 @@ void main() {
     );
     expect(await db.getSyncQueueItemById('durable-retention'), isNotNull);
   });
+
+  Future<void> writeSnapshot(String cacheKey, DateTime fetchedAt) =>
+      db.replaceWorkHistoryCache(
+        cacheKey: cacheKey,
+        subjectId: 'subject',
+        rangeCode: 'D',
+        scopeCode: 'S',
+        resultDateFrom: '2026-09-04',
+        resultDateTo: '2026-09-04',
+        isTruncated: false,
+        fetchedAtUtc: fetchedAt.millisecondsSinceEpoch,
+        entries: const [],
+        workers: const [],
+      );
+
+  test(
+    'retention is measured from the snapshot clock, not the wall clock',
+    () async {
+      // The repository injects its own clock. A snapshot that is "fresh" by
+      // that clock must survive even when the wall clock has moved on; the
+      // 30-day window applies between snapshots.
+      final anchor = DateTime.now().subtract(const Duration(days: 60));
+
+      await writeSnapshot('old-window', anchor);
+      expect(await db.getWorkHistoryCache('old-window'), isNotNull);
+
+      await writeSnapshot('same-day', anchor.add(const Duration(hours: 1)));
+      expect(await db.getWorkHistoryCache('old-window'), isNotNull);
+      expect(await db.getWorkHistoryCache('same-day'), isNotNull);
+
+      await writeSnapshot('next-month', anchor.add(const Duration(days: 31)));
+      expect(await db.getWorkHistoryCache('old-window'), isNull);
+      expect(await db.getWorkHistoryCache('same-day'), isNull);
+      expect(await db.getWorkHistoryCache('next-month'), isNotNull);
+    },
+  );
 }

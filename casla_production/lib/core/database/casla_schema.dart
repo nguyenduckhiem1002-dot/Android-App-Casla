@@ -9,10 +9,13 @@
 import 'package:sqflite/sqflite.dart';
 
 /// Bump on every schema change and add the matching step to [migrate].
-const int schemaVersion = 18;
+const int schemaVersion = 20;
 
 /// Tables holding transactions that must survive a restart until SAP confirms
-/// them. The retention policy in Spec 4.7 forbids clearing these.
+/// them. The retention policy in Spec 4.7 forbids clearing these wholesale;
+/// the one exception is work that outlived its own day without reaching SAP,
+/// which `CaslaDatabase.purgeExpiredSyncItems` drops row by row (decided
+/// 2026-10-28, see `lib/core/sync/sync_retention.dart`).
 const Set<String> durableTransactionTables = {
   'assignments',
   'production_records',
@@ -84,6 +87,7 @@ const List<String> _workHistoryCacheStatements = [
     work_name TEXT,
     bo_phan TEXT,
     location TEXT,
+    worker_bo_phan TEXT,
     PRIMARY KEY(cache_key, sequence_no)
   )
   ''',
@@ -167,9 +171,8 @@ const List<String> _createStatements = [
     shift_id TEXT NOT NULL,
     status TEXT NOT NULL,
     note TEXT,
-    -- Position the worker operates from for this assignment (v15). Sent to
-    -- SAP as PositionID; the machine is kept for display only, the ledger
-    -- does not store it.
+    -- Position the worker operates from for this assignment (v15) and its
+    -- machine. Sent to SAP as PositionID / MachineID on submitInitialAssign.
     position_id TEXT,
     machine_id TEXT,
     created_by TEXT NOT NULL,
@@ -240,7 +243,10 @@ const List<String> _createStatements = [
     idempotency_key TEXT NOT NULL UNIQUE,
     sap_id TEXT,
     created_at_utc INTEGER NOT NULL,
-    synced_at_utc INTEGER
+    synced_at_utc INTEGER,
+    -- 1 = recalled by a PP_RECALL_NOPASS account with no worker password;
+    -- every retry of the row sends an empty WorkerPassword.
+    without_worker_password INTEGER NOT NULL DEFAULT 0
   )
   ''',
   'CREATE INDEX idx_recall_assignment ON recall_records(phan_cong_id)',
@@ -336,7 +342,33 @@ const Map<int, Future<void> Function(Database)> _migrations = {
   15: _upgradeV15ToV16,
   16: _upgradeV16ToV17,
   17: _upgradeV17ToV18,
+  18: _upgradeV18ToV19,
+  19: _upgradeV19ToV20,
 };
+
+/// v20 — a recall sent without the worker's password (`PP_RECALL_NOPASS`)
+/// keeps that fact on its row, so the background engine can retry it instead
+/// of parking it for a password nobody can type. Existing rows read 0 and
+/// still need the password.
+Future<void> _upgradeV19ToV20(Database db) async {
+  final existing = (await db.rawQuery(
+    'PRAGMA table_info(recall_records)',
+  )).map((column) => column['name']).toSet();
+  if (!existing.contains('without_worker_password')) {
+    await db.execute(
+      'ALTER TABLE recall_records '
+      'ADD COLUMN without_worker_password INTEGER NOT NULL DEFAULT 0',
+    );
+  }
+}
+
+/// v19 — keep the worker's own department (SAP's worker register) beside the
+/// department of the place the work was booked, so the overview shows it from
+/// an offline cache hit too. Snapshots cached before read back NULL and the
+/// overview falls back to the booking department.
+Future<void> _upgradeV18ToV19(Database db) async {
+  await _addColumns(db, 'work_history_cache_workers', const ['worker_bo_phan']);
+}
 
 /// v18 — the moment of entry as SAP's EntryDate / EntryTime (Vietnam time),
 /// frozen on each transaction. Rows already queued keep both NULL and go on

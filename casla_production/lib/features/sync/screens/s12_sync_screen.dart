@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 import '../../../app/theme/casla_colors.dart';
+import '../../../app/theme/casla_spacing.dart';
+import '../../../presentation/widgets/casla_dialog_header.dart';
 import '../../../core/database/casla_database.dart';
 import '../../../core/sync/verified_sync_coordinator.dart';
 import '../../../core/sync/sync_failure.dart';
@@ -157,117 +159,69 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
       _failedCount = page.failedCount;
       _totalCount = page.totalCount;
     });
-    unawaited(_hydrateWorkerCodes(page.items, generation));
-    unawaited(_hydrateSyncDetails(page.items, generation));
+    unawaited(_hydrateItems(page.items, generation));
   }
 
-  Future<void> _hydrateWorkerCodes(
+  /// Resolves what each row shows beyond the queue columns (worker, order,
+  /// quantity) with one query for the whole page.
+  Future<void> _hydrateItems(
     List<Map<String, dynamic>> items,
     int generation,
   ) async {
-    final resolved = <String, String>{};
+    final itemsById = <String, Map<String, dynamic>>{};
     for (final item in items) {
       final id = item['id']?.toString();
       if (id == null || id.isEmpty) continue;
-      final code = await _workerCodeForItem(item);
-      if (code.isNotEmpty) resolved[id] = code;
+      itemsById[id] = item;
     }
-    if (!mounted || generation != _feedGeneration || resolved.isEmpty) return;
-    setState(() => _workerCodesByItemId.addAll(resolved));
+    if (itemsById.isEmpty) return;
+    final rows = await ref
+        .read(appStateProvider)
+        .db
+        .getSyncItemDetailRows(itemsById.keys);
+    if (!mounted || generation != _feedGeneration || rows.isEmpty) return;
+    final codes = <String, String>{};
+    final details = <String, _SyncItemDetails>{};
+    for (final entry in rows.entries) {
+      details[entry.key] = _detailsFromRow(entry.value, itemsById[entry.key]!);
+      final code = _workerCodeFromRow(entry.value);
+      if (code.isNotEmpty) codes[entry.key] = code;
+    }
+    setState(() {
+      _workerCodesByItemId.addAll(codes);
+      _detailsByItemId.addAll(details);
+    });
   }
 
-  Future<String> _workerCodeForItem(Map<String, dynamic> item) async {
-    final db = ref.read(appStateProvider).db;
-    final source = await db.getSyncSourceRow(
-      item['entity_type'] as String,
-      item['entity_id'] as String,
-    );
-    if (source == null) return '';
-    Map<String, dynamic>? assignment;
-    if (item['entity_type'] == 'ASSIGNMENT') {
-      assignment = source;
-    } else {
-      final assignmentId = source['phan_cong_id'] as String?;
-      if (assignmentId != null) {
-        assignment = await db.getAssignmentById(assignmentId);
-      }
-    }
-    final workerId = assignment?['nhan_vien_id'] as String?;
-    if (workerId == null || workerId.trim().isEmpty) return '';
-    final employee = await db.getEmployeeById(workerId);
-    return employee?['ma_nv']?.toString().trim() ?? workerId.trim();
-  }
-
-  Future<void> _hydrateSyncDetails(
-    List<Map<String, dynamic>> items,
-    int generation,
-  ) async {
-    final resolved = <String, _SyncItemDetails>{};
-    for (final item in items) {
-      final id = item['id']?.toString();
-      if (id == null || id.isEmpty) continue;
-      final details = await _syncDetailsForItem(item);
-      if (details != null) resolved[id] = details;
-    }
-    if (!mounted || generation != _feedGeneration || resolved.isEmpty) return;
-    setState(() => _detailsByItemId.addAll(resolved));
+  /// The code the search box matches: the employee's, or the raw worker id
+  /// when the employee row is not on this device.
+  String _workerCodeFromRow(Map<String, dynamic> row) {
+    final workerId = row['worker_id']?.toString().trim() ?? '';
+    if (workerId.isEmpty) return '';
+    return row['worker_code']?.toString().trim() ?? workerId;
   }
 
   Future<_SyncItemDetails?> _syncDetailsForItem(
     Map<String, dynamic> item,
   ) async {
-    final db = ref.read(appStateProvider).db;
+    final id = item['id']?.toString() ?? '';
+    if (id.isEmpty) return null;
+    final rows = await ref.read(appStateProvider).db.getSyncItemDetailRows([
+      id,
+    ]);
+    final row = rows[id];
+    return row == null ? null : _detailsFromRow(row, item);
+  }
+
+  _SyncItemDetails _detailsFromRow(
+    Map<String, dynamic> row,
+    Map<String, dynamic> item,
+  ) {
+    String text(String column) => (row[column] ?? '').toString().trim();
     final entityType = item['entity_type']?.toString() ?? '';
-    final entityId = item['entity_id']?.toString() ?? '';
-    if (entityType.isEmpty || entityId.isEmpty) return null;
-    final source = await db.getSyncSourceRow(entityType, entityId);
-    if (source == null) return null;
-
-    Map<String, dynamic>? assignment;
-    if (entityType == 'ASSIGNMENT') {
-      assignment = source;
-    } else {
-      final assignmentId = source['phan_cong_id']?.toString();
-      if (assignmentId != null && assignmentId.isNotEmpty) {
-        assignment = await db.getAssignmentById(assignmentId);
-      }
-    }
-
-    Map<String, dynamic>? order;
-    final orderId = assignment?['don_hang_id']?.toString();
-    if (orderId != null && orderId.isNotEmpty) {
-      order = await db.getOrderById(orderId);
-    }
-
-    final workerId = assignment?['nhan_vien_id']?.toString().trim() ?? '';
-    final employee = workerId.isEmpty
-        ? null
-        : await db.getEmployeeById(workerId);
-    final workerCode = employee?['ma_nv']?.toString().trim() ?? '';
-    final workerName = employee?['ten']?.toString().trim() ?? '';
-    final number =
-        source[entityType == 'ASSIGNMENT' ? 'assigned_quantity' : 'quantity'];
-    final unit = (source['unit_of_measure'] ?? order?['uom'] ?? '')
-        .toString()
-        .trim();
-    final quantity = number is num
-        ? formatQuantity(number.toDouble(), uom: unit)
-        : '';
-    final businessDate =
-        (source['business_date'] ?? assignment?['business_date'] ?? '')
-            .toString()
-            .trim();
-    final shiftId = (source['shift_id'] ?? assignment?['shift_id'] ?? '')
-        .toString()
-        .trim();
-    final productionOrder =
-        (order?['production_order'] ?? order?['ma_don_hang'] ?? '')
-            .toString()
-            .trim();
-    final operation = (order?['operation'] ?? '').toString().trim();
-    final productName = (order?['ten_sp'] ?? '').toString().trim();
-    final productCode = (order?['ma_sp'] ?? '').toString().trim();
-    final workId = (assignment?['to_id'] ?? '').toString().trim();
+    final unit = text('unit_of_measure');
+    final number = row['quantity'];
+    final occurredAt = row['occurred_at_utc'];
     final transactionType = switch (entityType) {
       'ASSIGNMENT' => 'Phân công',
       'RECALL' || 'RECALL_RECORD' => 'Thu hồi',
@@ -276,21 +230,23 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
     };
 
     return _SyncItemDetails(
-      productionOrder: productionOrder,
-      operation: operation,
-      businessDate: _displayDate(businessDate),
-      shift: _displayShift(shiftId),
-      workId: workId,
-      productName: productName,
-      productCode: productCode,
-      workerName: workerName,
-      workerCode: workerCode,
+      productionOrder: text('production_order'),
+      operation: text('operation'),
+      businessDate: _displayDate(text('business_date')),
+      shift: _displayShift(text('shift_id')),
+      workId: text('work_id'),
+      productName: text('product_name'),
+      productCode: text('product_code'),
+      workerName: text('worker_name'),
+      workerCode: text('worker_code'),
       transactionType: transactionType,
-      quantity: quantity,
+      quantity: number is num
+          ? formatQuantity(number.toDouble(), uom: unit)
+          : '',
       unit: unit,
-      executedAt: source['occurred_at_utc'] is num
+      executedAt: occurredAt is num
           ? DateTime.fromMillisecondsSinceEpoch(
-              (source['occurred_at_utc'] as num).toInt(),
+              occurredAt.toInt(),
               isUtc: true,
             ).toIso8601String()
           : '',
@@ -349,14 +305,15 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
     _feedRetentionRefreshing = true;
     final generation = _feedGeneration;
     try {
-      final page = await ref
-          .read(appStateProvider)
-          .db
-          .getSyncFeedPage(
-            actorId: _actorId,
-            teamIds: _teamIds,
-            filter: _feedFilter,
-          );
+      final db = ref.read(appStateProvider).db;
+      // Past midnight, yesterday's unsent rows leave the device as well as
+      // this list.
+      await db.purgeExpiredSyncItems();
+      final page = await db.getSyncFeedPage(
+        actorId: _actorId,
+        teamIds: _teamIds,
+        filter: _feedFilter,
+      );
       _replaceFirstPage(page, generation);
     } catch (_) {
       // The live stream remains the source of truth; a retention refresh is
@@ -393,8 +350,7 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
         _nextId = page.nextId;
         _feedLoadingMore = false;
       });
-      unawaited(_hydrateWorkerCodes(page.items, generation));
-      unawaited(_hydrateSyncDetails(page.items, generation));
+      unawaited(_hydrateItems(page.items, generation));
     } catch (_) {
       if (mounted) setState(() => _feedLoadingMore = false);
     }
@@ -606,6 +562,8 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
       'CONFIRM_ORIGINAL_QUANTITY_EXCEEDED',
       'SOURCE_BALANCE_INSUFFICIENT',
       'WORKER_AUTH_FAILED',
+      'WORKER_NO_ACCOUNT',
+      'WORKER_IS_INACTIVE',
       'SHIFT_CLOSED',
       'SHIFT_NOT_ALLOWED',
     ];
@@ -629,6 +587,7 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
       'CONFIRM_ORIGINAL_QUANTITY_EXCEEDED' ||
       'SOURCE_BALANCE_INSUFFICIENT' => 'Số lượng không hợp lệ',
       'WORKER_AUTH_FAILED' => 'Cần xác minh công nhân',
+      'WORKER_NO_ACCOUNT' || 'WORKER_IS_INACTIVE' => 'Tài khoản công nhân',
       _ => 'Cần kiểm tra dữ liệu',
     };
   }
@@ -683,12 +642,22 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
         'Kiểm tra số dư giao dịch gốc trước khi gửi lại.',
       'WORKER_AUTH_FAILED' =>
         'Xác minh lại bằng mật khẩu của công nhân rồi gửi lại giao dịch.',
+      'WORKER_NO_ACCOUNT' =>
+        'Báo quản trị tạo tài khoản mobile cho công nhân rồi gửi lại. '
+            'Nhập lại mật khẩu không giúp được.',
+      'WORKER_IS_INACTIVE' =>
+        'Báo quản trị kích hoạt lại tài khoản công nhân rồi gửi lại. '
+            'Nhập lại mật khẩu không giúp được.',
       'SHIFT_WORK_DATE_MISMATCH' || 'SHIFT_NOT_APPLICABLE' || 'OUTSIDE_SHIFT' =>
         'Đối chiếu ngày/ca đã lưu với thời điểm tạo giao dịch và múi giờ ca trên SAP. '
             'Đổi cài đặt hoặc nhập lại mật khẩu không sửa bản ghi cũ. '
             'Kiểm tra với quản lý trước khi xóa và tạo lại giao dịch.',
       'EXECUTED_AT_IN_FUTURE' =>
         'Bật "Ngày và giờ tự động" trong Cài đặt máy để tránh lặp lại.',
+      'RECALL_NOPASS_NOT_ALLOWED' =>
+        'Tài khoản không còn quyền thu hồi không cần mật khẩu. Xóa giao dịch '
+            'này và thu hồi lại bằng mật khẩu công nhân, hoặc báo quản trị '
+            'cấp quyền.',
       'SHIFT_CLOSED' || 'SHIFT_NOT_ALLOWED' =>
         'Chọn đúng ca đang làm việc rồi thử lại giao dịch.',
       _ =>
@@ -853,13 +822,20 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
         await showDialog<bool>(
           context: context,
           builder: (dialogContext) => AlertDialog(
+            iconPadding: CaslaDialog.iconPadding,
+            titlePadding: CaslaDialog.titlePadding,
+            contentPadding: CaslaDialog.contentPadding,
             icon: const Icon(
               Icons.delete_outline_rounded,
               color: CaslaColors.danger,
-              size: 30,
+              size: 26,
             ),
-            title: Text(
-              isVerification ? 'Xóa bản ghi cần xác minh?' : 'Xóa bản ghi lỗi?',
+            title: CaslaDialogHeader(
+              child: Text(
+                isVerification
+                    ? 'Xóa bản ghi cần xác minh?'
+                    : 'Xóa bản ghi lỗi?',
+              ),
             ),
             content: const Text(
               'Giao dịch sẽ bị xóa hẳn khỏi thiết bị và không thể khôi phục. '
@@ -869,6 +845,7 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
             ),
             actions: [
               TextButton(
+                style: CaslaDialog.actionStyle,
                 onPressed: () => Navigator.of(dialogContext).pop(false),
                 child: const Text('Hủy'),
               ),
@@ -876,7 +853,7 @@ class _S12SyncScreenState extends ConsumerState<S12SyncScreen> {
                 style: FilledButton.styleFrom(
                   backgroundColor: CaslaColors.danger,
                   foregroundColor: Colors.white,
-                ),
+                ).merge(CaslaDialog.actionStyle),
                 onPressed: () => Navigator.of(dialogContext).pop(true),
                 child: const Text('Xóa bản ghi'),
               ),

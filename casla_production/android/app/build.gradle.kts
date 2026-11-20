@@ -147,7 +147,12 @@ android {
         }
     }
     productFlavors.getByName("production").signingConfig = signingConfigs.getByName("production")
-    productFlavors.getByName("staging").signingConfig = signingConfigs.getByName("production")
+    // Staging is the QAS test build. It takes the production key when one is
+    // configured and the debug key otherwise, so a tester's APK builds without
+    // release credentials. Production never falls back.
+    productFlavors.getByName("staging").signingConfig = signingConfigs.getByName(
+        if (productionSigningReady) "production" else "debug",
+    )
 }
 
 dependencies {

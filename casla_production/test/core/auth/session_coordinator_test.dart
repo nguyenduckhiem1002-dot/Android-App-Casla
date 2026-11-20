@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:casla_production/core/auth/session_coordinator.dart';
+import 'package:casla_production/core/auth/session_refresh.dart';
 import 'package:casla_production/domain/entities/entities.dart';
 import 'package:casla_production/domain/entities/enums.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -59,6 +60,81 @@ void main() {
 
     expect(await refresh, isFalse);
     expect(coordinator.currentSession?.id, 'user-b');
+    coordinator.dispose();
+  });
+
+  test(
+    'a caller whose token was already rotated does not refresh again',
+    () async {
+      var calls = 0;
+      final coordinator = SessionCoordinator((current) async {
+        calls++;
+        return session('user-a', refreshToken: 'refresh-b');
+      });
+      final generation = coordinator.beginLogin();
+      coordinator.completeLogin(
+        generation: generation,
+        session: session('user-a'),
+      );
+
+      // First caller refreshes with the token everybody started with.
+      expect(
+        await coordinator.refreshDetailed(staleAccessToken: 'access-user-a'),
+        SessionRefreshOutcome.refreshed,
+      );
+      expect(calls, 1);
+      // A second caller that failed with that same old token must not rotate
+      // the single-use refresh token a second time.
+      expect(
+        await coordinator.refreshDetailed(staleAccessToken: 'old-access'),
+        SessionRefreshOutcome.refreshed,
+      );
+      expect(calls, 1);
+      coordinator.dispose();
+    },
+  );
+
+  test('SAP refusing the refresh token is a rejection', () async {
+    final coordinator = SessionCoordinator((_) async {
+      throw const SessionRefreshRejectedException(
+        code: 'TOKEN_INVALID_OR_EXPIRED',
+        message: 'dead',
+      );
+    });
+    final generation = coordinator.beginLogin();
+    coordinator.completeLogin(
+      generation: generation,
+      session: session('user-a'),
+    );
+
+    expect(await coordinator.refreshDetailed(), SessionRefreshOutcome.rejected);
+    expect(await coordinator.refresh(), isFalse);
+    // The coordinator itself keeps the session; ending it is AppState's call.
+    expect(coordinator.currentSession?.id, 'user-a');
+    coordinator.dispose();
+  });
+
+  test('an unreachable SAP is unavailable and keeps the session', () async {
+    final coordinator = SessionCoordinator((_) async {
+      throw const SessionRefreshUnavailableException('offline');
+    });
+    final generation = coordinator.beginLogin();
+    coordinator.completeLogin(
+      generation: generation,
+      session: session('user-a'),
+    );
+
+    expect(
+      await coordinator.refreshDetailed(),
+      SessionRefreshOutcome.unavailable,
+    );
+    expect(coordinator.currentSession?.refreshToken, 'refresh-a');
+    coordinator.dispose();
+  });
+
+  test('nothing to refresh is skipped, not a failure', () async {
+    final coordinator = SessionCoordinator((_) async => null);
+    expect(await coordinator.refreshDetailed(), SessionRefreshOutcome.skipped);
     coordinator.dispose();
   });
 

@@ -35,6 +35,10 @@ class PositionSlotField extends StatelessWidget {
 
   /// The worker's own seat, offered as a way back from a temporary one.
   final String? originPositionId;
+
+  /// The machine at that seat, so a machine change at the same position
+  /// can show the current one beside the scanned one.
+  final String? originMachineId;
   final VoidCallback? onUseOrigin;
 
   /// Why the current choice cannot be sent, shown under the field.
@@ -52,6 +56,7 @@ class PositionSlotField extends StatelessWidget {
     required this.source,
     required this.lookup,
     this.originPositionId,
+    this.originMachineId,
     this.onUseOrigin,
     this.errorText,
   });
@@ -271,7 +276,7 @@ class PositionSlotField extends StatelessWidget {
     }
     // One line at normal code lengths; two 10-character codes on a narrow
     // handset wrap instead of being clipped.
-    return Wrap(
+    final scanned = Wrap(
       spacing: 10,
       runSpacing: 2,
       crossAxisAlignment: WrapCrossAlignment.center,
@@ -280,28 +285,63 @@ class PositionSlotField extends StatelessWidget {
         if ((machineId ?? '').isNotEmpty) _pair('Mã máy:', machineId!),
       ],
     );
+    final current = _currentLine();
+    if (current == null) return scanned;
+    // What the board holds for this worker now, above what was scanned,
+    // so a move or a machine change is read as before/after.
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _pair(current.$1, current.$2, muted: true),
+        const SizedBox(height: 2),
+        scanned,
+      ],
+    );
   }
 
-  static Widget _pair(String label, String value) => Text.rich(
-    TextSpan(
-      children: [
+  /// The worker's seat when it differs from the chosen position, or its
+  /// machine when only that differs. Null when nothing changes.
+  (String, String)? _currentLine() {
+    final seat = originPositionId?.trim().toUpperCase() ?? '';
+    if (seat.isEmpty) return null;
+    final seatMachine = originMachineId?.trim().toUpperCase() ?? '';
+    final chosen = positionId!.trim().toUpperCase();
+    final chosenMachine = machineId?.trim().toUpperCase() ?? '';
+    if (chosen != seat) {
+      return (
+        'Vị trí hiện tại:',
+        seatMachine.isEmpty ? seat : '$seat · $seatMachine',
+      );
+    }
+    if (seatMachine.isNotEmpty &&
+        chosenMachine.isNotEmpty &&
+        chosenMachine != seatMachine) {
+      return ('Máy hiện tại:', seatMachine);
+    }
+    return null;
+  }
+
+  static Widget _pair(String label, String value, {bool muted = false}) =>
+      Text.rich(
         TextSpan(
-          text: '$label ',
-          style: const TextStyle(
-            fontSize: CaslaType.caption,
-            fontWeight: FontWeight.w600,
-            color: CaslaColors.muted,
-          ),
+          children: [
+            TextSpan(
+              text: '$label ',
+              style: const TextStyle(
+                fontSize: CaslaType.caption,
+                fontWeight: FontWeight.w600,
+                color: CaslaColors.muted,
+              ),
+            ),
+            TextSpan(
+              text: value,
+              style: TextStyle(
+                fontSize: muted ? CaslaType.caption : CaslaType.body,
+                fontWeight: FontWeight.w700,
+                color: muted ? CaslaColors.navy900 : CaslaColors.primaryNavy,
+              ),
+            ),
+          ],
         ),
-        TextSpan(
-          text: value,
-          style: const TextStyle(
-            fontSize: CaslaType.body,
-            fontWeight: FontWeight.w700,
-            color: CaslaColors.primaryNavy,
-          ),
-        ),
-      ],
-    ),
-  );
+      );
 }

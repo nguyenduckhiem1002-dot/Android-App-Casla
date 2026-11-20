@@ -9,6 +9,7 @@ WorkHistorySummary row(
   double assigned, {
   double completed = 0,
   double recalled = 0,
+  String department = '',
 }) => WorkHistorySummary(
   workerId: worker,
   workerName: 'Worker $worker',
@@ -19,6 +20,7 @@ WorkHistorySummary row(
   unitOfMeasure: unit,
   transactionCount: 1,
   workId: workId,
+  workerBoPhan: department,
 );
 
 void main() {
@@ -36,6 +38,14 @@ void main() {
     expect(khiem.remainingQuantity, 1419);
     expect(khiem.workId, isEmpty, reason: 'no single position covers both');
     expect(merged, hasLength(2));
+  });
+
+  test('the worker department is kept when rows are folded', () {
+    final merged = mergeWorkerSummaries([
+      row('NV01', 'WORK-OLD', 'CHC', 10),
+      row('NV01', 'WORK-NEW', 'CHC', 5, department: 'MAY MIỆNG 2'),
+    ]);
+    expect(merged.single.workerBoPhan, 'MAY MIỆNG 2');
   });
 
   test('different units are never added together', () {

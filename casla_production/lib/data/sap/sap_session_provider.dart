@@ -4,6 +4,8 @@
 // gateway needs to read the current access token and trigger a refresh, but
 // must not depend on where session state actually lives.
 
+import '../../core/auth/session_refresh.dart';
+
 abstract class SapSessionProvider {
   /// The current session's access token, or null when nobody is logged in.
   String? get accessToken;
@@ -20,10 +22,16 @@ abstract class SapSessionProvider {
   /// Attempts to refresh the current session's tokens using its refresh
   /// token, updating whatever holds the session on success.
   ///
-  /// Returns false when there is no session to refresh, or the refresh call
-  /// itself was rejected (dead refresh token, revoked session) — the engine
-  /// treats that as "give up on this pass", not as license to retry forever.
-  Future<bool> refreshSession();
+  /// [staleAccessToken] is the token the failed request carried. When the
+  /// session already holds a different one, somebody else refreshed in the
+  /// meantime and the caller only needs to retry: no second rotation is
+  /// made, which matters because SAP's refresh token is single-use.
+  ///
+  /// The outcome says what the caller should do next — see
+  /// [SessionRefreshOutcome]. Only [SessionRefreshOutcome.refreshed] is a
+  /// license to retry; [SessionRefreshOutcome.unavailable] must be reported
+  /// as a transient delivery problem, never as an expired session.
+  Future<SessionRefreshOutcome> refreshSession({String? staleAccessToken});
 }
 
 /// The request belonged to a session that ended while it was in flight.

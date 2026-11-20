@@ -18,6 +18,7 @@ import '../../core/sync/sync_failure.dart';
 import '../../domain/policies/production_math.dart';
 import '../../core/utils/device_info.dart';
 import '../../core/utils/sap_entry_time.dart';
+import '../../core/auth/session_refresh.dart';
 import '../../domain/entities/operation_access.dart';
 import '../../domain/entities/work_history.dart';
 import 'odata_error.dart';
@@ -53,13 +54,52 @@ class SapPpOpAllocGateway implements SapWriteGateway {
     required this.session,
   });
 
+  /// The access token the most recent [push] went out with. The sync engine
+  /// asks for a refresh right after that push failed; naming the token lets
+  /// the session skip a second rotation when another caller (a history read,
+  /// a position call) has already renewed it in the meantime.
+  String? _lastPushToken;
+
   @override
-  Future<bool> refreshSession() => session.refreshSession();
+  Future<bool> refreshSession() async =>
+      await session.refreshSession(staleAccessToken: _lastPushToken) ==
+      SessionRefreshOutcome.refreshed;
+
+  /// Retries [attempt] once after a successful refresh of a stale token.
+  ///
+  /// An unreachable SAP during the refresh is reported as its own transient
+  /// failure rather than the original auth error: the caller must not read
+  /// "phiên đã hết hạn" (and log out) into what was a dropped connection.
+  Future<T> _withSessionRetry<T>(Future<T> Function() attempt) async {
+    final usedToken = session.accessToken;
+    try {
+      return await attempt();
+    } on SapSessionInvalidatedException {
+      rethrow;
+    } catch (error) {
+      if (classifySyncError(error).kind != SyncFailureKind.auth) rethrow;
+      final outcome = await session.refreshSession(staleAccessToken: usedToken);
+      switch (outcome) {
+        case SessionRefreshOutcome.refreshed:
+          return attempt();
+        case SessionRefreshOutcome.unavailable:
+          throw const SessionRefreshUnavailableException(
+            'Chưa làm mới được phiên SAP. Sẽ tự động thử lại.',
+          );
+        case SessionRefreshOutcome.rejected:
+        case SessionRefreshOutcome.skipped:
+          // A revoked session fails the refresh too; that failure — not the
+          // original one — is what the caller should see and act on.
+          rethrow;
+      }
+    }
+  }
 
   /// Clears request-scoped SAP transport state when the app changes identity.
   /// The gateway owns this client, so no old CSRF token or cookies can leak
   /// into the next login's write/history requests.
   void resetTransportSession() {
+    _lastPushToken = null;
     client.setAuthToken(null);
     client.resetCsrfSession();
   }
@@ -68,6 +108,7 @@ class SapPpOpAllocGateway implements SapWriteGateway {
   Future<SapWriteResult> push(SyncPushRequest request) async {
     final sessionGeneration = session.generation;
     final accessToken = session.accessToken;
+    _lastPushToken = accessToken;
     if (accessToken == null || accessToken.isEmpty) {
       if (!session.isGenerationCurrent(sessionGeneration)) {
         throw const SapSessionInvalidatedException();
@@ -151,6 +192,9 @@ class SapPpOpAllocGateway implements SapWriteGateway {
         // though the backend treats an empty one as "no position". It is part
         // of SAP's idempotency payload, which is why it is frozen on the row.
         'PositionID': _text(assignment['position_id']),
+        // The machine at that position, frozen with it; ZA_PP_InitialAssign
+        // declares MachineID so it must travel even when empty.
+        'MachineID': _text(assignment['machine_id']),
         'ToWorkerID': workerCode,
         'Quantity': _quantity(assignment['assigned_quantity']),
         'UnitOfMeasure': _unitOfMeasure(assignment, order),
@@ -259,7 +303,13 @@ class SapPpOpAllocGateway implements SapWriteGateway {
         'OriginalTransactionUUID': _nullIfEmpty(assignment['sap_id']),
         'AccessToken': accessToken,
         'DeviceID': deviceId,
-        'WorkerPassword': _requireWorkerPassword(request),
+        // Always present (the gateway rejects a missing declared parameter).
+        // Empty is the password-less recall: SAP takes it only from an
+        // account holding PP_RECALL_NOPASS and answers
+        // RECALL_NOPASS_NOT_ALLOWED to anyone else.
+        'WorkerPassword': _isWithoutWorkerPassword(record)
+            ? ''
+            : _requireWorkerPassword(request),
         'SyncItemUUID': request.idempotencyKey,
       },
     );
@@ -279,13 +329,12 @@ class SapPpOpAllocGateway implements SapWriteGateway {
     required Map<String, dynamic> params,
   }) async {
     try {
-      // Same CSRF dance SapAuthController does before every mutating POST —
-      // this service is behind the same SAP Gateway CSRF protection.
+      // This service is behind the SAP Gateway CSRF protection. The token
+      // is reused across calls; see SapODataClient.postWithCsrf.
       _ensureSessionCurrent(sessionGeneration, accessToken);
-      await client.fetchCsrfToken();
-      _ensureSessionCurrent(sessionGeneration, accessToken);
-      final response = await client.dio.post(
+      final response = await client.postWithCsrf(
         '$_kEntitySet/$_kNamespace.$action',
+        guard: () => _ensureSessionCurrent(sessionGeneration, accessToken),
         data: params,
       );
       _ensureSessionCurrent(sessionGeneration, accessToken);
@@ -328,10 +377,9 @@ class SapPpOpAllocGateway implements SapWriteGateway {
   }) async {
     try {
       _ensureSessionCurrent(sessionGeneration, accessToken);
-      await client.fetchCsrfToken();
-      _ensureSessionCurrent(sessionGeneration, accessToken);
-      final response = await client.dio.post(
+      final response = await client.postWithCsrf(
         '$_kEntitySet/$_kNamespace.getSyncStatus',
+        guard: () => _ensureSessionCurrent(sessionGeneration, accessToken),
         data: {
           'AccessToken': accessToken,
           'DeviceID': deviceId,
@@ -368,8 +416,8 @@ class SapPpOpAllocGateway implements SapWriteGateway {
   /// own rows back no matter what WorkerID this app sends here. WorkID is an
   /// optional filter that pins the report to one posting location.
   ///
-  /// The access token is short-lived (30 minutes — see `ZA_MOB_LoginResult`'s
-  /// `ExpiresAt`), and unlike a queued mutation this call has no engine
+  /// The access token is short-lived (120 minutes since 2026-11-12, 30
+  /// before — see `ZA_MOB_LoginResult`'s `ExpiresAt`), and unlike a queued mutation this call has no engine
   /// wrapping it with a refresh-and-retry. Without doing that here, the
   /// history screen would show a raw TOKEN_INVALID_OR_EXPIRED error on every
   /// ordinary expiry — refreshed once, transparently, before giving up.
@@ -382,8 +430,8 @@ class SapPpOpAllocGateway implements SapWriteGateway {
     String? productionOrder,
     String? operation,
   }) async {
-    try {
-      return await _getWorkHistoryOnce(
+    return _withSessionRetry(
+      () => _getWorkHistoryOnce(
         range,
         dateFrom: dateFrom,
         dateTo: dateTo,
@@ -391,25 +439,8 @@ class SapPpOpAllocGateway implements SapWriteGateway {
         workId: workId,
         productionOrder: productionOrder,
         operation: operation,
-      );
-    } on SapSessionInvalidatedException {
-      rethrow;
-    } catch (error) {
-      if (classifySyncError(error).kind != SyncFailureKind.auth) rethrow;
-      // A revoked session (e.g. right after a password change) fails the
-      // refresh too; that failure — not the original one — is what the
-      // caller should see and act on ("phiên đăng nhập đã hết hạn").
-      if (!await refreshSession()) rethrow;
-      return _getWorkHistoryOnce(
-        range,
-        dateFrom: dateFrom,
-        dateTo: dateTo,
-        shiftId: shiftId,
-        workId: workId,
-        productionOrder: productionOrder,
-        operation: operation,
-      );
-    }
+      ),
+    );
   }
 
   /// Checks the scanned operation against the manager's current SAP scope and
@@ -425,27 +456,15 @@ class SapPpOpAllocGateway implements SapWriteGateway {
     required String shiftId,
     required DateTime executedAt,
   }) async {
-    try {
-      return await _checkOperationAccessOnce(
+    return _withSessionRetry(
+      () => _checkOperationAccessOnce(
         productionOrder: productionOrder,
         operation: operation,
         workId: workId,
         shiftId: shiftId,
         executedAt: executedAt,
-      );
-    } on SapSessionInvalidatedException {
-      rethrow;
-    } catch (error) {
-      if (classifySyncError(error).kind != SyncFailureKind.auth) rethrow;
-      if (!await refreshSession()) rethrow;
-      return _checkOperationAccessOnce(
-        productionOrder: productionOrder,
-        operation: operation,
-        workId: workId,
-        shiftId: shiftId,
-        executedAt: executedAt,
-      );
-    }
+      ),
+    );
   }
 
   Future<OperationAccessResult> _checkOperationAccessOnce({
@@ -487,10 +506,9 @@ class SapPpOpAllocGateway implements SapWriteGateway {
 
     try {
       _ensureSessionCurrent(sessionGeneration, accessToken);
-      await client.fetchCsrfToken();
-      _ensureSessionCurrent(sessionGeneration, accessToken);
-      final response = await client.dio.post(
+      final response = await client.postWithCsrf(
         '$_kEntitySet/$_kStaticActionBinding.checkOperationAccess',
+        guard: () => _ensureSessionCurrent(sessionGeneration, accessToken),
         data: {
           'AccessToken': accessToken,
           'DeviceID': deviceId,
@@ -594,8 +612,6 @@ class SapPpOpAllocGateway implements SapWriteGateway {
 
     try {
       _ensureSessionCurrent(sessionGeneration, accessToken);
-      await client.fetchCsrfToken();
-      _ensureSessionCurrent(sessionGeneration, accessToken);
       final payload = <String, dynamic>{
         'AccessToken': accessToken,
         'DeviceID': deviceId,
@@ -613,8 +629,9 @@ class SapPpOpAllocGateway implements SapWriteGateway {
         'ProductionOrder': normalizedProductionOrder,
         'Operation': normalizedOperation,
       });
-      final response = await client.dio.post(
+      final response = await client.postWithCsrf(
         '$_kEntitySet/$_kStaticActionBinding.getWorkHistory',
+        guard: () => _ensureSessionCurrent(sessionGeneration, accessToken),
         data: payload,
         options: Options(receiveTimeout: _historyReceiveTimeout),
       );
@@ -750,6 +767,7 @@ class SapPpOpAllocGateway implements SapWriteGateway {
       workName: (json['WorkName'] ?? '').toString(),
       boPhan: (json['BoPhan'] ?? '').toString(),
       location: (json['Location'] ?? '').toString(),
+      workerBoPhan: (json['WorkerBoPhan'] ?? '').toString().trim(),
     );
   }
 
@@ -794,6 +812,11 @@ class SapPpOpAllocGateway implements SapWriteGateway {
     if (frozen != null && frozen.isNotEmpty) return frozen;
     return order?['uom']?.toString() ?? '';
   }
+
+  /// Whether this recall was entered as a password-less one; the flag is
+  /// frozen on the `recall_records` row (schema v20).
+  static bool _isWithoutWorkerPassword(Map<String, dynamic> record) =>
+      record['without_worker_password'] == 1;
 
   static String? _requireWorkerPassword(SyncPushRequest request) {
     final password = request.workerPassword;

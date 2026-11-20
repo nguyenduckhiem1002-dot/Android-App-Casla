@@ -7,9 +7,18 @@ import 'package:flutter/services.dart' show appFlavor;
 enum SapTransportAuthMode { basic, gateway }
 
 class AppConfig {
-  /// Only the explicitly selected dev flavor may embed test transport secrets.
-  /// Unknown, staging and production release builds remain gateway-only.
-  static const bool requiresGateway = kReleaseMode && appFlavor != 'dev';
+  /// Only the explicitly selected test flavors, dev and staging (the QAS
+  /// build), may embed the shared transport credential: it only opens the
+  /// OData service, every business call still carries the session's own
+  /// AccessToken. Production and unknown release builds remain gateway-only.
+  static const bool requiresGateway =
+      kReleaseMode && appFlavor != 'dev' && appFlavor != 'staging';
+
+  /// Tra cứu theo ca: nút "Ca tra cứu" ở Lịch sử và ô chọn ca trong bộ lọc
+  /// Tổng quan. Tạm ẩn từ 2026-10-27 vì nhà máy hiện chỉ có một ca; bật lại
+  /// khi có thêm ca. Khi ẩn, bộ lọc ca mặc định vẫn giữ nguyên như trước (ca
+  /// đang làm việc ở Tổng quan, tất cả ca ở Lịch sử), nên số liệu không đổi.
+  static const bool showShiftLookup = false;
   static const String appVersion = String.fromEnvironment(
     'APP_VERSION',
     defaultValue: '1.0.0',
@@ -110,9 +119,18 @@ class AppConfig {
     }
   }
 
+  /// Reuse the CSRF token of a transport session instead of downloading
+  /// `$metadata` before every POST (2026-11-16). This is the rollback switch:
+  /// build with `SAP_REUSE_CSRF_TOKEN=false` to fetch a token per request
+  /// again, exactly as before.
+  static const bool sapReuseCsrfToken = bool.fromEnvironment(
+    'SAP_REUSE_CSRF_TOKEN',
+    defaultValue: true,
+  );
+
   /// Development/staging direct-SAP Basic Authentication User.
   ///
-  /// The non-dev release branch of this const expression is always empty.
+  /// The gateway-only release branch of this const expression is always empty.
   /// That means even a mistakenly supplied `--dart-define=SAP_BASIC_AUTH_USER`
   /// is not selected into the release program constant.
   static const String _sapBasicAuthUser = requiresGateway

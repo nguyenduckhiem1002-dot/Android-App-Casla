@@ -48,4 +48,8 @@ app.*.map.json
 # Copy .env.example → .env and fill in real values.
 # Run with: flutter run --dart-define-from-file=.env
 .env
+.env.qas
 env.json
+
+# Load test output
+tool/loadtest/out/

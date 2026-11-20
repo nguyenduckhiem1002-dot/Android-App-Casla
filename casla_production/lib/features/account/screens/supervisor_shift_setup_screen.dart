@@ -35,6 +35,11 @@ class _SupervisorShiftSetupScreenState
   UserWorkContext? _work;
   SapShift? _shift;
   DateTime _date = DateTime.now();
+
+  /// The app-level working date this screen last took over. When the app
+  /// moves that date on (a new day after a night left open), the screen
+  /// follows instead of keeping yesterday on display.
+  DateTime? _syncedBusinessDate;
   List<SapShift> _shifts = const [];
   bool _loading = true;
   bool _initializing = true;
@@ -70,6 +75,7 @@ class _SupervisorShiftSetupScreenState
             .firstOrNull;
     _selectedWorkCenter = _work?.workCenter.trim();
     _date = appState.activeBusinessDate;
+    _syncedBusinessDate = _date;
     _shift = appState.activeShift;
     setState(() => _initializing = false);
     await _loadShifts();
@@ -161,7 +167,7 @@ class _SupervisorShiftSetupScreenState
     );
     setState(() {
       _selectedWorkCenter = workCenter;
-      // A Xưởng with a single Bộ phận needs no second pick.
+      // A Xưởng with a single Tổ needs no second pick.
       _work = departments.length == 1 ? departments.single : null;
       _shift = null;
       _shifts = const [];
@@ -169,10 +175,26 @@ class _SupervisorShiftSetupScreenState
     _loadShifts();
   }
 
-  // Bộ phận of the same Xưởng share its shifts: keep the list and the choice.
+  // Tổ of the same Xưởng share its shifts: keep the list and the choice.
   void _selectDepartment(UserWorkContext? work) {
     if (work == null) return;
     setState(() => _work = work);
+  }
+
+  /// Takes over a working date the app changed while this screen was open.
+  /// The shift choice is kept: [_loadShifts] re-selects the same ShiftID for
+  /// the new date when it exists there.
+  void _followBusinessDate(DateTime appDate) {
+    final synced = _syncedBusinessDate;
+    if (_initializing || synced == null) return;
+    if (DateUtils.isSameDay(appDate, synced)) return;
+    _syncedBusinessDate = appDate;
+    if (DateUtils.isSameDay(appDate, _date)) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() => _date = appDate);
+      _loadShifts();
+    });
   }
 
   Future<void> _pickDate() async {
@@ -236,9 +258,10 @@ class _SupervisorShiftSetupScreenState
 
   @override
   Widget build(BuildContext context) {
+    final appState = ref.watch(appStateProvider);
+    _followBusinessDate(appState.activeBusinessDate);
     final contexts =
-        ref.watch(appStateProvider).currentSession?.workContexts ??
-        const <UserWorkContext>[];
+        appState.currentSession?.workContexts ?? const <UserWorkContext>[];
     final currentWork = _findWorkContext(contexts, _work?.workId);
     if (_work != null && currentWork == null) {
       _work = null;
@@ -271,24 +294,10 @@ class _SupervisorShiftSetupScreenState
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'Sẵn sàng cho ca làm',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                  color: CaslaColors.primaryNavy,
-                ),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'Chọn nơi làm việc, ngày và ca. Lựa chọn được lưu trên thiết bị để dùng cho các thao tác tiếp theo.',
-                style: TextStyle(color: CaslaColors.muted),
-              ),
-              const SizedBox(height: 24),
               const _SetupSection(
                 number: '01',
                 title: 'Nơi làm việc',
-                subtitle: 'Bộ phận được lọc theo Xưởng đã chọn.',
+                subtitle: 'Tổ được lọc theo Xưởng đã chọn.',
               ),
               const SizedBox(height: 16),
               DropdownButtonFormField<String>(
@@ -313,10 +322,10 @@ class _SupervisorShiftSetupScreenState
                 isDense: false,
                 itemHeight: null,
                 decoration: InputDecoration(
-                  labelText: 'Bộ phận',
+                  labelText: 'Tổ',
                   helperText: _selectedWorkCenter == null
                       ? 'Chọn Xưởng trước.'
-                      : 'Chỉ hiển thị Bộ phận thuộc Xưởng đã chọn.',
+                      : 'Chỉ hiển thị Tổ thuộc Xưởng đã chọn.',
                 ),
                 items: [
                   for (final item in departments)
@@ -393,7 +402,7 @@ class _SupervisorShiftSetupScreenState
                       ? null
                       : (value) => setState(() => _shift = value),
                 ),
-              const SizedBox(height: 32),
+              const SizedBox(height: 24),
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(

@@ -7,7 +7,7 @@ import '../../domain/entities/entities.dart';
 /// Keeps the SAP operation context visible wherever a supervisor writes data.
 /// The value is intentionally rendered from the selected [UserWorkContext]
 /// and [SapShift] objects, so the label can never imply a Xưởng (Work Center)
-/// / Bộ phận pair that was not returned by SAP.
+/// / Tổ pair that was not returned by SAP.
 class ActiveShiftContextCard extends StatelessWidget {
   final UserWorkContext? workContext;
   final SapShift? shift;
@@ -41,7 +41,7 @@ class ActiveShiftContextCard extends StatelessWidget {
     final workshop = work?.workCenterLabel ?? '';
     final workshopLabel = workshop.isEmpty ? '' : 'Xưởng: $workshop';
     final department = work?.departmentLabel ?? '';
-    final departmentLabel = department.isEmpty ? '' : 'Bộ phận: $department';
+    final departmentLabel = department.isEmpty ? '' : 'Tổ: $department';
     final details = [
       if (workshopLabel.isNotEmpty) workshopLabel,
       if (departmentLabel.isNotEmpty) departmentLabel,
@@ -133,7 +133,7 @@ class ActiveShiftContextCard extends StatelessWidget {
                       ),
                   ] else
                     const Text(
-                      'Thiết lập Xưởng, Bộ phận và ca để tiếp tục.',
+                      'Thiết lập Xưởng, Tổ và ca để tiếp tục.',
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(

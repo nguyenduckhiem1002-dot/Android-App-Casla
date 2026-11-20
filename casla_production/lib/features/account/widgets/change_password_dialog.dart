@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../app/theme/casla_colors.dart';
+import '../../../app/theme/casla_spacing.dart';
+import '../../../presentation/widgets/casla_dialog_header.dart';
+import '../../../core/auth/access_token_retry.dart';
 import '../../../core/config/app_config.dart';
 import '../../../core/utils/device_info.dart';
 import '../../../data/sap/sap_auth_controller.dart';
@@ -108,11 +111,19 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
       }
 
       final sapAuth = widget.ref.read(passwordChangeControllerProvider);
-      await sapAuth.changePassword(
-        accessToken: finalToken,
-        currentPassword: current,
-        newPassword: newPwd,
-        deviceId: await DeviceInfoHelper.getDeviceId(),
+      final deviceId = await DeviceInfoHelper.getDeviceId();
+      // The access token may have run out while the app sat open: renew the
+      // session once and send the change again instead of asking for a new
+      // login.
+      await runWithAccessTokenRetry(
+        readAccessToken: () => appState.currentSession?.accessToken,
+        refreshSession: appState.refreshSessionDetailed,
+        call: (accessToken) => sapAuth.changePassword(
+          accessToken: accessToken,
+          currentPassword: current,
+          newPassword: newPwd,
+          deviceId: deviceId,
+        ),
       );
 
       // Update only the account that opted into remembering credentials.
@@ -138,6 +149,13 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
       });
     } catch (e) {
       if (!mounted) return;
+      // SAP refused to renew the session during the retry, so it has been
+      // ended: leave for the login screen, which says why, instead of
+      // keeping a form that can no longer be submitted.
+      if (widget.ref.read(appStateProvider).currentSession == null) {
+        Navigator.of(context).pop(_PasswordDialogResult.loginRequired);
+        return;
+      }
       setState(() {
         _isLoading = false;
         _errorText = e.toString().replaceAll('Exception: ', '');
@@ -151,15 +169,18 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
     return PopScope(
       canPop: false,
       child: AlertDialog(
+        titlePadding: CaslaDialog.titlePadding,
+        contentPadding: CaslaDialog.contentPadding,
         scrollable: true,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        title: const Text(
-          'Đổi mật khẩu thành công',
-          style: TextStyle(
-            fontFamily: 'Manrope',
-            fontWeight: FontWeight.w800,
-            fontSize: 16,
-            color: CaslaColors.primaryNavy,
+        title: CaslaDialogHeader(
+          child: const Text(
+            'Đổi mật khẩu thành công',
+            style: TextStyle(
+              fontFamily: 'Manrope',
+              fontWeight: FontWeight.w800,
+              fontSize: CaslaDialog.titleSize,
+              color: CaslaColors.primaryNavy,
+            ),
           ),
         ),
         content: const Text(
@@ -170,7 +191,7 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
             style: ElevatedButton.styleFrom(
               backgroundColor: CaslaColors.primaryNavy,
               foregroundColor: Colors.white,
-            ),
+            ).merge(CaslaDialog.actionStyle),
             onPressed: _finishWithLogin,
             child: const Text('Đăng nhập lại'),
           ),
@@ -209,38 +230,41 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
     return PopScope(
       canPop: !widget.isMandatory && !_isLoading,
       child: AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        title: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: CaslaColors.gold100,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(
-                Icons.lock_reset_rounded,
-                color: widget.isMandatory
-                    ? CaslaColors.gold700
-                    : CaslaColors.primaryNavy,
-                size: 24,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                widget.isMandatory
-                    ? 'Yêu cầu đổi mật khẩu'
-                    : 'Đổi mật khẩu SAP',
-                style: const TextStyle(
-                  fontFamily: 'Manrope',
-                  fontWeight: FontWeight.w800,
-                  fontSize: 16,
-                  color: CaslaColors.primaryNavy,
+        titlePadding: CaslaDialog.titlePadding,
+        contentPadding: CaslaDialog.contentPadding,
+        title: CaslaDialogHeader(
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: CaslaColors.gold100,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(
+                  Icons.lock_reset_rounded,
+                  color: widget.isMandatory
+                      ? CaslaColors.gold700
+                      : CaslaColors.primaryNavy,
+                  size: 24,
                 ),
               ),
-            ),
-          ],
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  widget.isMandatory
+                      ? 'Yêu cầu đổi mật khẩu'
+                      : 'Đổi mật khẩu SAP',
+                  style: const TextStyle(
+                    fontFamily: 'Manrope',
+                    fontWeight: FontWeight.w800,
+                    fontSize: CaslaDialog.titleSize,
+                    color: CaslaColors.primaryNavy,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
         content: SingleChildScrollView(
           child: Column(
@@ -420,6 +444,7 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
         ),
         actions: [
           TextButton(
+            style: CaslaDialog.actionStyle,
             onPressed: _isLoading
                 ? null
                 : widget.isMandatory
@@ -443,7 +468,7 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
               disabledForegroundColor: Colors.white70,
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
               elevation: isFormValid ? 2 : 0,
-            ),
+            ).merge(CaslaDialog.actionStyle),
             child: _isLoading
                 ? const SizedBox(
                     width: 18,

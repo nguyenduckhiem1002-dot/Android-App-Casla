@@ -462,6 +462,49 @@ void main() {
     },
   );
 
+  test('v19 -> v20 marks existing recalls as needing the password', () async {
+    final db = await openDatabase(inMemoryDatabasePath, version: 19);
+    addTearDown(db.close);
+    // Only the columns v20 must leave alone: it appends one flag.
+    await db.execute('''
+      CREATE TABLE recall_records (
+        id TEXT PRIMARY KEY,
+        quantity REAL NOT NULL,
+        sync_status TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL UNIQUE
+      )
+    ''');
+    await db.insert('recall_records', {
+      'id': 'queued',
+      'quantity': 12.5,
+      'sync_status': 'PENDING',
+      'idempotency_key': 'key-recall',
+    });
+
+    await migrate(db, 19, 20);
+    // Running it twice must be harmless, like every additive step.
+    await migrate(db, 19, 20);
+
+    final row = (await db.query('recall_records')).single;
+    expect(row['quantity'], 12.5);
+    expect(row['idempotency_key'], 'key-recall');
+    // 0 keeps a recall queued by an older build waiting for the password.
+    expect(row['without_worker_password'], 0);
+
+    await db.insert('recall_records', {
+      'id': 'no-password',
+      'quantity': 3.0,
+      'sync_status': 'PENDING',
+      'idempotency_key': 'key-recall-2',
+      'without_worker_password': 1,
+    });
+    final marked = await db.query(
+      'recall_records',
+      where: 'without_worker_password = 1',
+    );
+    expect(marked.single['id'], 'no-password');
+  });
+
   test('v17 -> v18 leaves queued rows without an entry time', () async {
     final db = await openDatabase(inMemoryDatabasePath, version: 17);
     addTearDown(db.close);

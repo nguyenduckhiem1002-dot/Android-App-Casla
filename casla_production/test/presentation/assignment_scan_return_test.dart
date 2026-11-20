@@ -1,4 +1,5 @@
 import 'package:casla_production/core/sync/sap_write_gateway.dart';
+import 'package:casla_production/core/sync/verified_sync_coordinator.dart';
 import 'package:casla_production/data/sap/sap_position_gateway.dart';
 import 'package:casla_production/data/sap/sap_shift_controller.dart';
 import 'package:casla_production/domain/entities/worker_position.dart';
@@ -103,6 +104,7 @@ void main() {
     WidgetTester tester, {
     AppState? appState,
     PositionApi? positionApi,
+    bool confirmImmediately = false,
   }) async {
     tester.view.physicalSize = const Size(500, 1400);
     tester.view.devicePixelRatio = 1;
@@ -122,6 +124,7 @@ void main() {
             scannerPreferences: InMemoryScannerPreferences(),
             now: () => DateTime.utc(2026, 9, 14, 3),
             positionApi: positionApi,
+            confirmImmediately: confirmImmediately,
           ),
         ),
       ),
@@ -270,11 +273,11 @@ void main() {
     'cached operation from another department is selected with a warning',
     (tester) async {
       final state = _OperationHistoryState();
-      state.department = 'Bộ phận A';
+      state.department = 'Tổ A';
       await tester.runAsync(
         () => CaslaDatabase.instance.upsertOrderFromOperationQr(
           OperationQrParser.parse(
-            '{"lenh_san_xuat":"010140000032","cong_doan":"0020","ten_hang":"Cached wrong department","bo_phan":"Bộ phận B","work_center":"WC"}',
+            '{"lenh_san_xuat":"010140000032","cong_doan":"0020","ten_hang":"Cached wrong department","bo_phan":"Tổ B","work_center":"WC"}',
           ),
         ),
       );
@@ -294,7 +297,7 @@ void main() {
       expect(find.text(_productSlotPlaceholder), findsNothing);
       expect(
         find.textContaining(
-          'thuộc bộ phận "Bộ phận B", còn ca đang chọn thuộc bộ phận "Bộ phận A"',
+          'thuộc tổ "Tổ B", còn ca đang chọn thuộc tổ "Tổ A"',
         ),
         findsOneWidget,
       );
@@ -340,18 +343,12 @@ void main() {
         '{"lenh_san_xuat":"010140000365","cong_doan":"0010",'
         '"bo_phan":"MAY MIỆNG-XM2","work_center":"CL100077","ten_cong_doan":"Công đoạn A"}';
     await scan(tester, qrB, settlesOn: find.text('Công đoạn B'));
-    expect(
-      find.textContaining('thuộc bộ phận "MAY LẬP TRÌNH-XM2"'),
-      findsOneWidget,
-    );
+    expect(find.textContaining('thuộc tổ "MAY LẬP TRÌNH-XM2"'), findsOneWidget);
 
     // Scanning the right label replaces the operation and its warning.
     await scan(tester, qrA, settlesOn: find.text('Công đoạn A'));
     expect(find.text('Công đoạn B'), findsNothing);
-    expect(
-      find.textContaining('thuộc bộ phận "MAY LẬP TRÌNH-XM2"'),
-      findsNothing,
-    );
+    expect(find.textContaining('thuộc tổ "MAY LẬP TRÌNH-XM2"'), findsNothing);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
@@ -371,7 +368,7 @@ void main() {
     );
     expect(
       find.textContaining(
-        'thuộc bộ phận "MAY LẬP TRÌNH-XM2", còn ca đang chọn thuộc bộ phận '
+        'thuộc tổ "MAY LẬP TRÌNH-XM2", còn ca đang chọn thuộc tổ '
         '"GẤP TÚI VIỀN-XM2"',
       ),
       findsOneWidget,
@@ -488,6 +485,59 @@ void main() {
   );
 
   testWidgets(
+    'off-line confirmation gives and confirms with one password prompt',
+    (tester) async {
+      final state = _SubmittingState();
+      await pumpAssignmentScreen(
+        tester,
+        appState: state,
+        confirmImmediately: true,
+      );
+      expect(find.text('Xác nhận không dải chuyền'), findsOneWidget);
+      await scan(
+        tester,
+        '{"lenh_san_xuat":"010140000032","cong_doan":"0020","ten_cong_doan":"May thân","sl_cong_doan":"1.200","unit":"ST"}',
+        settlesOn: find.text('May thân'),
+      );
+      await pumpUntil(tester, find.text('750 ST'));
+      await scanAndConfirmWorker(tester, _workerQr);
+      await tester.ensureVisible(find.byType(TextField).first);
+      await tester.enterText(find.byType(TextField).first, '50');
+      // The defect field opens from the checkbox, as on the confirmation
+      // sheet.
+      final defectField = find.byKey(const ValueKey('direct-defect-quantity'));
+      expect(defectField, findsNothing);
+      await tester.ensureVisible(find.text('Có số lượng phế'));
+      await tester.tap(find.text('Có số lượng phế'));
+      await tester.pump();
+      await tester.ensureVisible(defectField);
+      await tester.enterText(defectField, '5');
+      await tester.tap(find.text('Xác nhận sản lượng'));
+      await pumpUntil(tester, find.text('Xác minh công nhân'));
+      await tester.pump(const Duration(milliseconds: 350));
+      await tester.enterText(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.byType(TextField),
+        ),
+        'test-only',
+      );
+      await tester.tap(find.text('Xác minh & gửi SAP'));
+      await pumpUntil(tester, find.textContaining('Đã giao và xác nhận'));
+
+      // One prompt, two SAP writes: the assignment first, then its
+      // confirmation of the same quantity.
+      expect(state.gateway.pushed, ['ASSIGNMENT', 'PRODUCTION']);
+      // Given as everything made (good + defective); confirmed as 50 good
+      // and 5 defective on that assignment.
+      expect(state.gateway.sources[0]['assigned_quantity'], 55.0);
+      expect(state.gateway.sources[1]['quantity'], 50.0);
+      expect(state.gateway.sources[1]['defect_quantity'], 5.0);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
     'a top-up without the position of the earlier assignment is stopped',
     (tester) async {
       final state = _SubmittingState();
@@ -558,55 +608,142 @@ void main() {
     },
   );
 
-  testWidgets(
-    'standalone confirmation stays on selection when worker has no actionable work',
-    (tester) async {
-      final state = _SubmittingState()..department = 'WORK-A';
-      Map<String, dynamic>? received;
-      final router = GoRouter(
-        routes: [
-          GoRoute(path: '/', builder: (_, _) => const S10ConfirmScanScreen()),
-          GoRoute(
-            path: '/supervisor/employee_detail',
-            builder: (_, route) {
-              received = Map<String, dynamic>.from(route.extra! as Map);
-              return const Scaffold(body: Text('Detail destination'));
-            },
+  for (final (permission, message) in [
+    (
+      Permission.confirmProduction,
+      'Nhân viên không còn sản lượng cần xác nhận trong ca và tổ đang chọn.',
+    ),
+    // PP_RECALL alone shares the Xác nhận tab, but only to recall.
+    (
+      Permission.recallAssignment,
+      'Nhân viên không còn sản lượng chưa làm để thu hồi trong ca và tổ đang chọn.',
+    ),
+  ]) {
+    testWidgets(
+      'standalone confirmation stays on selection when worker has no actionable '
+      'work (${permission.name})',
+      (tester) async {
+        final state = _ScanAsState({permission})..department = 'WORK-A';
+        Map<String, dynamic>? received;
+        final router = GoRouter(
+          routes: [
+            GoRoute(path: '/', builder: (_, _) => const S10ConfirmScanScreen()),
+            GoRoute(
+              path: '/supervisor/employee_detail',
+              builder: (_, route) {
+                received = Map<String, dynamic>.from(route.extra! as Map);
+                return const Scaffold(body: Text('Detail destination'));
+              },
+            ),
+          ],
+        );
+        addTearDown(router.dispose);
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [appStateProvider.overrideWith((ref) => state)],
+            child: MaterialApp.router(routerConfig: router),
           ),
-        ],
-      );
-      addTearDown(router.dispose);
-      await tester.pumpWidget(
-        ProviderScope(
-          overrides: [appStateProvider.overrideWith((ref) => state)],
-          child: MaterialApp.router(routerConfig: router),
-        ),
-      );
-      await tester.pump();
-      await tester.tap(find.text('Quét QR nhân viên'));
-      await tester.pump();
-      final view = tester.widget<AdaptiveBarcodeScannerView>(
-        find.byType(AdaptiveBarcodeScannerView),
-      );
-      // The scan callback completes on return from detail, so do not await it here.
-      await tester.runAsync(() async {
-        unawaited(Future<bool>.sync(() => view.onScan(_workerQr)));
-      });
-      await pumpUntil(
-        tester,
-        find.text(
-          'Nhân viên không còn sản lượng cần xác nhận trong ca và bộ phận đang chọn.',
-        ),
-      );
-      expect(received, isNull);
-      expect(tester.takeException(), isNull);
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 50)),
-      );
-      await tester.pump(const Duration(milliseconds: 400));
-      await tester.pumpWidget(const SizedBox.shrink());
-    },
-  );
+        );
+        await tester.pump();
+        await tester.tap(find.byTooltip('Quét QR nhân viên'));
+        await tester.pump();
+        final view = tester.widget<AdaptiveBarcodeScannerView>(
+          find.byType(AdaptiveBarcodeScannerView),
+        );
+        // The scan callback completes on return from detail, so do not await it here.
+        await tester.runAsync(() async {
+          unawaited(Future<bool>.sync(() => view.onScan(_workerQr)));
+        });
+        await pumpUntil(tester, find.text(message));
+        expect(received, isNull);
+        expect(tester.takeException(), isNull);
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        await tester.pump(const Duration(milliseconds: 400));
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+  }
+
+  testWidgets('system Back closes the worker scanner instead of the app', (
+    tester,
+  ) async {
+    final state = _ScanAsState({Permission.confirmProduction})
+      ..department = 'WORK-A';
+    final router = GoRouter(
+      routes: [
+        GoRoute(path: '/', builder: (_, _) => const S10ConfirmScanScreen()),
+      ],
+    );
+    addTearDown(router.dispose);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [appStateProvider.overrideWith((ref) => state)],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.byTooltip('Quét QR nhân viên'));
+    await tester.pump();
+    expect(find.byType(AdaptiveBarcodeScannerView), findsOneWidget);
+
+    // Handled inside the app: the platform is not asked to leave it.
+    expect(await tester.binding.handlePopRoute(), isTrue);
+    await tester.pump();
+    expect(find.byType(AdaptiveBarcodeScannerView), findsNothing);
+    expect(find.text('Tiếp tục xác nhận'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  for (final (permissions, offered) in [
+    (
+      {
+        Permission.confirmProduction,
+        Permission.recallAssignment,
+        Permission.recallWithoutPassword,
+      },
+      true,
+    ),
+    // PP_RECALL without PP_RECALL_NOPASS recalls with the worker password,
+    // one order at a time, on the Xác nhận sheet.
+    ({Permission.confirmProduction, Permission.recallAssignment}, false),
+  ]) {
+    testWidgets(
+      'worker list ${offered ? 'offers' : 'hides'} "Thu hồi không mật khẩu" '
+      '(${permissions.length} functions)',
+      (tester) async {
+        final state = _ScanAsState(permissions)..department = 'WORK-A';
+        final router = GoRouter(
+          routes: [
+            GoRoute(path: '/', builder: (_, _) => const S10ConfirmScanScreen()),
+          ],
+        );
+        addTearDown(router.dispose);
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [appStateProvider.overrideWith((ref) => state)],
+            child: MaterialApp.router(routerConfig: router),
+          ),
+        );
+        await tester.pump();
+
+        final button = find.byKey(
+          const ValueKey('recall-all-without-password'),
+        );
+        expect(button, offered ? findsOneWidget : findsNothing);
+        if (offered) {
+          expect(find.text('Thu hồi không mật khẩu'), findsOneWidget);
+          // No worker is selected yet: there is nobody to recall from.
+          expect(tester.widget<OutlinedButton>(button).onPressed, isNull);
+        }
+        expect(find.text('Tiếp tục xác nhận'), findsOneWidget);
+        await tester.pump(const Duration(milliseconds: 400));
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+  }
 
   testWidgets('an operation with nothing left can still be given', (
     tester,
@@ -633,6 +770,14 @@ void main() {
     await tester.tap(find.text('Xác nhận phân công'));
     await pumpUntil(tester, find.text('Xác minh công nhân'));
     await tester.pump(const Duration(milliseconds: 350));
+    // The worker signs for the quantity given, not for a sentence.
+    final popup = find.byType(AlertDialog);
+    expect(
+      find.descendant(of: popup, matching: find.text('SỐ LƯỢNG GIAO')),
+      findsOneWidget,
+    );
+    expect(find.descendant(of: popup, matching: find.text('50')), findsOne);
+    expect(find.textContaining('cần nhập mật khẩu SAP'), findsNothing);
     await tester.enterText(
       find.descendant(
         of: find.byType(AlertDialog),
@@ -654,25 +799,25 @@ void main() {
   testWidgets('department differences warn on the form and do not stop sending', (
     tester,
   ) async {
-    final state = _SubmittingState()..department = 'Bộ phận A';
+    final state = _SubmittingState()..department = 'Tổ A';
     await pumpAssignmentScreen(tester, appState: state);
     await scan(
       tester,
-      '{"lenh_san_xuat":"010140000032","cong_doan":"0020","ten_cong_doan":"May thân","bo_phan":"Bộ phận A","work_center":"WC","sl_cong_doan":"1.200","unit":"ST"}',
+      '{"lenh_san_xuat":"010140000032","cong_doan":"0020","ten_cong_doan":"May thân","bo_phan":"Tổ A","work_center":"WC","sl_cong_doan":"1.200","unit":"ST"}',
       settlesOn: find.text('May thân'),
     );
     await pumpUntil(tester, find.text('750 ST'));
     await scanAndConfirmWorker(tester, _workerQr);
     await tester.ensureVisible(find.byType(TextField).first);
     await tester.enterText(find.byType(TextField).first, '50');
-    state.department = 'Bộ phận B';
+    state.department = 'Tổ B';
     // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
     state.notifyListeners();
     await tester.pump();
     // The session's department now differs from the operation's: said under
     // the operation. The worker's own department (Tổ QR) is not compared.
     expect(find.textContaining('Vẫn giao được.'), findsOneWidget);
-    expect(find.textContaining('Công nhân thuộc bộ phận'), findsNothing);
+    expect(find.textContaining('Công nhân thuộc tổ'), findsNothing);
     await tester.tap(find.text('Xác nhận phân công'));
     // A warning only: no dialog between the button and the password.
     await pumpUntil(tester, find.text('Xác minh công nhân'));
@@ -680,6 +825,51 @@ void main() {
     expect(find.text('Vẫn giao'), findsNothing);
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  testWidgets(
+    'an operation whose Plant matches another department of the same work '
+    'center is sent under the selected department',
+    (tester) async {
+      // Seen on a TC22: the account holds two departments of CL100076, the
+      // label's Plant matches only the one that is not selected, and the
+      // assignment was refused although Xưởng and shift were right.
+      final state = _TwoDepartmentState();
+      await pumpAssignmentScreen(tester, appState: state);
+      await scan(
+        tester,
+        '{"lenh_san_xuat":"010140000381","cong_doan":"0030",'
+        '"ten_cong_doan":"May quai","plant":"6712","work_center":"CL100076",'
+        '"sl_cong_doan":"10.000","unit":"CHC"}',
+        settlesOn: find.text('May quai'),
+      );
+      await pumpUntil(tester, find.text('10.000 CHC'));
+      await scanAndConfirmWorker(tester, _workerQr);
+      await tester.ensureVisible(find.byType(TextField).first);
+      await tester.enterText(find.byType(TextField).first, '50');
+      await tester.pump();
+
+      await tester.ensureVisible(find.text('Xác nhận phân công'));
+      await tester.tap(find.text('Xác nhận phân công'));
+      await pumpUntil(tester, find.text('Xác minh công nhân'));
+      expect(find.text('Chưa thể phân công'), findsNothing);
+      await tester.pump(const Duration(milliseconds: 350));
+      await tester.enterText(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.byType(TextField),
+        ),
+        'test-only',
+      );
+      await tester.tap(find.text('Xác minh & gửi SAP'));
+      await pumpUntil(tester, find.text(_workerSlotPlaceholder));
+
+      // SAP receives the department the manager selected, not the one the
+      // label's Plant happens to match.
+      expect(state.gateway.pushed, ['ASSIGNMENT']);
+      expect(state.gateway.sources.single['to_id'], 'XM1.MM');
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 
   testWidgets('(+) adds an operation; the tighter one sets the warning', (
     tester,
@@ -724,6 +914,13 @@ void main() {
     await tester.tap(find.text('Xác nhận phân công · 2 công đoạn'));
     await pumpUntil(tester, find.text('Xác minh công nhân'));
     await tester.pump(const Duration(milliseconds: 350));
+    // 400 to each of the two operations: the popup shows the total.
+    final popup = find.byType(AlertDialog);
+    expect(
+      find.descendant(of: popup, matching: find.text('SỐ LƯỢNG GIAO')),
+      findsOneWidget,
+    );
+    expect(find.descendant(of: popup, matching: find.text('800')), findsOne);
     await tester.enterText(
       find.descendant(
         of: find.byType(AlertDialog),
@@ -1018,12 +1215,21 @@ void main() {
       settlesOn: find.text('Mã vị trí: G07', findRichText: true),
     );
     expect(find.text('Mã máy: M107', findRichText: true), findsOneWidget);
+    // The seat the worker holds now stays visible above the scanned one.
+    expect(
+      find.text('Vị trí hiện tại: G05 · M105', findRichText: true),
+      findsOneWidget,
+    );
     expect(find.text('Dùng vị trí gốc G05'), findsOneWidget);
 
     await tester.tap(find.text('Dùng vị trí gốc G05'));
     await tester.pump();
     expect(find.text('Mã vị trí: G05', findRichText: true), findsOneWidget);
     expect(find.text('Dùng vị trí gốc G05'), findsNothing);
+    expect(
+      find.text('Vị trí hiện tại: G05 · M105', findRichText: true),
+      findsNothing,
+    );
   });
 
   testWidgets('a camera scan of the operation only focuses the worker slot', (
@@ -1270,19 +1476,21 @@ class _ManualSelectionState extends AppState {
 
 class _SeatBoard implements PositionApi {
   @override
-  Future<PositionBoard> getBoard({String workCenter = ''}) async =>
-      const PositionBoard(
-        workCenterCount: 1,
-        seats: [
-          PositionSeat(
-            workCenter: 'CL100077',
-            positionId: 'G05',
-            machineId: 'M105',
-            workerId: 'QR_FORM',
-            workerName: 'Worker Form',
-          ),
-        ],
-      );
+  Future<PositionBoard> getBoard({
+    String workCenter = '',
+    String workerId = '',
+  }) async => const PositionBoard(
+    workCenterCount: 1,
+    seats: [
+      PositionSeat(
+        workCenter: 'CL100077',
+        positionId: 'G05',
+        machineId: 'M105',
+        workerId: 'QR_FORM',
+        workerName: 'Worker Form',
+      ),
+    ],
+  );
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -1318,11 +1526,16 @@ class _FakeScanner implements BarcodeScanner {
 }
 
 class _SubmittingState extends _OperationHistoryState {
+  final gateway = _SuccessGateway();
   @override
   AssignmentRepositoryImpl get assignmentRepo => _assignments;
-  late final _assignments = AssignmentRepositoryImpl(
+  late final _assignments = AssignmentRepositoryImpl(db, gateway: gateway);
+  @override
+  ProductionRepositoryImpl get productionRepo => _production;
+  late final _production = ProductionRepositoryImpl(
     db,
-    gateway: _SuccessGateway(),
+    gateway: gateway,
+    verifiedSync: VerifiedSyncCoordinator(database: db, gateway: gateway),
   );
   @override
   bool isSessionGenerationCurrent(int generation) =>
@@ -1342,10 +1555,71 @@ class _SubmittingState extends _OperationHistoryState {
   );
 }
 
-class _SuccessGateway implements SapWriteGateway {
+/// Two departments of one work center registered under different Plants,
+/// with the first one selected for the shift.
+class _TwoDepartmentState extends _SubmittingState {
+  _TwoDepartmentState() {
+    workCenter = 'CL100076';
+  }
+
+  static const _selected = UserWorkContext(
+    workId: 'XM1.MM',
+    workName: 'MAY MIỆNG-XM1',
+    plant: '6711',
+    workCenter: 'CL100076',
+    boPhan: 'MAY MIỆNG-XM1',
+  );
+  static const _other = UserWorkContext(
+    workId: 'MAY LẬP TRÌNH_ XM1',
+    workName: 'MAY LẬP TRÌNH_ XM1',
+    plant: '6712',
+    workCenter: 'CL100076',
+    boPhan: 'MAY LẬP TRÌNH_ XM1',
+  );
+
   @override
-  Future<SapWriteResult> push(SyncPushRequest request) async =>
-      SapWriteResult(sapId: 'posted-${request.entityId}');
+  UserWorkContext? get activeWorkContext => _selected;
+
+  @override
+  UserSession get currentSession => const UserSession(
+    id: 'two-departments',
+    maNv: 'MGR-2',
+    fullName: 'Quản lý hai tổ',
+    teamName: '',
+    role: UserRole.supervisor,
+    permissions: {Permission.assignQuantity},
+    toIds: ['XM1.MM', 'MAY LẬP TRÌNH_ XM1'],
+    workContexts: [_selected, _other],
+  );
+}
+
+/// A supervisor holding exactly [permissions] (PP_CONFIRM / PP_RECALL).
+class _ScanAsState extends _SubmittingState {
+  _ScanAsState(this.permissions);
+  final Set<Permission> permissions;
+
+  @override
+  UserSession get currentSession => UserSession(
+    id: 'scan-test',
+    maNv: 'manager-test',
+    fullName: 'Quản lý thử nghiệm',
+    teamName: '',
+    role: UserRole.supervisor,
+    permissions: permissions,
+  );
+}
+
+class _SuccessGateway implements SapWriteGateway {
+  /// Entity types pushed, in order, and the rows they carried.
+  final pushed = <String>[];
+  final sources = <Map<String, dynamic>>[];
+  @override
+  Future<SapWriteResult> push(SyncPushRequest request) async {
+    pushed.add(request.queueItem['entity_type'].toString());
+    sources.add(Map<String, dynamic>.from(request.source));
+    return SapWriteResult(sapId: 'posted-${request.entityId}');
+  }
+
   @override
   Future<bool> refreshSession() async => false;
 }

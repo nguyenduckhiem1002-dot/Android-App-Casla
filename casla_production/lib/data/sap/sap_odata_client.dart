@@ -30,6 +30,9 @@ class SapCsrfException implements Exception {
 class SapODataClient {
   final String baseUrl;
   final SapTransportAuthMode transportAuthMode;
+
+  /// See [AppConfig.sapReuseCsrfToken].
+  final bool reuseCsrfToken;
   final String _basicAuthUser;
   final String _basicAuthPassword;
   String? _authToken;
@@ -45,8 +48,10 @@ class SapODataClient {
     SapTransportAuthMode? transportAuthMode,
     String? basicAuthUser,
     String? basicAuthPassword,
+    bool? reuseCsrfToken,
   }) : baseUrl = _normalizeBaseUrl(baseUrl ?? AppConfig.sapBaseUrl),
        transportAuthMode = transportAuthMode ?? AppConfig.sapTransportAuthMode,
+       reuseCsrfToken = reuseCsrfToken ?? AppConfig.sapReuseCsrfToken,
        _basicAuthUser = (basicAuthUser ?? AppConfig.sapBasicAuthUser).trim(),
        _basicAuthPassword =
            (basicAuthPassword ?? AppConfig.sapBasicAuthPassword).trim() {
@@ -96,12 +101,18 @@ class SapODataClient {
           if (kDebugMode) {
             final operation = safeOperationLabel(error.requestOptions.path);
             final diagnostic = odataSafeDiagnostic(error);
+            // A RAP validation on save answers with free text instead of a
+            // business code (e.g. "Số lượng còn lại không khớp với sổ phân
+            // bổ"). The code alone (`/IWBEP/CM_V4S_RUN/000`) says nothing,
+            // so keep that one sentence — bounded, redacted, never the body.
+            final message = safeRejectionMessage(error, diagnostic: diagnostic);
             _logger.e(
               'SAP request failed: ${error.requestOptions.method} '
               'operation=$operation '
               'status=${error.response?.statusCode ?? '-'} '
               'type=${error.type.name}'
-              '${diagnostic == null ? '' : ' code=$diagnostic'}',
+              '${diagnostic == null ? '' : ' code=$diagnostic'}'
+              '${message == null ? '' : ' message="$message"'}',
             );
           }
           handler.next(error);
@@ -117,15 +128,84 @@ class SapODataClient {
       dio.interceptors.add(
         InterceptorsWrapper(
           onRequest: (options, handler) {
+            final payload = safeRequestPayload(options.data);
             _logger.d(
               'SAP request: ${options.method} '
-              'operation=${safeOperationLabel(options.path)}',
+              'operation=${safeOperationLabel(options.path)}'
+              '${payload == null ? '' : ' payload=$payload'}',
             );
             handler.next(options);
           },
         ),
       );
     }
+  }
+
+  /// Longest action payload rendering kept in a debug log line.
+  static const int maxLoggedPayloadLength = 1200;
+
+  /// JSON keys whose value is a credential and is never written to the log.
+  static const Set<String> _secretPayloadKeys = {
+    'password',
+    'oldpassword',
+    'newpassword',
+    'currentpassword',
+    'workerpassword',
+    'accesstoken',
+    'refreshtoken',
+  };
+
+  /// A debug-only, one-line rendering of an action's JSON payload so the exact
+  /// parameters sent to SAP can be checked against the ABAP contract.
+  ///
+  /// Every credential-bearing key is replaced by `[REDACTED]` before the map
+  /// is rendered, the result is passed through [redactSecrets] as a second
+  /// net, and it is cut at [maxLoggedPayloadLength]. Returns null for a
+  /// request without a JSON object body (a CSRF fetch, a GET).
+  @visibleForTesting
+  static String? safeRequestPayload(Object? data) {
+    if (data is! Map) return null;
+    final masked = <String, Object?>{
+      for (final entry in data.entries)
+        entry.key.toString():
+            _secretPayloadKeys.contains(
+                  entry.key.toString().toLowerCase().replaceAll('_', ''),
+                ) &&
+                entry.value != null
+            ? '[REDACTED]'
+            : entry.value,
+    };
+    final line = redactSecrets(
+      jsonEncode(masked).replaceAll(RegExp(r'\s+'), ' '),
+    );
+    if (line.length <= maxLoggedPayloadLength) return line;
+    return '${line.substring(0, maxLoggedPayloadLength)}…';
+  }
+
+  /// Longest SAP rejection sentence kept in a debug log line.
+  static const int maxLoggedRejectionLength = 200;
+
+  /// The human-readable sentence SAP attached to a rejection, made safe for a
+  /// debug log line, or null when there is nothing worth adding.
+  ///
+  /// Returns null when the message *is* the business code already reported
+  /// as [diagnostic] (no point printing it twice), or when the response has
+  /// no OData error envelope at all (an HTML gateway page is never logged).
+  /// The text is collapsed to one line, passed through [redactSecrets] and
+  /// cut at [maxLoggedRejectionLength]; the request/response body itself is
+  /// never serialized.
+  @visibleForTesting
+  static String? safeRejectionMessage(
+    DioException error, {
+    required String? diagnostic,
+  }) {
+    final raw = odataErrorMessage(error);
+    if (raw == null) return null;
+    if (raw == diagnostic) return null;
+    final line = redactSecrets(raw.replaceAll(RegExp(r'\s+'), ' ').trim());
+    if (line.isEmpty) return null;
+    if (line.length <= maxLoggedRejectionLength) return line;
+    return '${line.substring(0, maxLoggedRejectionLength)}…';
   }
 
   /// Masks credentials in a line destined for the log.
@@ -344,6 +424,41 @@ class SapODataClient {
   /// controls whether the mobile itself carries the shared SAP service account.
   void setAuthToken(String? token) {
     _authToken = token;
+  }
+
+  /// Whether a CSRF token is held for the current transport session, so a
+  /// caller can reuse it instead of fetching one (a `$metadata` download)
+  /// before every request.
+  bool get hasCsrfToken => _csrfToken != null && _csrfToken!.isNotEmpty;
+
+  /// POSTs [path] under the CSRF protection of the SAP Gateway.
+  ///
+  /// The token of this transport session is reused: fetching one is a
+  /// `$metadata` download, which used to add a second round trip to every
+  /// call. SAP answers 403 once the token or its session cookie has lapsed;
+  /// then a fresh token is fetched and the request is sent again, once. A
+  /// 403 means the action did not run, so sending again is safe for commands
+  /// too. With [reuseCsrfToken] off a token is fetched before every request
+  /// and nothing is sent twice, as before 2026-11-16.
+  ///
+  /// [guard] runs right before each send, for the caller's own session check.
+  Future<Response<dynamic>> postWithCsrf(
+    String path, {
+    Object? data,
+    Options? options,
+    void Function()? guard,
+  }) async {
+    final reused = reuseCsrfToken && hasCsrfToken;
+    if (!reused) await fetchCsrfToken();
+    guard?.call();
+    try {
+      return await dio.post(path, data: data, options: options);
+    } on DioException catch (error) {
+      if (!reused || error.response?.statusCode != 403) rethrow;
+      await fetchCsrfToken();
+      guard?.call();
+      return await dio.post(path, data: data, options: options);
+    }
   }
 
   /// Reset CSRF token & cookies (e.g. on logout).

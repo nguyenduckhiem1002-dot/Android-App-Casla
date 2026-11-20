@@ -6,6 +6,7 @@ import 'package:casla_production/core/database/casla_database.dart';
 import 'package:casla_production/core/auth/session_manager.dart';
 import 'package:casla_production/features/supervisor/screens/s06b_employee_daily_detail_screen.dart';
 import 'package:casla_production/domain/entities/entities.dart';
+import 'package:casla_production/domain/entities/enums.dart';
 import 'package:casla_production/main.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -133,6 +134,122 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('a seat with nothing left hides the confirm button', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(393, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    const channel = MethodChannel(
+      'dev.fluttercommunity.plus/connectivity_status',
+    );
+    messenger.setMockMethodCallHandler(channel, (_) async => null);
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    await tester.runAsync(() => CaslaDatabase.instance.ready);
+    final day = DateTime(2026, 10, 28);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          appStateProvider.overrideWith(
+            (ref) => _PopulatedHistoryState(
+              confirmer: true,
+              entries: [
+                // Carried over 1.000 and recalled all of it: nothing to post.
+                WorkHistoryEntry(
+                  transactionUuid: 'RA-1',
+                  executionDate: day.add(const Duration(hours: 1)),
+                  workerId: 'NV-1',
+                  workerName: 'Worker',
+                  productionOrder: '010140000374',
+                  operation: '0060',
+                  operationName: 'Gấp túi',
+                  plant: '1000',
+                  workCenter: 'WC',
+                  transactionType: 'REASSIGN',
+                  quantity: 1000,
+                  unitOfMeasure: 'CHC',
+                  transactionStatus: 'POSTED',
+                ),
+                WorkHistoryEntry(
+                  transactionUuid: 'RC-1',
+                  executionDate: day.add(const Duration(hours: 2)),
+                  workerId: 'NV-1',
+                  workerName: 'Worker',
+                  productionOrder: '010140000374',
+                  operation: '0060',
+                  operationName: 'Gấp túi',
+                  plant: '1000',
+                  workCenter: 'WC',
+                  transactionType: 'RECALL',
+                  quantity: 1000,
+                  unitOfMeasure: 'CHC',
+                  transactionStatus: 'POSTED',
+                ),
+                // Another seat still open on the same day keeps its button.
+                WorkHistoryEntry(
+                  transactionUuid: 'RA-2',
+                  executionDate: day.add(const Duration(hours: 1)),
+                  workerId: 'NV-1',
+                  workerName: 'Worker',
+                  productionOrder: '010140000380',
+                  operation: '0080',
+                  operationName: 'May chặn',
+                  plant: '1000',
+                  workCenter: 'WC',
+                  transactionType: 'REASSIGN',
+                  quantity: 100,
+                  unitOfMeasure: 'CHC',
+                  transactionStatus: 'POSTED',
+                ),
+              ],
+            ),
+          ),
+        ],
+        child: MaterialApp(
+          theme: CaslaTheme.light,
+          home: S06bEmployeeDailyDetailScreen(
+            worker: {
+              'id': 'NV-1',
+              'ma_nv': 'NV-1',
+              'ten': 'Worker',
+              'date': day,
+            },
+          ),
+        ),
+      ),
+    );
+    for (var i = 0; i < 20; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 25)),
+      );
+      await tester.pump(const Duration(milliseconds: 25));
+    }
+    expect(find.text('Còn lại 0 CHC'), findsOneWidget);
+    expect(find.text('Còn lại 100 CHC'), findsOneWidget);
+    // One button for the open seat, none for the emptied one.
+    expect(find.widgetWithText(OutlinedButton, 'Xác nhận'), findsOneWidget);
+    final button = tester.widget<OutlinedButton>(
+      find.widgetWithText(OutlinedButton, 'Xác nhận'),
+    );
+    expect(button.onPressed, isNotNull);
+    final openCard = find.ancestor(
+      of: find.text('Còn lại 100 CHC'),
+      matching: find.byType(Column),
+    );
+    expect(
+      find.descendant(
+        of: openCard.first,
+        matching: find.widgetWithText(OutlinedButton, 'Xác nhận'),
+      ),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('worker detail renders period selector under production theme', (
     tester,
   ) async {
@@ -253,9 +370,26 @@ class _MultiTeamAppState extends AppState {
 }
 
 class _PopulatedHistoryState extends AppState {
-  _PopulatedHistoryState({this.entries = const []});
+  _PopulatedHistoryState({this.entries = const [], this.confirmer = false});
 
   final List<WorkHistoryEntry> entries;
+
+  /// Whether the signed-in account may confirm production; without it the
+  /// activity card never shows the button, whatever the seat holds.
+  final bool confirmer;
+
+  @override
+  UserSession? get currentSession => confirmer
+      ? const UserSession(
+          id: 'sup-1',
+          maNv: 'SUP-1',
+          fullName: 'Supervisor',
+          teamName: 'Team 1',
+          role: UserRole.supervisor,
+          permissions: {Permission.confirmProduction},
+          toIds: ['team-1'],
+        )
+      : null;
 
   @override
   WorkHistoryRepositoryImpl get workHistoryRepo => _history;

@@ -1,3 +1,4 @@
+import '../entities/entities.dart';
 import '../entities/work_history.dart';
 
 /// Marker for a local confirmation target materialized from SAP history.
@@ -52,6 +53,13 @@ WorkHistoryResult historyForWorkContext(
       'Kỳ này có nhiều đơn vị tính. Chưa thể gộp thành một KPI theo tổ.',
     );
   }
+  // Entries do not carry the worker's own department; SAP's summary rows do,
+  // and it is the same on every row of a worker.
+  final workerDepartments = <String, String>{
+    for (final worker in result.workers)
+      if (worker.workerBoPhan.trim().isNotEmpty)
+        worker.workerId.trim().toUpperCase(): worker.workerBoPhan,
+  };
   return WorkHistoryResult(
     scopeCode: result.scopeCode,
     dateFrom: result.dateFrom,
@@ -94,6 +102,8 @@ WorkHistoryResult historyForWorkContext(
         remainingQuantity: assigned - recalled - completed - defect,
         transactionCount: group.value.length,
         workId: group.value.first.workId,
+        workerBoPhan:
+            workerDepartments[group.key.$1.trim().toUpperCase()] ?? '',
       );
     }).toList(),
   );
@@ -105,3 +115,119 @@ bool isOpeningBalanceDay(DateTime entryDate, DateTime windowFrom) =>
     entryDate.year == windowFrom.year &&
     entryDate.month == windowFrom.month &&
     entryDate.day == windowFrom.day;
+
+/// Narrow a SAP history to the selected work contexts (WorkIDs).
+///
+/// `_Workers` is summarized on SAP from the full scan and already carries the
+/// WorkID of each row, so filtering it is exact even when `_Entries` was cut
+/// at the service's row cap. An empty [workIds] means "all contexts" and
+/// returns [result] untouched.
+WorkHistoryResult historyForWorkIds(
+  WorkHistoryResult result,
+  Set<String> workIds,
+) {
+  final wanted = workIds
+      .map((id) => id.trim())
+      .where((id) => id.isNotEmpty)
+      .toSet();
+  if (wanted.isEmpty) return result;
+  final untagged = result.workers.where((w) => w.workId.trim().isEmpty);
+  if (untagged.isNotEmpty) {
+    // An older service binding without HistWorker.WorkID cannot be split by
+    // context; the caller may still rebuild a single context from entries.
+    throw const FormatException(
+      'SAP chưa trả vị trí làm việc cho tổng theo tổ. Hãy chọn Tất cả tổ.',
+    );
+  }
+  return WorkHistoryResult(
+    scopeCode: result.scopeCode,
+    dateFrom: result.dateFrom,
+    dateTo: result.dateTo,
+    isTruncated: result.isTruncated,
+    entries: result.entries
+        .where((e) => wanted.contains(e.workId.trim()))
+        .toList(growable: false),
+    workers: result.workers
+        .where((w) => wanted.contains(w.workId.trim()))
+        .toList(growable: false),
+  );
+}
+
+/// The departments (WorkIDs) of [contexts] in the work center [active] was
+/// set up in: what "Tất cả tổ" on the overview covers (decided
+/// 2026-10-29). A supervisor authorized across several work centers sees the
+/// shift's own work center, not every department the account may read.
+///
+/// Null when nothing can be narrowed: no active context, no work center on
+/// it, or no context of that work center among [contexts]; the caller then
+/// keeps every authorized department.
+Set<String>? workIdsOfWorkCenter(
+  Iterable<UserWorkContext> contexts, {
+  required UserWorkContext? active,
+}) {
+  final workCenter = active?.workCenter.trim().toUpperCase() ?? '';
+  if (workCenter.isEmpty) return null;
+  final plant = active!.plant.trim().toUpperCase();
+  final ids = <String>{};
+  for (final context in contexts) {
+    final id = context.workId.trim();
+    if (id.isEmpty) continue;
+    if (context.workCenter.trim().toUpperCase() != workCenter) continue;
+    final contextPlant = context.plant.trim().toUpperCase();
+    if (plant.isNotEmpty && contextPlant.isNotEmpty && contextPlant != plant) {
+      continue;
+    }
+    ids.add(id);
+  }
+  return ids.isEmpty ? null : ids;
+}
+
+/// The contexts the overview's "Tổ" filter offers one by one: those of
+/// the work center [active] was set up in, in SAP's order. The list must not
+/// be wider than "Tất cả tổ" above it, or a supervisor authorized across
+/// work centers could pick a department of another one.
+///
+/// Every context of [contexts] when nothing can be narrowed (see
+/// [workIdsOfWorkCenter]).
+List<UserWorkContext> workContextsOfWorkCenter(
+  Iterable<UserWorkContext> contexts, {
+  required UserWorkContext? active,
+}) {
+  final ids = workIdsOfWorkCenter(contexts, active: active);
+  if (ids == null) return contexts.toList(growable: false);
+  return [
+    for (final context in contexts)
+      if (ids.contains(context.workId.trim())) context,
+  ];
+}
+
+/// The departments (WorkIDs, upper-cased) the "Tổ" filter of a history
+/// may offer while a shift is set up: the session's departments of the
+/// shift's work center, plus any department [result] books a row for in that
+/// work center (a history can hold departments the session does not name).
+///
+/// Only the list is narrowed; "Tất cả tổ" still shows every row SAP
+/// reported. Null when nothing can be narrowed (see [workIdsOfWorkCenter]),
+/// which is every account without a shift: the worker role.
+Set<String>? historyFilterWorkIds(
+  WorkHistoryResult result,
+  Iterable<UserWorkContext> contexts, {
+  required UserWorkContext? active,
+}) {
+  final sessionIds = workIdsOfWorkCenter(contexts, active: active);
+  if (sessionIds == null) return null;
+  final workCenter = active!.workCenter.trim().toUpperCase();
+  final plant = active.plant.trim().toUpperCase();
+  final ids = {for (final id in sessionIds) id.toUpperCase()};
+  for (final entry in result.entries) {
+    final id = entry.workId.trim().toUpperCase();
+    if (id.isEmpty) continue;
+    if (entry.workCenter.trim().toUpperCase() != workCenter) continue;
+    final entryPlant = entry.plant.trim().toUpperCase();
+    if (plant.isNotEmpty && entryPlant.isNotEmpty && entryPlant != plant) {
+      continue;
+    }
+    ids.add(id);
+  }
+  return ids;
+}

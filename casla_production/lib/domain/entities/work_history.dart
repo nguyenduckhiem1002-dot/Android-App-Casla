@@ -116,6 +116,12 @@ class WorkHistorySummary {
   final String boPhan;
   final String location;
 
+  /// The worker's own department, as declared in SAP's worker register
+  /// (`ZTB_KB_NHANCONG.BO_PHAN`). [boPhan], [workName] and [location]
+  /// describe where the work was booked ([workId]) instead. Empty when the
+  /// worker has no declaration, or SAP predates the field.
+  final String workerBoPhan;
+
   const WorkHistorySummary({
     required this.workerId,
     required this.workerName,
@@ -130,6 +136,7 @@ class WorkHistorySummary {
     this.workName = '',
     this.boPhan = '',
     this.location = '',
+    this.workerBoPhan = '',
   });
 }
 

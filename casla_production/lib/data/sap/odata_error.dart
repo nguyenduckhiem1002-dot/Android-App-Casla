@@ -63,6 +63,24 @@ String? odataErrorMessage(DioException error) {
   return raw;
 }
 
+/// A business code the ABAP handler passed to `report_failure`, split from
+/// the detail it may append after a colon for the user — `RECALL_QUANTITY_EXCEEDED:
+/// 200.000 CHC` carries the cap the recall was refused against. Null when the
+/// text is ordinary prose (a colon alone is not enough: the code part must
+/// look like one of this backend's underscored codes).
+({String code, String? detail})? splitBusinessCode(String? text) {
+  final trimmed = text?.trim();
+  if (trimmed == null || trimmed.isEmpty) return null;
+  if (RegExp(r'^[A-Z][A-Z0-9_]{2,80}$').hasMatch(trimmed)) {
+    return (code: trimmed, detail: null);
+  }
+  final match = RegExp(
+    r'^([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+):\s*(\S.*)$',
+  ).firstMatch(trimmed);
+  if (match == null) return null;
+  return (code: match[1]!, detail: match[2]!.trim());
+}
+
 String? _findNestedBusinessCode(Map<dynamic, dynamic> errorNode) {
   Object? walk(Object? value, {bool root = false}) {
     if (value is Map) {
@@ -71,8 +89,7 @@ String? _findNestedBusinessCode(Map<dynamic, dynamic> errorNode) {
         final child = entry.value;
         if (!root && (key == 'code' || key == 'message' || key == '%msg')) {
           final text = child is Map ? child['value'] : child;
-          if (text is String &&
-              RegExp(r'^[A-Z][A-Z0-9_]{2,80}$').hasMatch(text.trim())) {
+          if (text is String && splitBusinessCode(text) != null) {
             return text.trim();
           }
         }
@@ -147,10 +164,8 @@ bool _isOutdatedShiftContract(DioException error) {
 String? odataSafeDiagnostic(DioException error) {
   if (_isOutdatedShiftContract(error)) return 'SAP_SHIFT_CONTRACT_OUTDATED';
 
-  final message = odataErrorMessage(error);
-  if (message != null && RegExp(r'^[A-Z][A-Z0-9_]{2,80}$').hasMatch(message)) {
-    return message;
-  }
+  final business = splitBusinessCode(odataErrorMessage(error));
+  if (business != null) return business.code;
 
   final code = _odataErrorCode(error);
   if (code != null &&
@@ -197,8 +212,13 @@ Never rethrowAsBusinessError(DioException error) {
       httpStatus: error.response?.statusCode,
     );
   }
-  if (code != null && RegExp(r'^[A-Z][A-Z0-9_]{2,80}$').hasMatch(code)) {
-    throw SapBusinessError(code, httpStatus: error.response?.statusCode);
+  final business = splitBusinessCode(code);
+  if (business != null) {
+    throw SapBusinessError(
+      business.code,
+      httpStatus: error.response?.statusCode,
+      message: business.detail,
+    );
   }
   if (code != null) {
     throw SapBusinessError(

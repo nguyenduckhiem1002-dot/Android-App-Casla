@@ -1,3 +1,4 @@
+import 'package:casla_production/domain/entities/entities.dart';
 import 'package:casla_production/domain/entities/work_history.dart';
 import 'package:casla_production/domain/policies/history_work_context.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -95,6 +96,123 @@ void main() {
       );
     },
   );
+
+  group('workIdsOfWorkCenter', () {
+    UserWorkContext context(
+      String id,
+      String workCenter, {
+      String plant = '6711',
+    }) => UserWorkContext(
+      workId: id,
+      workName: id,
+      plant: plant,
+      workCenter: workCenter,
+    );
+    final contexts = [
+      context('XM1-LT', 'CL100075'),
+      context('XM1-QUAI', 'CL100075'),
+      context('XM2-CTP', 'CL100076'),
+      context('XM2-MM', 'cl100076 '),
+      context('BT1', 'CL100090', plant: '6712'),
+      context('', 'CL100076'),
+    ];
+
+    test('keeps the departments of the active work center only', () {
+      expect(
+        workIdsOfWorkCenter(contexts, active: context('XM2-CTP', 'CL100076')),
+        {'XM2-CTP', 'XM2-MM'},
+      );
+      expect(
+        workIdsOfWorkCenter(contexts, active: context('XM1-LT', 'CL100075')),
+        {'XM1-LT', 'XM1-QUAI'},
+      );
+    });
+
+    test('another plant with the same work center code is not the same', () {
+      expect(
+        workIdsOfWorkCenter([
+          context('A', 'CL100090', plant: '6711'),
+          ...contexts,
+        ], active: context('BT1', 'CL100090', plant: '6712')),
+        {'BT1'},
+      );
+    });
+
+    test('cannot narrow without a work center or a match', () {
+      expect(workIdsOfWorkCenter(contexts, active: null), isNull);
+      expect(workIdsOfWorkCenter(contexts, active: context('X', '')), isNull);
+      expect(
+        workIdsOfWorkCenter(contexts, active: context('X', 'CL100099')),
+        isNull,
+      );
+      expect(
+        workIdsOfWorkCenter(const [], active: context('X', 'CL100076')),
+        isNull,
+      );
+    });
+
+    test('the filter list offers the active work center only', () {
+      // A supervisor on CL100076 authorized for CL100075 too: the list
+      // matches "Tất cả tổ" and leaves the other work center out.
+      expect(
+        workContextsOfWorkCenter(
+          contexts,
+          active: context('XM2-CTP', 'CL100076'),
+        ).map((c) => c.workId),
+        ['XM2-CTP', 'XM2-MM'],
+      );
+      expect(
+        workContextsOfWorkCenter(
+          contexts,
+          active: context('BT1', 'CL100090', plant: '6712'),
+        ).map((c) => c.workId),
+        ['BT1'],
+      );
+    });
+
+    test('a history filter adds the departments booked in the work center', () {
+      WorkHistoryEntry booked(String workId, String center, String plant) =>
+          WorkHistoryEntry(
+            transactionUuid: '$workId-$center',
+            executionDate: DateTime(2026, 9, 9),
+            workerId: 'worker',
+            workerName: '',
+            productionOrder: 'order',
+            operation: '0010',
+            plant: plant,
+            workCenter: center,
+            workId: workId,
+            transactionType: 'INITIAL_ASSIGN',
+            quantity: 1,
+            unitOfMeasure: 'KG',
+            transactionStatus: 'POSTED',
+          );
+      final history = result([
+        booked('xm2-extra', 'CL100076', '6711'),
+        booked('XM1-LT', 'CL100075', '6711'),
+        booked('OTHER-PLANT', 'CL100076', '6799'),
+        booked('', 'CL100076', '6711'),
+      ]);
+      expect(
+        historyFilterWorkIds(
+          history,
+          contexts,
+          active: context('XM2-CTP', 'CL100076'),
+        ),
+        {'XM2-CTP', 'XM2-MM', 'XM2-EXTRA'},
+      );
+      // No shift (the worker role): nothing is narrowed.
+      expect(historyFilterWorkIds(history, contexts, active: null), isNull);
+    });
+
+    test('the filter list keeps every context when it cannot narrow', () {
+      expect(workContextsOfWorkCenter(contexts, active: null), contexts);
+      expect(
+        workContextsOfWorkCenter(contexts, active: context('X', 'CL100099')),
+        contexts,
+      );
+    });
+  });
 }
 
 extension on WorkHistoryEntry {

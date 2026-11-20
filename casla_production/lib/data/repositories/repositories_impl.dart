@@ -15,6 +15,7 @@ import '../../core/sync/verified_sync_coordinator.dart';
 import '../../core/utils/id_generator.dart';
 import '../../core/utils/device_info.dart';
 import '../../core/utils/sap_entry_time.dart';
+import '../../core/auth/session_refresh.dart';
 import 'package:flutter/foundation.dart';
 import '../../domain/entities/entities.dart';
 import '../../domain/entities/enums.dart';
@@ -27,6 +28,20 @@ import '../sap/sap_odata_client.dart';
 import '../sap/sap_auth_controller.dart';
 
 // ─── Auth Repository ────────────────────────────────────────────────
+/// Shown when SAP answers a login with `Status == 'F'` (wrong password or
+/// inactive account — indistinguishable by design).
+const String kLoginFailedMessage =
+    'Đăng nhập thất bại. Vui lòng kiểm tra lại tài khoản hoặc mật khẩu.';
+
+/// Shown when SAP answers a login with `Status == 'L'`: the account is
+/// temporarily locked after repeated wrong passwords. The 10-minute figure
+/// mirrors the backend's lock rule (5 failures within 1 minute → 10-minute
+/// lock); the response carries no `LockedUntil`, so an exact time cannot be
+/// shown.
+const String kAccountLockedMessage =
+    'Tài khoản tạm khóa do nhập sai mật khẩu nhiều lần. '
+    'Vui lòng thử lại sau khoảng 10 phút.';
+
 class AuthRepositoryImpl implements AuthRepository {
   final CaslaDatabase db;
   late final SapODataClient _sapClient;
@@ -49,13 +64,17 @@ class AuthRepositoryImpl implements AuthRepository {
       deviceId: deviceId,
     );
 
-    // `Status == 'F'` covers wrong password, inactive account AND a lockout —
-    // deliberately the same public response for all three, so this must not
+    // `Status == 'L'`: too many wrong passwords in a row; the backend refuses
+    // even a correct password until the lock expires. Say so, otherwise the
+    // user keeps retyping and extends the lockout.
+    if (result.isLocked) {
+      throw Exception(kAccountLockedMessage);
+    }
+    // `Status == 'F'` covers wrong password AND inactive account —
+    // deliberately the same public response for both, so this must not
     // try to guess which one happened from anything else in the result.
     if (!result.isSuccess) {
-      throw Exception(
-        'Đăng nhập thất bại. Vui lòng kiểm tra lại tài khoản hoặc mật khẩu.',
-      );
+      throw Exception(kLoginFailedMessage);
     }
 
     _validateAuthResult(result);
@@ -130,12 +149,27 @@ class AuthRepositoryImpl implements AuthRepository {
       refreshToken: current.refreshToken,
       deviceId: await DeviceInfoHelper.getDeviceId(),
     );
-    if (!result.isSuccess) return null;
+    // SAP answered but will not renew this session (account inactive or
+    // locked): that is a refusal, not a missing answer.
+    if (!result.isSuccess) {
+      throw SessionRefreshRejectedException(
+        code: result.isLocked ? 'ACCOUNT_LOCKED' : 'SESSION_REFRESH_REFUSED',
+        message: result.isLocked
+            ? kAccountLockedMessage
+            : 'Phiên đăng nhập không còn hiệu lực. Vui lòng đăng nhập lại.',
+      );
+    }
     _validateAuthResult(result);
 
     // Never accept a token response for another account, even if a faulty or
     // compromised upstream returned an otherwise well-formed payload.
-    if (result.userUuid != current.id) return null;
+    if (result.userUuid != current.id) {
+      throw const SessionRefreshRejectedException(
+        code: 'SESSION_IDENTITY_MISMATCH',
+        message:
+            'Phiên đăng nhập không khớp tài khoản. Vui lòng đăng nhập lại.',
+      );
+    }
 
     final authorization = parseAuthorization(
       permissions: result.permissions,
@@ -223,31 +257,54 @@ class AuthRepositoryImpl implements AuthRepository {
   ///
   /// SAP sends no explicit Role claim (`ZA_MOB_LoginResult` has no `Role`
   /// field), so the app derives one from the FuncID set login/refresh return.
-  /// The vocabulary is short because the backend only gates one thing on a
-  /// FuncID: `zbp_r_pp_opalloc`'s `initialAssign` calls `validate_token` with
-  /// `required_func = 'PP_INITIAL_ASSIGN'`. `transfer`, `recall` and `confirm`
-  /// pass no `required_func` at all — they are gated by `has_work_scope` plus
-  /// `verify_worker_password` instead. `PP_HIST_SELF`/`PP_HIST_TEAM` are read
-  /// scopes checked in `zcl_pp_work_history`.
-  ///
-  /// Holding `PP_INITIAL_ASSIGN` is therefore the only signal SAP gives that
-  /// an account is a supervisor.
+  /// `zbp_r_pp_opalloc` gates each write on its own FuncID through
+  /// `validate_token( required_func = ... )`: `PP_INITIAL_ASSIGN` for
+  /// initialAssign, `PP_CONFIRM` for confirm and `PP_RECALL` for recall.
+  /// `PP_HIST_SELF`/`PP_HIST_TEAM` are read scopes checked in
+  /// `zcl_pp_work_history`; `PP_POS_MANAGE` gates `zcl_pp_position_api`.
   static const _funcInitialAssign = 'PP_INITIAL_ASSIGN';
+  static const _funcConfirm = 'PP_CONFIRM';
+  static const _funcRecall = 'PP_RECALL';
+
+  /// Recall without the worker's password. An add-on to [_funcRecall], not an
+  /// operation of its own: alone it opens nothing.
+  static const _funcRecallNoPassword = 'PP_RECALL_NOPASS';
   static const _funcHistSelf = 'PP_HIST_SELF';
   static const _funcHistTeam = 'PP_HIST_TEAM';
   static const _funcPositionManage = 'PP_POS_MANAGE';
 
-  /// Granted to every supervisor session.
+  /// The three operation FuncIDs, each mapped to the one menu it unlocks.
   ///
-  /// These have no SAP counterpart — they are app-local screen gates from the
-  /// old spec (see [Permission]). The backend re-checks work scope and the
-  /// worker password on every write regardless, so gating them client-side is
-  /// navigation ergonomics, not security.
-  static const _supervisorPermissions = {
-    Permission.assignQuantity,
-    Permission.recallAssignment,
+  /// Holding any one of them makes the account a supervisor; the label is
+  /// what the login error names when the account is misconfigured.
+  static const _operationFuncs =
+      <String, ({Permission permission, String label})>{
+        _funcInitialAssign: (
+          permission: Permission.assignQuantity,
+          label: 'Giao',
+        ),
+        _funcConfirm: (
+          permission: Permission.confirmProduction,
+          label: 'Xác nhận',
+        ),
+        _funcRecall: (
+          permission: Permission.recallAssignment,
+          label: 'Thu hồi',
+        ),
+      };
+
+  /// Tổng quan and the employee detail: the team view read from the team
+  /// history. These have no SAP counterpart; the backend re-checks the
+  /// FuncID, work scope and worker password on every write regardless, so
+  /// gating client-side is navigation ergonomics, not security.
+  static const _overviewPermissions = {
     Permission.viewTeamProduction,
     Permission.viewEmployeeHistory,
+  };
+
+  /// Granted on top of Tổng quan to an account holding an operation: the
+  /// Đồng bộ queue only ever holds Giao/Xác nhận/Thu hồi writes.
+  static const _operationSharedPermissions = {
     Permission.viewSyncStatus,
     Permission.switchUser,
   };
@@ -256,17 +313,29 @@ class AuthRepositoryImpl implements AuthRepository {
   /// session's role/permission/scope claims.
   ///
   /// The app serves two roles:
-  /// - `PP_INITIAL_ASSIGN` → [UserRole.supervisor], which also needs at least
-  ///   one Work Context (Plant/WorkCenter): the supervisor screens scope by
-  ///   team, and `has_work_scope` rejects every write outside it anyway;
+  /// - at least one of `PP_INITIAL_ASSIGN` (Giao), `PP_CONFIRM` (Xác nhận),
+  ///   `PP_RECALL` (Thu hồi) → [UserRole.supervisor], who reaches Tổng quan
+  ///   and sees only the menus of the operations actually held. Every
+  ///   operation must come with `PP_HIST_TEAM`: Tổng quan and the confirm/
+  ///   recall targets are read from the team history, so without it the
+  ///   supervisor would see an empty or partial ledger and act on it. The
+  ///   backend documents the same pairing (TEAM_HISTORY_SCOPE.md);
+  /// - `PP_POS_MANAGE` → [UserRole.supervisor] as well. On its own it opens
+  ///   only the Vị trí tab; together with `PP_HIST_TEAM` it also opens
+  ///   Tổng quan (read-only unless an operation is held too);
   /// - a history scope alone (`PP_HIST_SELF` and/or `PP_HIST_TEAM`, see
   ///   `zcl_pp_work_history`) with no Work Context required →
   ///   [UserRole.worker], who only reaches the read-only history screen.
   ///   `getWorkHistory` resolves the worker's own id server-side from the
   ///   authenticated account, so no local Work Context is needed.
   ///
-  /// Still fails closed: an account with neither is rejected rather than
-  /// silently landing on a broken/empty UI.
+  /// A supervisor needs at least one Work Context (Plant/WorkCenter): the
+  /// screens scope by team and Work Center, and SAP rejects every write or
+  /// position call outside it anyway.
+  ///
+  /// Still fails closed: an account with none of these, or with an operation
+  /// but no `PP_HIST_TEAM`, is rejected with a message naming what is missing
+  /// rather than silently landing on a broken/empty UI.
   @visibleForTesting
   static ({
     UserRole role,
@@ -277,13 +346,31 @@ class AuthRepositoryImpl implements AuthRepository {
     required List<SapPermission> permissions,
     required List<SapWorkContext> workContexts,
   }) {
-    final funcIds = permissions.map((p) => p.funcId).toSet();
+    final funcIds = permissions
+        .map((p) => p.funcId.trim().toUpperCase())
+        .toSet();
     final historyPermissions = <Permission>{
       if (funcIds.contains(_funcHistSelf)) Permission.viewOwnProductionHistory,
       if (funcIds.contains(_funcHistTeam)) Permission.viewTeamProductionHistory,
     };
+    final operations = [
+      for (final entry in _operationFuncs.entries)
+        if (funcIds.contains(entry.key)) entry,
+    ];
+    final managesPositions = funcIds.contains(_funcPositionManage);
+    final viewsTeam = funcIds.contains(_funcHistTeam);
 
-    if (funcIds.contains(_funcInitialAssign)) {
+    if (operations.isNotEmpty && !viewsTeam) {
+      final held = operations
+          .map((entry) => '${entry.value.label} (${entry.key})')
+          .join(', ');
+      throw Exception(
+        'Tài khoản có quyền $held nhưng thiếu quyền Xem lịch sử tổ '
+        '($_funcHistTeam). Vui lòng liên hệ quản trị viên SAP để cấp bổ sung.',
+      );
+    }
+
+    if (operations.isNotEmpty || managesPositions) {
       if (workContexts.isEmpty) {
         throw Exception('Tài khoản chưa được phân phạm vi tổ sản xuất.');
       }
@@ -291,10 +378,19 @@ class AuthRepositoryImpl implements AuthRepository {
         role: UserRole.supervisor,
         permissions: {
           ...historyPermissions,
-          ..._supervisorPermissions,
-          // Only a supervisor gets the Vị trí tab; SAP re-checks the function
-          // and its Work Center scope on every position call.
-          if (funcIds.contains(_funcPositionManage)) Permission.managePositions,
+          // Every operation holder has PP_HIST_TEAM (checked above); a
+          // position manager gets Tổng quan only alongside it.
+          if (viewsTeam) ..._overviewPermissions,
+          if (operations.isNotEmpty) ..._operationSharedPermissions,
+          for (final entry in operations) entry.value.permission,
+          // SAP takes an empty WorkerPassword on recall only from an account
+          // holding both functions; the form offers the tick box to the same.
+          if (funcIds.contains(_funcRecall) &&
+              funcIds.contains(_funcRecallNoPassword))
+            Permission.recallWithoutPassword,
+          // SAP re-checks the function and its Work Center scope on every
+          // position call.
+          if (managesPositions) Permission.managePositions,
         },
         workContexts: workContexts,
       );
@@ -550,6 +646,7 @@ class AssignmentRepositoryImpl implements AssignmentRepository {
           sapId: entity['sap_id']?.toString() ?? '',
           syncStatus: SyncStatus.fromStorage(entity['sync_status']),
           createdAtUtc: (entity['created_at_utc'] as num?)?.toInt() ?? 0,
+          positionId: entity['position_id']?.toString().trim() ?? '',
         ),
       );
     }
@@ -731,6 +828,8 @@ class RecallRepositoryImpl implements RecallRepository {
     required String shiftId,
     required String createdBy,
     String? workerPassword,
+    double? seatCeiling,
+    bool withoutWorkerPassword = false,
   }) async {
     final assignment = await db.getAssignmentById(assignmentId);
     if (assignment == null) throw Exception('Phân công không tồn tại');
@@ -740,10 +839,9 @@ class RecallRepositoryImpl implements RecallRepository {
         await db.getDefectQuantity(assignmentId);
     final recalled = await db.getRecalledQuantity(assignmentId);
     final assignedQty = assignment['assigned_quantity'] as double;
-    final maxRecall = ProductionMath.calculateMaxRecall(
-      assignedQty,
-      completed,
-      recalled,
+    final maxRecall = ProductionMath.recallCeiling(
+      ProductionMath.calculateMaxRecall(assignedQty, completed, recalled),
+      seatCeiling: seatCeiling,
     );
 
     final scaledQuantity = ProductionMath.toSapScale(quantity);
@@ -777,6 +875,9 @@ class RecallRepositoryImpl implements RecallRepository {
       'sync_status': 'PENDING',
       'idempotency_key': idempotencyKey,
       'created_at_utc': now,
+      // Frozen on the row, unlike a password: a retry by the background
+      // engine must send the same password-less command, not ask for one.
+      'without_worker_password': withoutWorkerPassword ? 1 : 0,
     };
     final queueItem = {
       'id': IdGenerator.newId(),
@@ -809,9 +910,12 @@ class RecallRepositoryImpl implements RecallRepository {
       record: recallRow,
       queueItem: queueItem,
       auditLog: auditLog,
+      seatCeiling: seatCeiling,
     );
 
-    if (workerPassword?.isNotEmpty == true) {
+    // A password-less recall is sent on its own: the worker's other pending
+    // transactions still need the password nobody is there to type.
+    if (!withoutWorkerPassword && workerPassword?.isNotEmpty == true) {
       final report = await verifiedSync.syncVerifiedWorkerChain(
         anchorQueueItemId: queueItem['id'] as String,
         workerPassword: workerPassword!,
@@ -825,7 +929,7 @@ class RecallRepositoryImpl implements RecallRepository {
       backoff: SyncBackoff(),
       queueItem: queueItem,
       source: recallRow,
-      workerPassword: workerPassword,
+      workerPassword: withoutWorkerPassword ? null : workerPassword,
     );
 
     return _liveMutationReceipt(db, id, queueItem, failure);
@@ -1389,6 +1493,7 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
             'work_name': worker.workName,
             'bo_phan': worker.boPhan,
             'location': worker.location,
+            'worker_bo_phan': worker.workerBoPhan,
           },
       ],
     );
@@ -1641,6 +1746,7 @@ class WorkHistoryRepositoryImpl implements WorkHistoryRepository {
               workName: row['work_name']?.toString() ?? '',
               boPhan: row['bo_phan']?.toString() ?? '',
               location: row['location']?.toString() ?? '',
+              workerBoPhan: row['worker_bo_phan']?.toString() ?? '',
             ),
           )
           .toList(growable: false);
@@ -1805,7 +1911,8 @@ Future<MutationReceipt> _verifiedMutationReceipt(
     );
   }
 
-  final queued = await db.getSyncQueueItemById(queueItem['id'] as String);
+  final anchorId = queueItem['id'] as String;
+  final queued = await db.getSyncQueueItemById(anchorId);
   final status = queued?['status']?.toString();
   final code = queued?['last_error_code']?.toString();
   final state = status == 'NEEDS_VERIFICATION' || code == 'WORKER_AUTH_FAILED'
@@ -1813,10 +1920,21 @@ Future<MutationReceipt> _verifiedMutationReceipt(
       : status == 'FAILED' || report.outcome == VerifiedSyncOutcome.rejected
       ? MutationDeliveryState.rejected
       : MutationDeliveryState.queued;
+  // The chain sends the worker's older items first and stops at the first
+  // failure. When that failure is an earlier item, this transaction was never
+  // offered to SAP: its own row carries no error, so say what blocked it
+  // rather than letting a bare "queued" read as good as sent.
+  final blockedByEarlier =
+      report.failedQueueItemId != null && report.failedQueueItemId != anchorId;
+  final ownMessage = queued?['last_error_message']?.toString();
+  final message = blockedByEarlier
+      ? 'Chưa gửi được vì một giao dịch trước đó của công nhân bị lỗi: '
+            '${report.message}'
+      : ownMessage ?? report.message;
   return MutationReceipt(
     id: id,
     state: state,
-    code: code,
-    message: queued?['last_error_message']?.toString() ?? report.message,
+    code: code ?? (blockedByEarlier ? report.failureCode : null),
+    message: message,
   );
 }

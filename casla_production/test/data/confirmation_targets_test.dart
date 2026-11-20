@@ -62,6 +62,7 @@ void main() {
     String operation = '0020',
     DateTime? date,
     String original = '',
+    String position = '',
   }) => WorkHistoryEntry(
     transactionUuid: id,
     executionDate: date ?? DateTime(2026, 9, 23),
@@ -77,6 +78,7 @@ void main() {
     unitOfMeasure: 'CHC',
     transactionStatus: 'POSTED',
     originalTransactionUuid: original,
+    positionId: position,
   );
   Future<List<Assignment>> resolve(
     List<WorkHistoryEntry> entries, {
@@ -99,6 +101,33 @@ void main() {
     workId: 'XM2.002',
     workCenter: 'CL100077',
   );
+
+  group('position seats', () {
+    test('a spent blank seat does not take the TR1 confirmation', () async {
+      // 010140000381/0020 on 2026-11-11: 100 + 100 unplaced, 200 recalled,
+      // then 800 at TR1. Only TR1 is open and it carries its own 800.
+      final targets = await resolve([
+        entry('A', 'INITIAL_ASSIGN', 100),
+        entry('B', 'INITIAL_ASSIGN', 100, original: 'A'),
+        entry('R', 'RECALL', 200, original: 'B'),
+        entry('T', 'INITIAL_ASSIGN', 800, position: 'TR1'),
+      ]);
+      final open = targets.where((t) => t.canConfirm).toList();
+      expect(open.map((t) => t.sapId), ['T']);
+      expect(open.single.positionId, 'TR1');
+      expect(open.single.seatRemaining, 800);
+    });
+
+    test('a consumption row without position counts for its source', () {
+      return resolve([
+        entry('T', 'INITIAL_ASSIGN', 800, position: 'TR1'),
+        entry('C', 'CONFIRM', 300, original: 'T'),
+      ]).then((targets) {
+        expect(targets.single.positionId, 'TR1');
+        expect(targets.single.seatRemaining, 500);
+      });
+    });
+  });
 
   group('carried-over balance (REASSIGN)', () {
     test(
@@ -520,6 +549,37 @@ void main() {
     );
   });
 
+  test(
+    'a root entered here keeps its row; other top-ups become one lot',
+    () async {
+      await realLot('root', 100);
+      final targets = await resolve([
+        entry('root', 'INITIAL_ASSIGN', 100),
+        entry('top-1', 'INITIAL_ASSIGN', 333, original: 'root'),
+        entry('top-2', 'INITIAL_ASSIGN', 1000, original: 'root'),
+        // Consumed against a top-up this device never saw: it lowers the lot.
+        entry('c2', 'CONFIRM', 15, original: 'top-1'),
+      ]);
+      expect(
+        targets.map((a) => '${a.sapId}:${a.remaining}'),
+        unorderedEquals(['root:100.0', 'top-1:1318.0']),
+      );
+    },
+  );
+
+  test('a top-up entered here keeps its row; the root becomes a lot', () async {
+    await realLot('top-1', 333);
+    final targets = await resolve([
+      entry('root', 'INITIAL_ASSIGN', 100),
+      entry('top-1', 'INITIAL_ASSIGN', 333, original: 'root'),
+      entry('c1', 'CONFIRM', 60, original: 'root'),
+    ]);
+    expect(
+      targets.map((a) => '${a.sapId}:${a.remaining}'),
+      unorderedEquals(['root:40.0', 'top-1:333.0']),
+    );
+  });
+
   test('the same worker by local id or SAP code reuses one import', () async {
     final history = WorkHistoryResult(
       scopeCode: 'T',
@@ -570,6 +630,134 @@ void main() {
         ),
       ),
     );
+  });
+
+  test(
+    'a confirmation still queued on an imported lot is held against its seat',
+    () async {
+      // The worker list (S10) subtracts queued local rows from SAP's figure;
+      // the confirmation form must show the same pile, or the supervisor
+      // confirms the queued quantity a second time.
+      await resolve([entry('allocation', 'INITIAL_ASSIGN', 1433)]);
+      await db.insertProductionRecord({
+        'id': 'queued',
+        'phan_cong_id': 'stale',
+        'quantity': 30.0,
+        'defect_quantity': 3.0,
+        'business_date': '2026-09-23',
+        'shift_id': 'DAY',
+        'created_by': 'test',
+        'occurred_at_utc': 1,
+        'device_id': 'test',
+        'sync_status': 'NEEDS_VERIFICATION',
+        'idempotency_key': 'queued',
+        'created_at_utc': 1,
+      });
+      await db.insertSyncQueueItem({
+        'id': 'queued-item',
+        'entity_type': 'PRODUCTION',
+        'entity_id': 'queued',
+        'action': 'CREATE',
+        'status': 'NEEDS_VERIFICATION',
+        'idempotency_key': 'queued',
+        'created_at_utc': 1,
+        'updated_at_utc': 1,
+      });
+
+      final target = (await resolve([
+        entry('allocation', 'INITIAL_ASSIGN', 1433),
+        entry('external', 'CONFIRM', 100),
+      ])).single;
+
+      expect(target.remaining, 1300, reason: 'the lot itself nets the row');
+      expect(
+        target.seatRemaining,
+        1300,
+        reason: 'the seat nets the queued row like the worker list does',
+      );
+    },
+  );
+
+  test('targets carry the seat balance, the plain sum of the rows', () async {
+    // 1.000 given, 1.500 confirmed on it, then 700 given: SAP adds the lots
+    // up, so 1.700 - 1.500 = 200 is open on the seat (decided 2026-10-24).
+    final entries = [
+      entry('lot-a', 'INITIAL_ASSIGN', 1000, date: DateTime(2026, 9, 23, 8)),
+      entry(
+        'confirm-1500',
+        'CONFIRM',
+        1500,
+        original: 'lot-a',
+        date: DateTime(2026, 9, 23, 8, 10),
+      ),
+      entry('lot-b', 'INITIAL_ASSIGN', 700, date: DateTime(2026, 9, 23, 8, 20)),
+    ];
+    final open = await resolve(entries);
+    expect(open.map((a) => a.sapId), ['lot-b']);
+    expect(open.single.remaining, 700);
+    expect(open.single.seatRemaining, 200);
+    expect(open.single.groupRemaining, 200);
+    // The order of the rows makes no difference.
+    final consumed = await resolve([
+      entries[0],
+      entry('lot-b', 'INITIAL_ASSIGN', 700, date: DateTime(2026, 9, 23, 8, 5)),
+      entries[1],
+    ]);
+    expect(consumed.map((a) => a.sapId), ['lot-b']);
+    expect(consumed.single.remaining, 700);
+    expect(consumed.single.seatRemaining, 200);
+  });
+
+  test('a seat confirmed up to its sum is closed', () async {
+    // The TC22 case: 1.000 given, 1.500 confirmed, 700 given, 200 confirmed.
+    // The lots add up to 1.700 and 1.700 was confirmed: nothing is left on
+    // the seat, whatever the order, so no allocation can be confirmed.
+    final targets = await resolve([
+      entry(
+        'root',
+        'INITIAL_ASSIGN',
+        1000,
+        date: DateTime(2026, 9, 23, 13, 31),
+      ),
+      entry(
+        'c1500',
+        'CONFIRM',
+        1500,
+        original: 'root',
+        date: DateTime(2026, 9, 23, 13, 31, 30),
+      ),
+      entry(
+        'top',
+        'INITIAL_ASSIGN',
+        700,
+        original: 'root',
+        date: DateTime(2026, 9, 23, 13, 32),
+      ),
+      entry(
+        'c200',
+        'CONFIRM',
+        200,
+        original: 'root',
+        date: DateTime(2026, 9, 23, 14),
+      ),
+    ]);
+    expect(targets, isEmpty);
+  });
+
+  test('a seat SAP has cleared keeps its allocations closed', () async {
+    // 700 given, then 1.000 given and 2.000 confirmed: both are spent.
+    final targets = await resolve([
+      entry('a', 'INITIAL_ASSIGN', 700, date: DateTime(2026, 9, 23, 8)),
+      entry('b', 'INITIAL_ASSIGN', 1000, date: DateTime(2026, 9, 23, 8, 5)),
+      entry(
+        'c',
+        'CONFIRM',
+        2000,
+        original: 'b',
+        date: DateTime(2026, 9, 23, 8, 10),
+      ),
+    ]);
+    expect(targets, isEmpty);
   });
 
   test('settled allocations come along only when asked for', () async {

@@ -285,6 +285,62 @@ void main() {
       expect(await db.getRecalledQuantity(seededAssignmentId), 0.0);
     });
 
+    test(
+      "a seat ceiling lets the pile be recalled past the lot's own figure",
+      () async {
+        // 650 assigned − 436 completed = 214 on this lot, but the seat the
+        // form showed still holds 990 (another lot of the same worker and
+        // operation, or an earlier over-confirmation SAP settled per seat).
+        await recallRepo.recallAssignment(
+          assignmentId: seededAssignmentId,
+          quantity: 300.0,
+          reasonCode: RecallReason.planChange.code,
+          businessDate: '2026-08-14',
+          shiftId: 'SHIFT_1',
+          createdBy: 'MNV00100',
+          seatCeiling: 990.0,
+        );
+
+        expect(
+          await db.getRecalledQuantity(seededAssignmentId),
+          closeTo(300.0, 0.001),
+        );
+      },
+    );
+
+    test("a seat ceiling below the lot's own figure never lowers it", () async {
+      await recallRepo.recallAssignment(
+        assignmentId: seededAssignmentId,
+        quantity: 200.0,
+        reasonCode: RecallReason.planChange.code,
+        businessDate: '2026-08-14',
+        shiftId: 'SHIFT_1',
+        createdBy: 'MNV00100',
+        seatCeiling: 0.0,
+      );
+
+      expect(
+        await db.getRecalledQuantity(seededAssignmentId),
+        closeTo(200.0, 0.001),
+      );
+    });
+
+    test('a seat ceiling still refuses more than the pile holds', () async {
+      await expectLater(
+        recallRepo.recallAssignment(
+          assignmentId: seededAssignmentId,
+          quantity: 1000.0,
+          reasonCode: RecallReason.planChange.code,
+          businessDate: '2026-08-14',
+          shiftId: 'SHIFT_1',
+          createdBy: 'MNV00100',
+          seatCeiling: 990.0,
+        ),
+        throwsA(isA<Exception>()),
+      );
+      expect(await db.getRecalledQuantity(seededAssignmentId), 0.0);
+    });
+
     // Pins the fix from P2-01. The screen used to send 'KHAC' while the domain
     // layer checks for 'OTHER', so this rule silently never fired.
     test('rejects the "other" reason when the note is blank', () async {

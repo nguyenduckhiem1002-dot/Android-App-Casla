@@ -1,10 +1,19 @@
 // Screen S15 — confirm several operations of one worker at once.
 //
 // Reached from the Xác nhận tab when the worker has more than one operation
-// open. The list shows operation names only, with a tick box each; the arrow
-// opens the details. One quantity is confirmed on every ticked operation, so
-// it cannot exceed the one with the least left. Defect and recall quantities
-// stay on the single-operation form (S08), offered when exactly one is ticked.
+// open. Each operation is a card with a tick box, its sales order and
+// product, its name and order, and what was given, confirmed and is left.
+// The supervisor types one quantity, confirmed on every ticked operation, or
+// ticks "confirm what is left", which confirms each ticked operation's own
+// balance. Defect and recall quantities stay on the single-operation form
+// (S08), which "Chi tiết công đoạn" opens when exactly one is ticked.
+//
+// After a confirmation the balances are read again: the screen stays while
+// the worker still has an operation open and returns to the worker list once
+// nothing is left. The QR button returns there with the scanner open, to
+// pick another worker.
+
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -13,20 +22,26 @@ import 'package:intl/intl.dart';
 
 import '../../../app/theme/casla_colors.dart';
 import '../../../app/theme/casla_spacing.dart';
+import '../../../presentation/widgets/casla_dialog_header.dart';
 import '../../../core/sync/sync_failure.dart';
-import '../../../core/utils/operation_qr_parser.dart';
 import '../../../core/utils/quantity_formatter.dart';
 import '../../../core/utils/shift_execution_validation.dart';
+import '../../../data/repositories/confirmation_targets.dart';
 import '../../../domain/entities/entities.dart';
 import '../../../domain/entities/mutation_receipt.dart';
 import '../../../domain/policies/grouped_confirmation.dart';
 import '../../../domain/policies/multi_confirmation.dart';
+import '../../../domain/policies/production_math.dart';
 import '../../../main.dart';
 import '../../../presentation/widgets/over_limit_line.dart';
 import '../../../presentation/widgets/scan_slot_field.dart';
 import '../../../presentation/widgets/worker_verification_dialog.dart';
 
 class S15MultiConfirmScreen extends ConsumerStatefulWidget {
+  /// What the route pops with when the supervisor asks to scan another
+  /// worker: the worker list opens its scanner.
+  static const scanAnotherWorker = 'scan-another-worker';
+
   final Map<String, dynamic> worker;
 
   /// The worker's confirmation groups that still have something open.
@@ -35,11 +50,17 @@ class S15MultiConfirmScreen extends ConsumerStatefulWidget {
   @visibleForTesting
   final DateTime Function()? now;
 
+  /// Reads the worker's open groups again after a confirmation. Tests
+  /// replace the SAP-backed default.
+  @visibleForTesting
+  final Future<List<List<Assignment>>> Function()? reloadGroups;
+
   const S15MultiConfirmScreen({
     super.key,
     required this.worker,
     required this.groups,
     this.now,
+    this.reloadGroups,
   });
 
   @override
@@ -50,14 +71,21 @@ class S15MultiConfirmScreen extends ConsumerStatefulWidget {
 class _S15MultiConfirmScreenState extends ConsumerState<S15MultiConfirmScreen> {
   final TextEditingController _qtyController = TextEditingController();
   final Set<int> _selected = {};
-  final Set<int> _expanded = {};
 
-  /// Bộ phận of each group's operation, read from its label once.
-  final Map<int, String> _departments = {};
-  late final List<Assignment> _totals = [
-    for (final group in widget.groups) aggregateConfirmationGroup(group),
+  /// The groups on screen: the ones the route was opened with, replaced by a
+  /// fresh read after every confirmation.
+  late List<List<Assignment>> _groups = widget.groups;
+  late List<Assignment> _totals = [
+    for (final group in _groups) aggregateConfirmationGroup(group),
   ];
+
+  /// "SO/item" of each order, by local order id. Null until read; empty when
+  /// the order carries none.
+  final Map<String, String> _salesOrders = {};
   bool _isSubmitting = false;
+
+  /// Confirm what each ticked operation has left instead of a typed figure.
+  bool _confirmRemaining = false;
   String? _quantityError;
 
   String get _workerName {
@@ -74,7 +102,7 @@ class _S15MultiConfirmScreenState extends ConsumerState<S15MultiConfirmScreen> {
   @override
   void initState() {
     super.initState();
-    _loadDepartments();
+    unawaited(_loadSalesOrders());
   }
 
   @override
@@ -83,27 +111,93 @@ class _S15MultiConfirmScreenState extends ConsumerState<S15MultiConfirmScreen> {
     super.dispose();
   }
 
-  Future<void> _loadDepartments() async {
+  /// The sales order is kept on the order row, not on the allocation.
+  Future<void> _loadSalesOrders() async {
     final db = ref.read(appStateProvider).db;
-    for (var index = 0; index < _totals.length; index++) {
+    for (final orderId in {for (final total in _totals) total.orderId}) {
+      if (_salesOrders.containsKey(orderId)) continue;
       try {
-        final order = await db.getOrderById(_totals[index].orderId);
-        final department = OperationQrParser.parse(
-          order?['operation_qr_payload']?.toString() ?? '',
-        ).boPhan.trim();
+        final order = await db.getOrderById(orderId);
         if (!mounted) return;
-        if (department.isNotEmpty) {
-          setState(() => _departments[index] = department);
-        }
+        final label = [
+          order?['sales_order']?.toString().trim() ?? '',
+          order?['sales_order_item']?.toString().trim() ?? '',
+        ].where((value) => value.isNotEmpty).join('/');
+        setState(() => _salesOrders[orderId] = label);
       } catch (_) {
-        // The department is only shown among the operation's details.
+        // The sales order is only shown among the operation's details.
       }
     }
   }
 
-  String _name(int index) => confirmationGroupName(widget.groups[index]);
+  /// The worker's open groups, read against SAP the way the worker list does
+  /// before it opens this screen.
+  Future<List<List<Assignment>>> _loadOpenGroups() async {
+    final appState = ref.read(appStateProvider);
+    final shift = appState.activeShift;
+    final workContext = appState.activeWorkContext;
+    if (shift == null || workContext == null) return const [];
+    return loadOpenConfirmationGroups(
+      db: appState.db,
+      assignments: appState.assignmentRepo,
+      workHistory: appState.workHistoryRepo,
+      workerId: widget.worker['id']?.toString() ?? '',
+      workerCode: widget.worker['ma_nv']?.toString() ?? '',
+      businessDate: appState.activeBusinessDate,
+      shiftId: shift.shiftId,
+      workId: workContext.workId,
+      workCenter: workContext.workCenter,
+    );
+  }
 
-  bool _isOpen(int index) => _totals[index].remaining > 0;
+  /// Something was written, so the balances on screen are stale. Stays with
+  /// fresh ones while the worker still has an operation open; otherwise goes
+  /// back to the worker list to pick another worker. Balances that cannot be
+  /// read again are not offered for a second confirmation either.
+  Future<void> _reloadOrLeave() async {
+    List<List<Assignment>> fresh;
+    try {
+      fresh = await (widget.reloadGroups ?? _loadOpenGroups)();
+    } catch (_) {
+      fresh = const [];
+    }
+    if (!mounted) return;
+    if (fresh.isEmpty) {
+      context.pop(true);
+      return;
+    }
+    setState(() {
+      _groups = fresh;
+      _totals = [for (final group in fresh) aggregateConfirmationGroup(group)];
+      _selected.clear();
+      _qtyController.clear();
+      _confirmRemaining = false;
+      _quantityError = null;
+    });
+    unawaited(_loadSalesOrders());
+  }
+
+  String _name(int index) => confirmationGroupName(_groups[index]);
+
+  bool _isOpen(int index) => _totals[index].groupRemaining > 0;
+
+  /// Ticked operations, in list order.
+  List<int> get _selectedIndexes => _selected.toList()..sort();
+
+  /// What each ticked operation confirms for [entered], in list order.
+  List<double> _quantitiesFor(double entered) => multiConfirmationQuantities(
+    [for (final index in _selectedIndexes) _groups[index]],
+    confirmRemaining: _confirmRemaining,
+    entered: entered,
+  );
+
+  void _setConfirmRemaining(bool value) {
+    setState(() {
+      _confirmRemaining = value;
+      if (value) _qtyController.clear();
+      _quantityError = null;
+    });
+  }
 
   String get _uom {
     final index = _selected.isEmpty ? null : _selected.first;
@@ -114,7 +208,7 @@ class _S15MultiConfirmScreenState extends ConsumerState<S15MultiConfirmScreen> {
 
   ({double remaining, String name})? get _limit {
     final tightest = tightestConfirmationGroup([
-      for (final index in _selected) widget.groups[index],
+      for (final index in _selected) _groups[index],
     ]);
     return tightest == null
         ? null
@@ -174,10 +268,13 @@ class _S15MultiConfirmScreenState extends ConsumerState<S15MultiConfirmScreen> {
   Future<void> _showMessage(String title, String message) => showDialog<void>(
     context: context,
     builder: (dialogContext) => AlertDialog(
-      title: Text(title),
+      titlePadding: CaslaDialog.titlePadding,
+      contentPadding: CaslaDialog.contentPadding,
+      title: CaslaDialogHeader(child: Text(title)),
       content: SingleChildScrollView(child: Text(message)),
       actions: [
         TextButton(
+          style: CaslaDialog.actionStyle,
           onPressed: () => Navigator.of(dialogContext).pop(),
           child: const Text('Đã hiểu'),
         ),
@@ -191,24 +288,34 @@ class _S15MultiConfirmScreenState extends ConsumerState<S15MultiConfirmScreen> {
   Future<void> _submitNow() async {
     if (_isSubmitting || _selected.isEmpty) return;
     FocusScope.of(context).unfocus();
-    final indexes = _selected.toList()..sort();
+    final indexes = _selectedIndexes;
     final uom = _uom;
+    final confirmRemaining = _confirmRemaining;
 
-    final quantity = parseLocalizedQuantity(_qtyController.text) ?? 0.0;
-    if (!quantity.isFinite || quantity <= 0) {
-      setState(
-        () => _quantityError = 'Số lượng xác nhận phải là một số dương hợp lệ.',
-      );
-      return;
-    }
-    final wholeError = wholeQuantityInputError(_qtyController.text, uom);
-    if (wholeError != null) {
-      setState(() => _quantityError = wholeError);
-      return;
+    var quantity = 0.0;
+    if (!confirmRemaining) {
+      quantity = parseLocalizedQuantity(_qtyController.text) ?? 0.0;
+      if (!quantity.isFinite || quantity <= 0) {
+        setState(
+          () =>
+              _quantityError = 'Số lượng xác nhận phải là một số dương hợp lệ.',
+        );
+        return;
+      }
+      final wholeError = wholeQuantityInputError(_qtyController.text, uom);
+      if (wholeError != null) {
+        setState(() => _quantityError = wholeError);
+        return;
+      }
     }
     // More than the tightest operation has left may be confirmed; the form
     // warns under the field.
     setState(() => _quantityError = null);
+    // The typed figure on every ticked operation, or each one's own balance.
+    final quantities = _quantitiesFor(quantity);
+    final quantityOf = {
+      for (var at = 0; at < indexes.length; at++) indexes[at]: quantities[at],
+    };
 
     final appState = ref.read(appStateProvider);
     final shift = appState.activeShift;
@@ -251,8 +358,8 @@ class _S15MultiConfirmScreenState extends ConsumerState<S15MultiConfirmScreen> {
     try {
       for (final index in indexes) {
         partsByIndex[index] = splitGroupedConfirmation(
-          widget.groups[index],
-          completed: quantity,
+          _groups[index],
+          completed: quantityOf[index]!,
           recalled: 0,
         );
       }
@@ -274,6 +381,13 @@ class _S15MultiConfirmScreenState extends ConsumerState<S15MultiConfirmScreen> {
         context,
         workerName: _workerName,
         actionLabel: 'gửi xác nhận ${indexes.length} công đoạn lên SAP',
+        // The worker signs what every ticked operation confirms in all, the
+        // figure shown as "Tổng" under the quantity.
+        summary: WorkerQuantitySummary(
+          workerCode: widget.worker['ma_nv']?.toString().trim() ?? '',
+          uom: uom,
+          completedTotal: multiConfirmationTotal(quantities),
+        ),
         // Only the very first write can prove the password wrong. Once one
         // is saved, asking again would post it a second time.
         isWrongPassword: (outcomes) =>
@@ -313,6 +427,7 @@ class _S15MultiConfirmScreenState extends ConsumerState<S15MultiConfirmScreen> {
             outcomes.add(
               _ConfirmOutcome(
                 name: _name(index),
+                quantity: quantityOf[index]!,
                 saved: saved,
                 receipt: least,
                 refusal: refusal,
@@ -331,13 +446,14 @@ class _S15MultiConfirmScreenState extends ConsumerState<S15MultiConfirmScreen> {
         builder: (dialogContext) => _ConfirmResultDialog(
           outcomes: outcomes,
           quantity: quantity,
+          confirmRemaining: confirmRemaining,
           uom: uom,
           workerName: _workerName,
         ),
       );
-      // The list behind this screen holds the old balances: go back to it so
-      // nothing here can be confirmed twice.
-      if (mounted && savedAny) context.pop(true);
+      // The balances on screen are the old ones: read them again before
+      // anything here can be confirmed twice.
+      if (mounted && savedAny) await _reloadOrLeave();
     } on Exception catch (error) {
       if (!mounted) return;
       await _showMessage(
@@ -361,17 +477,19 @@ class _S15MultiConfirmScreenState extends ConsumerState<S15MultiConfirmScreen> {
   }
 
   Future<void> _openSingle(int index) async {
-    final group = widget.groups[index];
+    final group = _groups[index];
     await context.push(
       '/supervisor/assignment_detail',
-      extra: <String, dynamic>{
-        'assignment': group.first,
-        'group': group,
-        'openConfirmation': true,
-      },
+      extra: <String, dynamic>{'assignment': group.first, 'group': group},
     );
     // That form changes the balance this list was opened with.
-    if (mounted) context.pop(true);
+    if (!mounted) return;
+    setState(() => _isSubmitting = true);
+    try {
+      await _reloadOrLeave();
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
   }
 
   @override
@@ -412,218 +530,276 @@ class _S15MultiConfirmScreenState extends ConsumerState<S15MultiConfirmScreen> {
             ),
           ],
         ),
-      ),
-      body: GestureDetector(
-        onTap: () => FocusScope.of(context).unfocus(),
-        behavior: HitTestBehavior.opaque,
-        child: ListView(
-          padding: const EdgeInsets.all(CaslaSpacing.md),
-          children: [
-            _WorkerCard(
-              name: _workerName,
-              detail: [
-                workerCode,
-                workerDepartment,
-              ].where((value) => value.isNotEmpty).join(' · '),
-            ),
-            const SizedBox(height: CaslaSpacing.md),
-            Row(
-              children: [
-                const Expanded(
-                  child: ScanFieldLabel(
-                    text: 'Công đoạn cần xác nhận',
-                    required: true,
-                  ),
-                ),
-                if (openCount > 1)
-                  TextButton(
-                    onPressed: _isSubmitting ? null : _toggleAll,
-                    child: Text(
-                      _selected.length == openCount
-                          ? 'Bỏ chọn hết'
-                          : 'Chọn tất cả',
-                    ),
-                  ),
-              ],
-            ),
-            for (var index = 0; index < _totals.length; index++)
-              Padding(
-                padding: const EdgeInsets.only(bottom: CaslaSpacing.xs),
-                child: _OperationRow(
-                  name: _name(index),
-                  total: _totals[index],
-                  lots: widget.groups[index].length,
-                  selected: _selected.contains(index),
-                  expanded: _expanded.contains(index),
-                  enabled: _isOpen(index) && !_isSubmitting,
-                  department: _departments[index],
-                  onChanged: (value) => _toggle(index, value),
-                  onToggleDetails: () => setState(
-                    () => _expanded.contains(index)
-                        ? _expanded.remove(index)
-                        : _expanded.add(index),
-                  ),
-                ),
-              ),
-            const SizedBox(height: CaslaSpacing.sm),
-            Row(
-              children: [
-                const Expanded(
-                  child: ScanFieldLabel(
-                    text: 'Số lượng xác nhận',
-                    required: true,
-                  ),
-                ),
-                if (_selected.isNotEmpty)
-                  Text(
-                    '${_selected.length} công đoạn',
-                    style: const TextStyle(
-                      fontSize: CaslaType.caption,
-                      fontWeight: FontWeight.w700,
-                      color: CaslaColors.muted,
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: CaslaSpacing.xs),
-            if (limit == null)
-              const Text(
-                'Tích ít nhất một công đoạn để nhập số lượng.',
-                style: TextStyle(
-                  fontSize: CaslaType.caption,
-                  color: CaslaColors.muted,
-                ),
-              )
-            else
-              _LimitBanner(
-                remaining: limit.remaining,
-                uom: uom,
-                limitedBy: _selected.length > 1 ? limit.name : null,
-              ),
-            const SizedBox(height: CaslaSpacing.xs),
-            ValueListenableBuilder<TextEditingValue>(
-              valueListenable: _qtyController,
-              builder: (context, value, _) {
-                final entered = parseLocalizedQuantity(value.text);
-                final over =
-                    limit != null &&
-                    entered != null &&
-                    entered > limit.remaining;
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    TextField(
-                      controller: _qtyController,
-                      enabled: _selected.isNotEmpty && !_isSubmitting,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      textInputAction: TextInputAction.done,
-                      onSubmitted: (_) => FocusScope.of(context).unfocus(),
-                      onChanged: (_) {
-                        if (_quantityError != null) {
-                          setState(() => _quantityError = null);
-                        }
-                      },
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w800,
-                        fontSize: CaslaType.title,
-                        color: CaslaColors.primaryNavy,
-                      ),
-                      decoration: InputDecoration(
-                        enabledBorder: over ? overLimitBorder() : null,
-                        focusedBorder: over ? overLimitBorder(width: 2) : null,
-                        errorText:
-                            _quantityError ??
-                            wholeQuantityInputError(value.text, uom),
-                        suffixText: uom.isEmpty ? null : uom,
-                      ),
-                    ),
-                    if (over)
-                      OverLimitLine(
-                        _selected.length > 1
-                            ? 'Vượt số còn lại của ${limit.name} '
-                                  '(${formatQuantity(limit.remaining, uom: uom)} $uom).'
-                            : 'Vượt số còn lại '
-                                  '${formatQuantity(limit.remaining, uom: uom)} $uom.',
-                      ),
-                    if (limit != null)
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: TextButton(
-                          onPressed: _isSubmitting
-                              ? null
-                              : () => _qtyController.text = formatQuantity(
-                                  limit.remaining,
-                                  uom: uom,
-                                ),
-                          child: const Text('Điền tối đa'),
-                        ),
-                      ),
-                    if (_selected.length > 1 &&
-                        entered != null &&
-                        entered > 0 &&
-                        !over)
-                      Text(
-                        'Mỗi công đoạn xác nhận '
-                        '${formatQuantity(entered, uom: uom)} $uom.',
-                        style: const TextStyle(
-                          fontSize: CaslaType.caption,
-                          color: CaslaColors.muted,
-                        ),
-                      ),
-                  ],
-                );
-              },
-            ),
-            if (_selected.length == 1)
-              Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton.icon(
-                  onPressed: _isSubmitting
-                      ? null
-                      : () => _openSingle(_selected.first),
-                  icon: const Icon(Icons.tune_rounded, size: 18),
-                  label: const Text(
-                    'Nhập số phế hoặc thu hồi cho công đoạn này',
-                  ),
-                ),
-              )
-            else if (_selected.length > 1)
-              const Padding(
-                padding: EdgeInsets.only(top: CaslaSpacing.xs),
-                child: Text(
-                  'Số phế và thu hồi chỉ nhập được khi tích một công đoạn.',
-                  style: TextStyle(
-                    fontSize: CaslaType.caption,
-                    color: CaslaColors.muted,
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
-      bottomNavigationBar: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.all(CaslaSpacing.md),
-          child: ElevatedButton(
-            onPressed: _isSubmitting || _selected.isEmpty ? null : _submit,
-            child: _isSubmitting
-                ? const SizedBox(
-                    width: 24,
-                    height: 24,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2.5,
-                      color: CaslaColors.navy900,
-                    ),
-                  )
-                : Text(
-                    _selected.length > 1
-                        ? 'Xác nhận ${_selected.length} công đoạn'
-                        : 'Xác nhận sản lượng',
-                  ),
+        actions: [
+          IconButton(
+            key: const Key('multi-confirm-scan-worker'),
+            tooltip: 'Quét QR công nhân khác',
+            onPressed: _isSubmitting
+                ? null
+                : () => context.pop(S15MultiConfirmScreen.scanAnotherWorker),
+            icon: const Icon(Icons.qr_code_scanner),
           ),
+        ],
+      ),
+      // The submit button lives in the body, not in a bottomNavigationBar:
+      // the Scaffold keeps a bottom bar at the screen's edge, under the soft
+      // keyboard, so a supervisor typing a quantity had to dismiss the
+      // keyboard to reach it. The body shrinks above the keyboard instead.
+      body: LayoutBuilder(
+        builder: (context, box) => Column(
+          children: [
+            Expanded(
+              child: GestureDetector(
+                onTap: () => FocusScope.of(context).unfocus(),
+                behavior: HitTestBehavior.opaque,
+                child: ListView(
+                  padding: const EdgeInsets.all(CaslaSpacing.md),
+                  children: [
+                    _WorkerCard(
+                      name: _workerName,
+                      detail: [
+                        workerCode,
+                        workerDepartment,
+                      ].where((value) => value.isNotEmpty).join(' · '),
+                    ),
+                    const SizedBox(height: CaslaSpacing.md),
+                    Row(
+                      children: [
+                        const Expanded(
+                          child: ScanFieldLabel(
+                            text: 'Công đoạn cần xác nhận',
+                            required: true,
+                          ),
+                        ),
+                        if (openCount > 1)
+                          TextButton(
+                            onPressed: _isSubmitting ? null : _toggleAll,
+                            child: Text(
+                              _selected.length == openCount
+                                  ? 'Bỏ chọn hết'
+                                  : 'Chọn tất cả',
+                            ),
+                          ),
+                      ],
+                    ),
+                    for (var index = 0; index < _totals.length; index++)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: CaslaSpacing.xs),
+                        child: _OperationCard(
+                          name: _name(index),
+                          total: _totals[index],
+                          salesOrder:
+                              _salesOrders[_totals[index].orderId] ?? '',
+                          selected: _selected.contains(index),
+                          enabled: _isOpen(index) && !_isSubmitting,
+                          onChanged: (value) => _toggle(index, value),
+                        ),
+                      ),
+                    // Scrolls with the operations it speaks of.
+                    _RemainingToggle(
+                      value: _confirmRemaining,
+                      onChanged: _isSubmitting ? null : _setConfirmRemaining,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            // The quantity, its total and the two buttons stay put under
+            // the list, whatever its length. Never taller than the body: on
+            // a short screen with the keyboard up the list gives way and
+            // the panel scrolls, the field last to go.
+            ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: box.maxHeight),
+              child: Container(
+                key: const Key('multi-confirm-panel'),
+                decoration: const BoxDecoration(
+                  color: CaslaColors.surface,
+                  border: Border(top: BorderSide(color: CaslaColors.line)),
+                ),
+                child: SafeArea(
+                  top: false,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                      CaslaSpacing.md,
+                      CaslaSpacing.xs,
+                      CaslaSpacing.md,
+                      CaslaSpacing.md,
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(
+                          child: SingleChildScrollView(
+                            reverse: true,
+                            child: ValueListenableBuilder<TextEditingValue>(
+                              valueListenable: _qtyController,
+                              builder: (context, value, _) {
+                                final entered = _confirmRemaining
+                                    ? null
+                                    : parseLocalizedQuantity(value.text);
+                                final over =
+                                    limit != null &&
+                                    entered != null &&
+                                    entered > limit.remaining;
+                                final total = multiConfirmationTotal(
+                                  _quantitiesFor(
+                                    entered != null &&
+                                            entered.isFinite &&
+                                            entered > 0
+                                        ? entered
+                                        : 0,
+                                  ),
+                                );
+                                return Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        const Expanded(
+                                          child: ScanFieldLabel(
+                                            text: 'Số lượng xác nhận',
+                                            required: true,
+                                          ),
+                                        ),
+                                        // What this confirmation adds up to
+                                        // across the ticked operations.
+                                        Text(
+                                          'Tổng: ${formatQuantity(total, uom: uom)}',
+                                          key: const Key('multi-confirm-total'),
+                                          style: const TextStyle(
+                                            fontSize: CaslaType.body,
+                                            fontWeight: FontWeight.w800,
+                                            color: CaslaColors.primaryNavy,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: CaslaSpacing.xs),
+                                    TextField(
+                                      controller: _qtyController,
+                                      enabled:
+                                          _selected.isNotEmpty &&
+                                          !_isSubmitting &&
+                                          !_confirmRemaining,
+                                      keyboardType:
+                                          const TextInputType.numberWithOptions(
+                                            decimal: true,
+                                          ),
+                                      textInputAction: TextInputAction.done,
+                                      onSubmitted: (_) =>
+                                          FocusScope.of(context).unfocus(),
+                                      onChanged: (_) {
+                                        if (_quantityError != null) {
+                                          setState(() => _quantityError = null);
+                                        }
+                                      },
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                        fontSize: CaslaType.title,
+                                        color: CaslaColors.primaryNavy,
+                                      ),
+                                      decoration: InputDecoration(
+                                        enabledBorder: over
+                                            ? overLimitBorder()
+                                            : null,
+                                        focusedBorder: over
+                                            ? overLimitBorder(width: 2)
+                                            : null,
+                                        errorText:
+                                            _quantityError ??
+                                            wholeQuantityInputError(
+                                              value.text,
+                                              uom,
+                                            ),
+                                        suffixText: uom.isEmpty ? null : uom,
+                                      ),
+                                    ),
+                                    if (over)
+                                      OverLimitLine(
+                                        _selected.length > 1
+                                            ? 'Vượt số còn lại của ${limit.name} '
+                                                  '(${formatQuantity(limit.remaining, uom: uom)} $uom).'
+                                            : 'Vượt số còn lại '
+                                                  '${formatQuantity(limit.remaining, uom: uom)} $uom.',
+                                      ),
+                                    if (_selected.length > 1 &&
+                                        entered != null &&
+                                        entered > 0 &&
+                                        !over)
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                          top: CaslaSpacing.xxs,
+                                        ),
+                                        child: Text(
+                                          'Mỗi công đoạn xác nhận '
+                                          '${formatQuantity(entered, uom: uom)} $uom.',
+                                          style: const TextStyle(
+                                            fontSize: CaslaType.caption,
+                                            color: CaslaColors.muted,
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                );
+                              },
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: CaslaSpacing.sm),
+                        Row(
+                          children: [
+                            // The single-operation form (S08) holds the defect and
+                            // recall entries, so it opens for exactly one operation.
+                            Expanded(
+                              flex: 5,
+                              child: OutlinedButton(
+                                key: const Key('multi-confirm-detail'),
+                                style: OutlinedButton.styleFrom(
+                                  minimumSize: const Size(0, 52),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: CaslaSpacing.xs,
+                                  ),
+                                ),
+                                onPressed:
+                                    _isSubmitting || _selected.length != 1
+                                    ? null
+                                    : () => _openSingle(_selected.first),
+                                child: const FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  child: Text('Chi tiết công đoạn'),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: CaslaSpacing.xs),
+                            Expanded(
+                              flex: 6,
+                              child: ElevatedButton(
+                                key: const Key('multi-confirm-submit'),
+                                onPressed: _isSubmitting || _selected.isEmpty
+                                    ? null
+                                    : _submit,
+                                child: _isSubmitting
+                                    ? const SizedBox(
+                                        width: 24,
+                                        height: 24,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2.5,
+                                          color: CaslaColors.navy900,
+                                        ),
+                                      )
+                                    : const Text('Xác nhận'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -634,6 +810,9 @@ class _S15MultiConfirmScreenState extends ConsumerState<S15MultiConfirmScreen> {
 class _ConfirmOutcome {
   final String name;
 
+  /// What was asked for on this operation.
+  final double quantity;
+
   /// Quantity written before a refusal, across the group's allocations.
   final double saved;
 
@@ -643,23 +822,39 @@ class _ConfirmOutcome {
 
   const _ConfirmOutcome({
     required this.name,
+    required this.quantity,
     required this.saved,
     this.receipt,
     this.refusal,
   });
 
   bool get ok => refusal == null && receipt != null;
+
+  /// SAP accepted every part: the only outcome that may be called confirmed.
+  bool get sent => ok && receipt!.state == MutationDeliveryState.synced;
+
+  /// Saved on the device but not accepted by SAP yet (queued, or waiting for
+  /// the worker's verification). The quantity shows as confirmed on the
+  /// device's own balances while SAP still knows nothing about it, so the
+  /// dialog must not present it as confirmed.
+  bool get held => ok && !sent;
 }
 
 class _ConfirmResultDialog extends StatelessWidget {
   final List<_ConfirmOutcome> outcomes;
+
+  /// The typed figure, confirmed on every operation.
   final double quantity;
+
+  /// Each operation confirmed its own balance instead of [quantity].
+  final bool confirmRemaining;
   final String uom;
   final String workerName;
 
   const _ConfirmResultDialog({
     required this.outcomes,
     required this.quantity,
+    required this.confirmRemaining,
     required this.uom,
     required this.workerName,
   });
@@ -673,33 +868,50 @@ class _ConfirmResultDialog extends StatelessWidget {
                 'lại chưa ghi: $reason'
           : 'Chưa xác nhận: $reason';
     }
+    final detail = outcome.receipt?.message;
+    final why = detail == null || detail.trim().isEmpty ? '' : ' $detail';
     return switch (outcome.receipt?.state) {
       MutationDeliveryState.synced => 'Đã gửi SAP',
-      MutationDeliveryState.queued => 'Đã lưu, chờ đồng bộ',
+      MutationDeliveryState.queued =>
+        'Chưa gửi SAP. Đã lưu trên máy, chờ đồng bộ.$why',
       MutationDeliveryState.needsVerification =>
-        'Đã lưu, cần xác minh ở mục Đồng bộ',
-      _ => 'Đã lưu, xem mục Đồng bộ',
+        'Chưa gửi SAP. Đã lưu trên máy, cần xác minh ở mục Đồng bộ.$why',
+      _ => 'Chưa gửi SAP. Đã lưu trên máy, xem mục Đồng bộ.$why',
     };
+  }
+
+  /// "Đã xác nhận" counts only what SAP accepted. Work that is merely saved
+  /// on the device is named separately so a dropped post is never read as a
+  /// confirmation.
+  String _title() {
+    final total = outcomes.length;
+    final sent = outcomes.where((outcome) => outcome.sent).length;
+    final held = outcomes.where((outcome) => outcome.held).length;
+    if (sent == total) return 'Đã xác nhận $sent công đoạn';
+    if (sent == 0 && held == 0) return 'Chưa xác nhận được công đoạn nào';
+    if (sent == 0) {
+      return 'Chưa gửi được SAP, $held công đoạn mới lưu trên máy';
+    }
+    final heldNote = held == 0 ? '' : ', $held chờ gửi SAP';
+    return 'Đã xác nhận $sent/$total công đoạn$heldNote';
   }
 
   @override
   Widget build(BuildContext context) {
-    final done = outcomes.where((outcome) => outcome.ok).length;
-    final title = done == outcomes.length
-        ? 'Đã xác nhận $done công đoạn'
-        : done == 0
-        ? 'Chưa xác nhận được công đoạn nào'
-        : 'Đã xác nhận $done/${outcomes.length} công đoạn';
     return AlertDialog(
-      title: Text(title),
+      titlePadding: CaslaDialog.titlePadding,
+      contentPadding: CaslaDialog.contentPadding,
+      title: CaslaDialogHeader(child: Text(_title())),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Mỗi công đoạn ${formatQuantity(quantity, uom: uom)} $uom cho '
-              '$workerName.',
+              confirmRemaining
+                  ? 'Hết số còn lại của từng công đoạn cho $workerName.'
+                  : 'Mỗi công đoạn ${formatQuantity(quantity, uom: uom)} $uom '
+                        'cho $workerName.',
               style: const TextStyle(color: CaslaColors.muted),
             ),
             const SizedBox(height: CaslaSpacing.sm),
@@ -710,12 +922,16 @@ class _ConfirmResultDialog extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Icon(
-                      outcome.ok
+                      outcome.sent
                           ? Icons.check_circle_rounded
+                          : outcome.held
+                          ? Icons.schedule_rounded
                           : Icons.cancel_rounded,
                       size: 20,
-                      color: outcome.ok
+                      color: outcome.sent
                           ? CaslaColors.success
+                          : outcome.held
+                          ? CaslaColors.pending
                           : CaslaColors.danger,
                     ),
                     const SizedBox(width: CaslaSpacing.xs),
@@ -724,7 +940,12 @@ class _ConfirmResultDialog extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            outcome.name,
+                            // The figures differ per operation only when
+                            // each one confirmed its own balance.
+                            confirmRemaining
+                                ? '${outcome.name} · '
+                                      '${formatQuantity(outcome.quantity, uom: uom)} $uom'
+                                : outcome.name,
                             style: const TextStyle(
                               fontWeight: FontWeight.w700,
                               color: CaslaColors.primaryNavy,
@@ -734,8 +955,10 @@ class _ConfirmResultDialog extends StatelessWidget {
                             _status(outcome),
                             style: TextStyle(
                               fontSize: CaslaType.caption,
-                              color: outcome.ok
+                              color: outcome.sent
                                   ? CaslaColors.muted
+                                  : outcome.held
+                                  ? CaslaColors.pending
                                   : CaslaColors.danger,
                             ),
                           ),
@@ -750,6 +973,7 @@ class _ConfirmResultDialog extends StatelessWidget {
       ),
       actions: [
         TextButton(
+          style: CaslaDialog.actionStyle,
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Đã hiểu'),
         ),
@@ -807,35 +1031,41 @@ class _WorkerCard extends StatelessWidget {
   }
 }
 
-/// One operation: a tick box and its name. The arrow opens the figures.
-class _OperationRow extends StatelessWidget {
+/// One operation: a tick box with its sales order and product, then its
+/// name, where it comes from, and what was given, confirmed and is left.
+/// Tapping anywhere ticks it.
+class _OperationCard extends StatelessWidget {
   final String name;
   final Assignment total;
-  final int lots;
-  final bool selected;
-  final bool expanded;
-  final bool enabled;
-  final String? department;
-  final ValueChanged<bool> onChanged;
-  final VoidCallback onToggleDetails;
 
-  const _OperationRow({
+  /// "SO/item" of the order, empty when it carries none.
+  final String salesOrder;
+  final bool selected;
+  final bool enabled;
+  final ValueChanged<bool> onChanged;
+
+  const _OperationCard({
     required this.name,
     required this.total,
-    required this.lots,
+    required this.salesOrder,
     required this.selected,
-    required this.expanded,
     required this.enabled,
-    required this.department,
     required this.onChanged,
-    required this.onToggleDetails,
   });
 
   @override
   Widget build(BuildContext context) {
-    final uom = total.uom;
-    String quantity(double value) => '${formatQuantity(value, uom: uom)} $uom';
-    final done = total.remaining <= 0;
+    String quantity(double value) => formatQuantity(value, uom: total.uom);
+    String orDash(String value) => value.trim().isEmpty ? '—' : value.trim();
+    final done = total.groupRemaining <= 0;
+    final product = total.productName.trim().isNotEmpty
+        ? total.productName
+        : total.productCode;
+    final headStyle = TextStyle(
+      fontSize: CaslaType.body,
+      fontWeight: FontWeight.w800,
+      color: done ? CaslaColors.muted : CaslaColors.primaryNavy,
+    );
     return Material(
       color: selected ? CaslaColors.navy100 : CaslaColors.surface,
       shape: RoundedRectangleBorder(
@@ -846,121 +1076,182 @@ class _OperationRow extends StatelessWidget {
         ),
       ),
       clipBehavior: Clip.antiAlias,
-      child: Column(
-        children: [
-          Row(
+      child: InkWell(
+        onTap: enabled ? () => onChanged(!selected) : null,
+        child: Padding(
+          padding: const EdgeInsets.all(CaslaSpacing.sm),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: InkWell(
-                  onTap: enabled ? () => onChanged(!selected) : null,
-                  child: Row(
-                    children: [
-                      Checkbox(
-                        value: selected,
-                        onChanged: enabled
-                            ? (value) => onChanged(value ?? false)
-                            : null,
-                        activeColor: CaslaColors.primaryNavy,
-                      ),
-                      Expanded(
-                        child: Text(
-                          name,
-                          style: TextStyle(
-                            fontSize: CaslaType.body,
-                            fontWeight: FontWeight.w700,
-                            color: done
-                                ? CaslaColors.muted
-                                : CaslaColors.primaryNavy,
-                          ),
-                        ),
-                      ),
-                      if (done)
-                        const Padding(
-                          padding: EdgeInsets.only(right: CaslaSpacing.xs),
-                          child: Text(
-                            'Đã xong',
-                            style: TextStyle(
-                              fontSize: CaslaType.caption,
-                              fontWeight: FontWeight.w700,
-                              color: CaslaColors.muted,
-                            ),
-                          ),
-                        ),
-                    ],
+              Row(
+                children: [
+                  SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: Checkbox(
+                      value: selected,
+                      onChanged: enabled
+                          ? (value) => onChanged(value ?? false)
+                          : null,
+                      activeColor: CaslaColors.primaryNavy,
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
                   ),
-                ),
+                  const SizedBox(width: CaslaSpacing.xs),
+                  // The sales order is short and never cut; the product
+                  // takes what is left of the line.
+                  Text(orDash(salesOrder), style: headStyle),
+                  const SizedBox(width: CaslaSpacing.sm),
+                  Expanded(
+                    child: Text(
+                      orDash(product),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.right,
+                      style: headStyle,
+                    ),
+                  ),
+                ],
               ),
-              IconButton(
-                tooltip: expanded ? 'Thu gọn $name' : 'Chi tiết $name',
-                onPressed: onToggleDetails,
-                icon: Icon(
-                  expanded
-                      ? Icons.expand_less_rounded
-                      : Icons.expand_more_rounded,
+              const SizedBox(height: CaslaSpacing.xs),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Text(
+                      name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 13,
+                        height: 1.3,
+                        fontWeight: FontWeight.w600,
+                        color: done ? CaslaColors.muted : CaslaColors.navy900,
+                      ),
+                    ),
+                  ),
+                  if (done)
+                    const Padding(
+                      padding: EdgeInsets.only(left: CaslaSpacing.xs),
+                      child: Text(
+                        'Đã xong',
+                        style: TextStyle(
+                          fontSize: CaslaType.caption,
+                          fontWeight: FontWeight.w700,
+                          color: CaslaColors.muted,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 2),
+              _FactRow(
+                left: 'LSX: ${orDash(total.productionOrder)}',
+                right: 'Công đoạn: ${orDash(total.operation)}',
+              ),
+              const SizedBox(height: CaslaSpacing.xs),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: CaslaSpacing.sm,
+                  vertical: CaslaSpacing.xs,
                 ),
-                color: CaslaColors.muted,
+                decoration: BoxDecoration(
+                  color: selected ? CaslaColors.surface : CaslaColors.muted100,
+                  borderRadius: BorderRadius.circular(CaslaRadius.sm),
+                ),
+                child: Row(
+                  children: [
+                    _Figure(
+                      label: 'Giao hiệu lực',
+                      value: quantity(total.effectiveAssigned),
+                    ),
+                    _Figure(
+                      label: 'Đã xác nhận',
+                      // Good output and scrap: both came off the balance.
+                      value: quantity(
+                        ProductionMath.confirmedQuantity(
+                          total.completedQuantity,
+                          total.defectQuantity,
+                        ),
+                      ),
+                    ),
+                    _Figure(
+                      label: 'Còn lại',
+                      value: quantity(total.groupRemaining),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
-          if (expanded)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                48,
-                0,
-                CaslaSpacing.sm,
-                CaslaSpacing.sm,
-              ),
-              child: Column(
-                children: [
-                  _DetailLine('Lệnh SX', total.productionOrder),
-                  _DetailLine('Công đoạn', total.operation),
-                  if ((department ?? '').isNotEmpty)
-                    _DetailLine('Bộ phận', department!),
-                  _DetailLine(
-                    'Đã giao',
-                    '${quantity(total.assignedQuantity)}'
-                        '${lots > 1 ? ' · $lots lần giao' : ''}',
-                  ),
-                  _DetailLine('Đã xác nhận', quantity(total.completedQuantity)),
-                  if (total.defectQuantity > 0)
-                    _DetailLine('Số lượng phế', quantity(total.defectQuantity)),
-                  _DetailLine('Còn lại', quantity(total.remaining)),
-                ],
-              ),
-            ),
-        ],
+        ),
       ),
     );
   }
 }
 
-class _DetailLine extends StatelessWidget {
-  final String label;
-  final String value;
+/// Two facts on one line: one at each end.
+class _FactRow extends StatelessWidget {
+  final String left;
+  final String right;
 
-  const _DetailLine(this.label, this.value);
+  const _FactRow({required this.left, required this.right});
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
+    const style = TextStyle(
+      fontSize: CaslaType.caption,
+      height: 1.3,
+      color: CaslaColors.muted,
+    );
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Text(
+            left,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: style,
+          ),
+        ),
+        const SizedBox(width: CaslaSpacing.xs),
+        Text(right, maxLines: 1, style: style),
+      ],
+    );
+  }
+}
+
+/// One of the three figures of an operation, without its unit: the unit is
+/// on the quantity field and on the total below.
+class _Figure extends StatelessWidget {
+  final String label;
+  final String value;
+
+  const _Figure({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(
-            width: 104,
-            child: Text(
-              label,
-              style: const TextStyle(
-                fontSize: CaslaType.caption,
-                fontWeight: FontWeight.w600,
-                color: CaslaColors.muted,
-              ),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: CaslaType.caption,
+              color: CaslaColors.muted,
             ),
           ),
-          Expanded(
+          const SizedBox(height: 2),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
             child: Text(
               value,
+              maxLines: 1,
               style: const TextStyle(
                 fontSize: CaslaType.body,
                 fontWeight: FontWeight.w700,
@@ -974,64 +1265,51 @@ class _DetailLine extends StatelessWidget {
   }
 }
 
-class _LimitBanner extends StatelessWidget {
-  final double remaining;
-  final String uom;
+/// "Confirm what each ticked operation has left": the quantity field is
+/// closed while it is ticked.
+class _RemainingToggle extends StatelessWidget {
+  final bool value;
 
-  /// The operation that sets the ceiling, when several are ticked.
-  final String? limitedBy;
+  /// Null while a confirmation is being sent.
+  final ValueChanged<bool>? onChanged;
 
-  const _LimitBanner({
-    required this.remaining,
-    required this.uom,
-    required this.limitedBy,
-  });
+  const _RemainingToggle({required this.value, required this.onChanged});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(
-        horizontal: CaslaSpacing.sm,
-        vertical: CaslaSpacing.xs,
-      ),
-      decoration: BoxDecoration(
-        color: CaslaColors.pendingBg,
-        borderRadius: BorderRadius.circular(CaslaRadius.sm),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'Xác nhận tối đa',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    color: CaslaColors.pending,
-                  ),
-                ),
-              ),
-              Text(
-                '${formatQuantity(remaining, uom: uom)} $uom',
-                style: const TextStyle(
-                  fontWeight: FontWeight.w800,
-                  color: CaslaColors.pending,
-                ),
-              ),
-            ],
-          ),
-          if (limitedBy != null)
-            Text(
-              'Theo công đoạn còn ít nhất: $limitedBy',
-              style: const TextStyle(
-                fontSize: CaslaType.caption,
-                fontWeight: FontWeight.w600,
-                color: CaslaColors.pending,
+    final onChanged = this.onChanged;
+    return InkWell(
+      key: const Key('multi-confirm-remaining'),
+      onTap: onChanged == null ? null : () => onChanged(!value),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: CaslaSpacing.xs),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 24,
+              height: 24,
+              child: Checkbox(
+                value: value,
+                onChanged: onChanged == null
+                    ? null
+                    : (checked) => onChanged(checked ?? false),
+                activeColor: CaslaColors.primaryNavy,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
             ),
-        ],
+            const SizedBox(width: CaslaSpacing.xs),
+            const Expanded(
+              child: Text(
+                'Xác nhận hoàn thành số lượng còn lại',
+                style: TextStyle(
+                  fontSize: CaslaType.body,
+                  fontWeight: FontWeight.w600,
+                  color: CaslaColors.primaryNavy,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

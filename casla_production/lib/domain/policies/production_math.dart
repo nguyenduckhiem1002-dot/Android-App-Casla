@@ -49,6 +49,13 @@ class ProductionMath {
     return (assigned - recalled).clamp(0.0, double.infinity);
   }
 
+  /// Đã xác nhận = Hoàn thành + Phế: everything a confirmation took off the
+  /// balance, good or not.
+  static double confirmedQuantity(double completed, double defect) {
+    if (!completed.isFinite || !defect.isFinite) return 0.0;
+    return toSapScale(completed + defect).clamp(0.0, double.infinity);
+  }
+
   /// Còn lại = Giao hiệu lực − Hoàn thành lũy kế
   static double calculateRemaining(double effectiveAssigned, double completed) {
     if (!effectiveAssigned.isFinite || !completed.isFinite) return 0.0;
@@ -72,6 +79,17 @@ class ProductionMath {
   }
 
   /// Có thể thu hồi = Giao ban đầu − Hoàn thành − Đã thu hồi
+  /// What may be recalled on an allocation when the form worked from the
+  /// seat's (or group's) balance: the larger of the allocation's own ceiling
+  /// and that pile figure. SAP settles recalls against the worker's summed
+  /// balance on the operation (decided 2026-10-24), so an allocation whose
+  /// own figure is already spent may still recall what the pile holds.
+  static double recallCeiling(double ownMaxRecall, {double? seatCeiling}) {
+    if (seatCeiling == null || !seatCeiling.isFinite) return ownMaxRecall;
+    final pile = seatCeiling < 0 ? 0.0 : seatCeiling;
+    return pile > ownMaxRecall ? pile : ownMaxRecall;
+  }
+
   static double calculateMaxRecall(
     double assigned,
     double completed,

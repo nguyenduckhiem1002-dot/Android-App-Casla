@@ -38,9 +38,6 @@ const assignment = Assignment(
 
 class _Database implements CaslaDatabase {
   @override
-  Stream<List<Map<String, dynamic>>> watchRecordsByAssignment(String id) =>
-      Stream.value([]);
-  @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
@@ -58,6 +55,7 @@ class _Production implements ProductionRepositoryImpl {
   final result = Completer<MutationReceipt>();
   double? expected;
   double? quantitySent;
+  double? defectSent;
   bool autoSync = false;
   final sent = <String>[];
   @override
@@ -74,6 +72,7 @@ class _Production implements ProductionRepositoryImpl {
   }) {
     expected = expectedRemaining;
     quantitySent = quantity;
+    defectSent = defectQuantity;
     sent.add('$assignmentId:$quantity:$expectedRemaining');
     if (autoSync) {
       return Future.value(
@@ -88,6 +87,16 @@ class _Production implements ProductionRepositoryImpl {
 }
 
 class _State extends ChangeNotifier implements AppState {
+  _State({
+    this.permissions = const {
+      Permission.confirmProduction,
+      Permission.recallAssignment,
+    },
+  });
+
+  /// The SAP functions of the signed-in supervisor (PP_CONFIRM / PP_RECALL).
+  final Set<Permission> permissions;
+
   @override
   final db = _Database();
   @override
@@ -97,7 +106,14 @@ class _State extends ChangeNotifier implements AppState {
   @override
   final _Recall recallRepo = _Recall();
   @override
-  UserSession? get currentSession => null;
+  UserSession? get currentSession => UserSession(
+    id: 'supervisor-session',
+    maNv: '',
+    fullName: 'Supervisor',
+    teamName: '',
+    role: UserRole.supervisor,
+    permissions: permissions,
+  );
   @override
   UserWorkContext? get activeWorkContext => null;
   @override
@@ -116,6 +132,9 @@ class _State extends ChangeNotifier implements AppState {
 
 class _Recall implements RecallRepositoryImpl {
   int calls = 0;
+  double? quantitySent;
+  String? passwordSent;
+  bool? withoutPasswordSent;
   @override
   Future<MutationReceipt> recallAssignment({
     required String assignmentId,
@@ -126,8 +145,13 @@ class _Recall implements RecallRepositoryImpl {
     required String shiftId,
     required String createdBy,
     String? workerPassword,
+    double? seatCeiling,
+    bool withoutWorkerPassword = false,
   }) async {
     calls++;
+    quantitySent = quantity;
+    passwordSent = workerPassword;
+    withoutPasswordSent = withoutWorkerPassword;
     return const MutationReceipt(
       id: 'recall',
       state: MutationDeliveryState.synced,
@@ -166,7 +190,7 @@ Assignment _lot(String id, double assigned, double completed, int at) =>
     );
 
 void main() {
-  testWidgets('grouped lots confirm as one total, split oldest first', (
+  testWidgets('grouped lots confirm as one total in one transaction', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(420, 1800);
@@ -184,7 +208,6 @@ void main() {
         child: MaterialApp(
           home: S08AssignmentDetailScreen(
             assignment: older,
-            openConfirmation: true,
             confirmationGroup: [newer, older],
           ),
         ),
@@ -200,7 +223,8 @@ void main() {
     await tester.enterText(find.byType(TextField).last, 'password');
     await tester.tap(find.text('Xác minh & gửi SAP'));
     await tester.pumpAndSettle();
-    expect(state.productionRepo.sent, ['older:85.0:null', 'newer:35.0:null']);
+    // One transaction with the entered total, on the oldest open lot.
+    expect(state.productionRepo.sent, ['older:120.0:null']);
     expect(find.text('Xác nhận thành công'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
     await tester.pumpAndSettle();
@@ -223,7 +247,6 @@ void main() {
         child: MaterialApp(
           home: S08AssignmentDetailScreen(
             assignment: older,
-            openConfirmation: true,
             confirmationGroup: [newer, older],
           ),
         ),
@@ -244,12 +267,78 @@ void main() {
     await tester.tap(find.text('Xác minh & gửi SAP'));
     await tester.pumpAndSettle();
 
-    // The older lot closes at its 85; the surplus lands on the newest one.
-    expect(state.productionRepo.sent, ['older:85.0:null', 'newer:415.0:null']);
+    // Sent exactly as entered, as one transaction on the oldest open lot.
+    expect(state.productionRepo.sent, ['older:500.0:null']);
     expect(find.text('Xác nhận thành công'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
     await tester.pumpAndSettle();
   });
+
+  testWidgets(
+    'entering what is left lets defects exceed it with a warning, like '
+    'entering what was finished',
+    (tester) async {
+      tester.view.physicalSize = const Size(420, 1800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final state = _State();
+      state.productionRepo.autoSync = true;
+      final older = _lot('older', 100, 15, 1);
+      final newer = _lot('newer', 333, 0, 2);
+      state.assignmentRepo.byId.addAll({'older': older, 'newer': newer});
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [appStateProvider.overrideWith((ref) => state)],
+          child: MaterialApp(
+            home: S08AssignmentDetailScreen(
+              assignment: older,
+              confirmationGroup: [newer, older],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Nhập số còn lại'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).first, '400');
+      await tester.pump();
+      await tester.ensureVisible(find.text('Có số lượng phế'));
+      await tester.tap(find.text('Có số lượng phế'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('defect-quantity')),
+        '50',
+      );
+      await tester.pump();
+
+      // 400 left plus 50 defective is more than the 418 on the seat: a
+      // warning under the field, not an error, and the form still sends.
+      expect(find.textContaining('vượt quá'), findsNothing);
+      expect(
+        find.text(
+          'Tổng số phế và số còn lại vượt 418 CHC; số hoàn thành tính là '
+          '0 CHC.',
+        ),
+        findsOneWidget,
+      );
+
+      await tester.ensureVisible(find.text('Xác nhận'));
+      await tester.tap(find.text('Xác nhận'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).last, 'password');
+      await tester.tap(find.text('Xác minh & gửi SAP'));
+      await tester.pumpAndSettle();
+
+      // Good 0, defective 50, guarded by the lot's own balance of 85.
+      expect(state.productionRepo.sent, ['older:0.0:85.0']);
+      expect(state.productionRepo.defectSent, 50);
+      expect(find.text('Xác nhận thành công'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    },
+  );
 
   testWidgets('direct form uses current balance instead of route snapshot', (
     tester,
@@ -268,10 +357,7 @@ void main() {
       ProviderScope(
         overrides: [appStateProvider.overrideWith((ref) => state)],
         child: const MaterialApp(
-          home: S08AssignmentDetailScreen(
-            assignment: assignment,
-            openConfirmation: true,
-          ),
+          home: S08AssignmentDetailScreen(assignment: assignment),
         ),
       ),
     );
@@ -279,6 +365,48 @@ void main() {
     expect(find.text('100 CHC'), findsWidgets);
     expect(find.text('979 CHC'), findsNothing);
     await tester.pumpWidget(const SizedBox());
+  });
+  testWidgets('a lot spent on paper keeps the seat balance it opened with', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(420, 1800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final state = _State();
+    state.productionRepo.autoSync = true;
+    // 1.000 given and confirmed in full, yet SAP still holds 500 on the seat
+    // (an over-confirmation cleared earlier, a later allocation reopened it).
+    // The row read back from the database carries no seat figure.
+    final spent = assignment.copyWith(
+      completedQuantity: 1000,
+      recalledQuantity: 0,
+    );
+    state.assignmentRepo.current = spent;
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [appStateProvider.overrideWith((ref) => state)],
+        child: MaterialApp(
+          home: S08AssignmentDetailScreen(
+            assignment: spent.copyWith(seatRemaining: 500),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('500 CHC'), findsWidgets);
+
+    await tester.enterText(find.byType(TextField).first, '300');
+    await tester.pump();
+    await tester.tap(find.text('Xác nhận'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).last, 'password');
+    await tester.tap(find.text('Xác minh & gửi SAP'));
+    await tester.pumpAndSettle();
+    expect(state.productionRepo.sent, ['assignment:300.0:null']);
+    expect(find.text('Xác nhận thành công'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
   });
   testWidgets(
     'SAP rejection stops combined recall and keeps entered quantities',
@@ -292,10 +420,7 @@ void main() {
         ProviderScope(
           overrides: [appStateProvider.overrideWith((ref) => state)],
           child: const MaterialApp(
-            home: S08AssignmentDetailScreen(
-              assignment: assignment,
-              openConfirmation: true,
-            ),
+            home: S08AssignmentDetailScreen(assignment: assignment),
           ),
         ),
       );
@@ -329,65 +454,91 @@ void main() {
     },
   );
   for (final systemBack in [false, true]) {
-    testWidgets(
-      'direct confirmation returns once without detail page ($systemBack)',
-      (tester) async {
-        tester.view.physicalSize = const Size(420, 1500);
-        tester.view.devicePixelRatio = 1;
-        addTearDown(tester.view.resetPhysicalSize);
-        addTearDown(tester.view.resetDevicePixelRatio);
-        final router = GoRouter(
-          routes: [
-            GoRoute(
-              path: '/',
-              builder: (context, state) => Scaffold(
-                body: TextButton(
-                  onPressed: () => context.push('/confirm'),
-                  child: const Text('Chọn nhân viên'),
-                ),
+    testWidgets('leaving the form returns to its opener once ($systemBack)', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(420, 1500);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final router = GoRouter(
+        routes: [
+          GoRoute(
+            path: '/',
+            builder: (context, state) => Scaffold(
+              body: TextButton(
+                onPressed: () => context.push('/confirm'),
+                child: const Text('Chọn nhân viên'),
               ),
             ),
-            GoRoute(
-              path: '/confirm',
-              builder: (context, state) => const S08AssignmentDetailScreen(
-                assignment: assignment,
-                openConfirmation: true,
-              ),
-            ),
-          ],
-        );
-        addTearDown(router.dispose);
-        await tester.pumpWidget(
-          ProviderScope(
-            overrides: [appStateProvider.overrideWith((ref) => _State())],
-            child: MaterialApp.router(routerConfig: router),
           ),
-        );
-        await tester.tap(find.text('Chọn nhân viên'));
-        await tester.pumpAndSettle();
-        expect(find.text('Nhập số hoàn thành'), findsOneWidget);
-        expect(find.text('Nhập ít nhất một số lượng'), findsNothing);
-        expect(find.text('Lịch sử giao dịch'), findsNothing);
-        expect(find.byType(BottomSheet), findsNothing);
-        if (systemBack) {
-          await tester.binding.handlePopRoute();
-        } else {
-          await tester.tap(find.byTooltip('Quay lại'));
-        }
-        await tester.pumpAndSettle();
-        expect(find.text('Chọn nhân viên'), findsOneWidget);
-        // Reopening quickly must not be closed by a delayed pop from the last form.
-        await tester.tap(find.text('Chọn nhân viên'));
-        await tester.pumpAndSettle();
-        await tester.pump(const Duration(seconds: 1));
-        expect(find.text('Nhập số hoàn thành'), findsOneWidget);
-        expect(find.text('Lịch sử giao dịch'), findsNothing);
-        await tester.pumpWidget(const SizedBox());
-        await tester.pumpAndSettle();
-        expect(tester.takeException(), isNull);
-      },
-    );
+          GoRoute(
+            path: '/confirm',
+            builder: (context, state) =>
+                const S08AssignmentDetailScreen(assignment: assignment),
+          ),
+        ],
+      );
+      addTearDown(router.dispose);
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [appStateProvider.overrideWith((ref) => _State())],
+          child: MaterialApp.router(routerConfig: router),
+        ),
+      );
+      await tester.tap(find.text('Chọn nhân viên'));
+      await tester.pumpAndSettle();
+      expect(find.text('Nhập số hoàn thành'), findsOneWidget);
+      expect(find.text('Nhập ít nhất một số lượng'), findsNothing);
+      if (systemBack) {
+        await tester.binding.handlePopRoute();
+      } else {
+        await tester.tap(find.byTooltip('Quay lại'));
+      }
+      await tester.pumpAndSettle();
+      expect(find.text('Chọn nhân viên'), findsOneWidget);
+      // Reopening quickly must not be closed by a delayed pop from the last form.
+      await tester.tap(find.text('Chọn nhân viên'));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.text('Nhập số hoàn thành'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
   }
+  testWidgets('what is left after confirming takes the recall off too', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(420, 1500);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [appStateProvider.overrideWith((ref) => _State())],
+        child: const MaterialApp(
+          home: S08AssignmentDetailScreen(assignment: assignment),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // 979 left, 100 finished: 879 stay with the worker.
+    await tester.enterText(find.byType(TextField).first, '100');
+    await tester.pump();
+    expect(find.text('879 CHC'), findsOneWidget);
+    await tester.tap(find.text('Có thu hồi'));
+    await tester.pumpAndSettle();
+    // The recall is prefilled with everything left, so nothing stays.
+    expect(find.text('879 CHC'), findsOneWidget);
+    await tester.enterText(find.byKey(const ValueKey('recall-quantity')), '20');
+    await tester.pump();
+    expect(find.text('859 CHC'), findsOneWidget);
+    expect(find.text('879 CHC'), findsNothing);
+    // The bar still shows what was left to recall from.
+    expect(find.text('còn 879 CHC'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
   for (final fails in [false, true]) {
     testWidgets('keeps quantity form during submit and result (fails=$fails)', (
       tester,
@@ -397,16 +548,33 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       final state = _State();
+      // The form is a pushed page: a saved confirmation pops it.
+      final router = GoRouter(
+        routes: [
+          GoRoute(
+            path: '/',
+            builder: (context, state) => Scaffold(
+              body: TextButton(
+                onPressed: () => context.push('/confirm'),
+                child: const Text('Chọn nhân viên'),
+              ),
+            ),
+          ),
+          GoRoute(
+            path: '/confirm',
+            builder: (context, state) =>
+                const S08AssignmentDetailScreen(assignment: assignment),
+          ),
+        ],
+      );
+      addTearDown(router.dispose);
       await tester.pumpWidget(
         ProviderScope(
           overrides: [appStateProvider.overrideWith((ref) => state)],
-          child: const MaterialApp(
-            home: S08AssignmentDetailScreen(assignment: assignment),
-          ),
+          child: MaterialApp.router(routerConfig: router),
         ),
       );
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Xác nhận hoàn thành'));
+      await tester.tap(find.text('Chọn nhân viên'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Nhập số còn lại'));
       await tester.pumpAndSettle();
@@ -473,4 +641,273 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+
+  group('form entries follow the SAP function of each operation', () {
+    Future<void> pumpForm(
+      WidgetTester tester,
+      Set<Permission> permissions,
+    ) async {
+      tester.view.physicalSize = const Size(420, 1500);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            appStateProvider.overrideWith(
+              (ref) => _State(permissions: permissions),
+            ),
+          ],
+          child: const MaterialApp(
+            home: S08AssignmentDetailScreen(assignment: assignment),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('PP_CONFIRM alone: confirm without any recall control', (
+      tester,
+    ) async {
+      await pumpForm(tester, {Permission.confirmProduction});
+
+      expect(find.text('Nhập số còn lại'), findsOneWidget);
+      expect(find.text('Có thu hồi'), findsNothing);
+      expect(find.byKey(const ValueKey('recall-quantity')), findsNothing);
+    });
+
+    testWidgets('PP_RECALL alone: the form holds only the recall entry', (
+      tester,
+    ) async {
+      await pumpForm(tester, {Permission.recallAssignment});
+
+      expect(find.text('Nhập số còn lại'), findsNothing);
+      expect(find.text('Nhập số hoàn thành'), findsNothing);
+      expect(find.text('Có số lượng phế'), findsNothing);
+      expect(find.text('Có thu hồi'), findsOneWidget);
+      final recallField = find.byKey(const ValueKey('recall-quantity'));
+      expect(recallField, findsOneWidget);
+      // Ticked and filled with the balance: the form is ready to submit.
+      expect(
+        tester.widget<TextField>(recallField).controller!.text,
+        isNotEmpty,
+      );
+      expect(find.text('Còn lại sau thu hồi'), findsOneWidget);
+      expect(find.text('Ghi nhận hoàn thành'), findsNothing);
+    });
+
+    testWidgets('PP_INITIAL_ASSIGN alone: no entry form at all', (
+      tester,
+    ) async {
+      await pumpForm(tester, {Permission.assignQuantity});
+
+      expect(find.text('Không có quyền xác nhận'), findsOneWidget);
+      expect(find.text('Nhập số hoàn thành'), findsNothing);
+      expect(find.text('Có thu hồi'), findsNothing);
+      expect(find.byType(TextField), findsNothing);
+    });
+
+    group('PP_RECALL_NOPASS: thu hồi không cần mật khẩu', () {
+      const noPasswordBox = ValueKey('recall-without-password');
+      const recallField = ValueKey('recall-quantity');
+      const entryLock = ValueKey('confirm-entry-lock');
+      const withAddOn = {
+        Permission.confirmProduction,
+        Permission.recallAssignment,
+        Permission.recallWithoutPassword,
+      };
+
+      Future<_State> pumpConfirmation(
+        WidgetTester tester,
+        Set<Permission> permissions,
+      ) async {
+        tester.view.physicalSize = const Size(420, 1800);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final state = _State(permissions: permissions);
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [appStateProvider.overrideWith((ref) => state)],
+            child: const MaterialApp(
+              home: S08AssignmentDetailScreen(assignment: assignment),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        return state;
+      }
+
+      Future<void> tickRecall(WidgetTester tester) async {
+        await tester.tap(find.text('Có thu hồi'));
+        await tester.pumpAndSettle();
+      }
+
+      Future<void> tickNoPassword(WidgetTester tester) async {
+        await tester.ensureVisible(find.byKey(noPasswordBox));
+        await tester.tap(find.byKey(noPasswordBox));
+        await tester.pumpAndSettle();
+      }
+
+      bool entriesLocked(WidgetTester tester) =>
+          tester.widget<IgnorePointer>(find.byKey(entryLock)).ignoring;
+
+      testWidgets('the box shows only once "Có thu hồi" is ticked', (
+        tester,
+      ) async {
+        await pumpConfirmation(tester, withAddOn);
+
+        expect(find.byKey(noPasswordBox), findsNothing);
+        await tickRecall(tester);
+        expect(find.byKey(noPasswordBox), findsOneWidget);
+        expect(find.text('Thu hồi không cần mật khẩu'), findsOneWidget);
+        // Not ticked yet: everything is still an ordinary entry.
+        expect(entriesLocked(tester), isFalse);
+        expect(tester.widget<TextField>(find.byKey(recallField)).enabled, true);
+      });
+
+      testWidgets('ticked: one recall of what is left, no password asked', (
+        tester,
+      ) async {
+        final state = await pumpConfirmation(tester, withAddOn);
+
+        // A quantity typed before the tick must not travel with the recall.
+        await tester.enterText(find.byType(TextField).first, '100');
+        await tester.pump();
+        await tickRecall(tester);
+        await tickNoPassword(tester);
+
+        // No confirmed, scrap or recall quantity can be entered any more.
+        expect(entriesLocked(tester), isTrue);
+        final recall = tester.widget<TextField>(find.byKey(recallField));
+        expect(recall.enabled, isFalse);
+        // 1000 given, 20 confirmed, 1 recalled: 979 left, all of it recalled.
+        expect(recall.controller!.text, '979');
+        expect(find.text('Ghi nhận hoàn thành'), findsNothing);
+        // Nothing to edit, so no hint text under the locked quantity either.
+        expect(find.textContaining('Có thể sửa số lượng'), findsNothing);
+
+        await tester.tap(find.text('Thu hồi'));
+        await tester.pumpAndSettle();
+        // The supervisor confirms the figure; the password popup never opens.
+        expect(find.text('Xác minh & gửi SAP'), findsNothing);
+        await tester.tap(find.text('Thu hồi & gửi SAP'));
+        await tester.pumpAndSettle();
+
+        expect(state.recallRepo.calls, 1);
+        expect(state.recallRepo.quantitySent, 979);
+        expect(state.recallRepo.withoutPasswordSent, isTrue);
+        expect(state.recallRepo.passwordSent, isNull);
+        expect(state.productionRepo.sent, isEmpty);
+        expect(find.text('Xác nhận thành công'), findsOneWidget);
+        await tester.pumpWidget(const SizedBox());
+        await tester.pumpAndSettle();
+      });
+
+      testWidgets('cancelling the question sends nothing', (tester) async {
+        final state = await pumpConfirmation(tester, withAddOn);
+
+        await tickRecall(tester);
+        await tickNoPassword(tester);
+        await tester.tap(find.text('Thu hồi'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Hủy'));
+        await tester.pumpAndSettle();
+
+        expect(state.recallRepo.calls, 0);
+        // The sheet is still there, still ticked.
+        expect(entriesLocked(tester), isTrue);
+        await tester.pumpWidget(const SizedBox());
+        await tester.pumpAndSettle();
+      });
+
+      testWidgets('unticked again: the usual flow with the password', (
+        tester,
+      ) async {
+        final state = await pumpConfirmation(tester, withAddOn);
+        state.productionRepo.autoSync = true;
+
+        await tickRecall(tester);
+        await tickNoPassword(tester);
+        await tickNoPassword(tester);
+
+        expect(entriesLocked(tester), isFalse);
+        expect(tester.widget<TextField>(find.byKey(recallField)).enabled, true);
+
+        // 10 finished: the recall, still automatic, follows to 969.
+        await tester.enterText(find.byType(TextField).first, '10');
+        await tester.pump();
+        await tester.tap(find.text('Xác nhận'));
+        await tester.pumpAndSettle();
+        await tester.enterText(find.byType(TextField).last, 'password');
+        await tester.tap(find.text('Xác minh & gửi SAP'));
+        await tester.pumpAndSettle();
+
+        expect(state.productionRepo.quantitySent, 10);
+        expect(state.recallRepo.calls, 1);
+        expect(state.recallRepo.quantitySent, 969);
+        expect(state.recallRepo.withoutPasswordSent, isFalse);
+        expect(state.recallRepo.passwordSent, 'password');
+        await tester.pumpWidget(const SizedBox());
+        await tester.pumpAndSettle();
+      });
+
+      testWidgets('unticking "Có thu hồi" drops the password-less recall too', (
+        tester,
+      ) async {
+        await pumpConfirmation(tester, withAddOn);
+
+        await tickRecall(tester);
+        await tickNoPassword(tester);
+        expect(entriesLocked(tester), isTrue);
+
+        await tester.ensureVisible(find.text('Có thu hồi'));
+        await tester.tap(find.text('Có thu hồi'));
+        await tester.pumpAndSettle();
+
+        expect(entriesLocked(tester), isFalse);
+        expect(find.byKey(noPasswordBox), findsNothing);
+        expect(find.text('Xác nhận'), findsOneWidget);
+      });
+
+      testWidgets('PP_RECALL without the add-on: no tick box', (tester) async {
+        await pumpConfirmation(tester, {
+          Permission.confirmProduction,
+          Permission.recallAssignment,
+        });
+
+        await tickRecall(tester);
+        expect(find.byKey(recallField), findsOneWidget);
+        expect(find.byKey(noPasswordBox), findsNothing);
+        expect(find.text('Thu hồi không cần mật khẩu'), findsNothing);
+      });
+
+      testWidgets('recall-only account: the box is there from the start', (
+        tester,
+      ) async {
+        final state = await pumpConfirmation(tester, {
+          Permission.recallAssignment,
+          Permission.recallWithoutPassword,
+        });
+
+        // "Có thu hồi" opens ticked for PP_RECALL alone.
+        expect(find.byKey(noPasswordBox), findsOneWidget);
+        await tickNoPassword(tester);
+        expect(
+          tester.widget<TextField>(find.byKey(recallField)).enabled,
+          false,
+        );
+
+        await tester.tap(find.text('Thu hồi'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Thu hồi & gửi SAP'));
+        await tester.pumpAndSettle();
+
+        expect(state.recallRepo.quantitySent, 979);
+        expect(state.recallRepo.withoutPasswordSent, isTrue);
+        await tester.pumpWidget(const SizedBox());
+        await tester.pumpAndSettle();
+      });
+    });
+  });
 }

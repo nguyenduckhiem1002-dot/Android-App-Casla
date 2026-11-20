@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../app/theme/casla_colors.dart';
+import '../../../app/theme/casla_spacing.dart';
+import '../../../presentation/widgets/casla_dialog_header.dart';
 import '../../../core/auth/session_manager.dart';
 import '../../../domain/entities/enums.dart';
 import '../../../core/utils/device_info.dart';
@@ -474,16 +476,20 @@ class _S13AccountScreenState extends ConsumerState<S13AccountScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Đăng xuất?'),
+        titlePadding: CaslaDialog.titlePadding,
+        contentPadding: CaslaDialog.contentPadding,
+        title: const CaslaDialogHeader(child: Text('Đăng xuất?')),
         content: const Text(
           'Các giao dịch chưa đồng bộ vẫn được giữ an toàn trên thiết bị.',
         ),
         actions: [
           TextButton(
+            style: CaslaDialog.actionStyle,
             onPressed: () => Navigator.pop(dialogContext, false),
             child: const Text('Ở lại'),
           ),
           FilledButton(
+            style: CaslaDialog.actionStyle,
             onPressed: () => Navigator.pop(dialogContext, true),
             child: const Text('Đăng xuất'),
           ),
@@ -497,7 +503,9 @@ class _S13AccountScreenState extends ConsumerState<S13AccountScreen> {
 
   String _permissionLabel(Permission permission) => switch (permission) {
     Permission.assignQuantity => 'Giao chỉ tiêu số lượng',
+    Permission.confirmProduction => 'Xác nhận sản lượng',
     Permission.recallAssignment => 'Thu hồi phân công',
+    Permission.recallWithoutPassword => 'Thu hồi không cần mật khẩu công nhân',
     Permission.viewTeamProduction => 'Xem sản lượng tổ',
     Permission.viewEmployeeHistory => 'Xem lịch sử công nhân',
     Permission.viewSyncStatus => 'Xem trạng thái đồng bộ',

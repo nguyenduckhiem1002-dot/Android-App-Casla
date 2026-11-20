@@ -4,9 +4,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'casla_colors.dart';
+import 'casla_spacing.dart';
 
 class CaslaTheme {
   CaslaTheme._();
+
+  static const ShapeBorder _dialogShape = RoundedRectangleBorder(
+    borderRadius: BorderRadius.all(Radius.circular(CaslaDialog.radius)),
+  );
 
   static ThemeData get light {
     return ThemeData(
@@ -108,6 +113,32 @@ class CaslaTheme {
           vertical: 14,
         ),
       ),
+      // One width, one inner padding, one title size and one corner radius
+      // for every popup. AlertDialog's title, icon and content padding are
+      // not themeable: each popup passes CaslaDialog's.
+      dialogTheme: const DialogThemeData(
+        shape: _dialogShape,
+        // Full width whatever the message: a short one no longer leaves a
+        // narrow popup in the middle of the screen.
+        constraints: BoxConstraints.tightFor(width: CaslaDialog.width),
+        insetPadding: EdgeInsets.symmetric(
+          horizontal: CaslaDialog.sideGap,
+          vertical: CaslaDialog.topBottomGap,
+        ),
+        titleTextStyle: TextStyle(
+          fontSize: CaslaDialog.titleSize,
+          height: 1.3,
+          fontWeight: FontWeight.w800,
+          color: CaslaColors.primaryNavy,
+        ),
+        contentTextStyle: TextStyle(
+          fontSize: CaslaDialog.bodySize,
+          height: CaslaDialog.lineHeight,
+          color: CaslaColors.primaryNavy,
+        ),
+        actionsPadding: CaslaDialog.actionsPadding,
+      ),
+      datePickerTheme: const DatePickerThemeData(shape: _dialogShape),
       dividerTheme: const DividerThemeData(
         color: CaslaColors.line,
         thickness: 1,

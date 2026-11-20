@@ -11,6 +11,7 @@ Assignment lot(
   int createdAtUtc = 0,
   String operation = '0020',
   String uom = 'CHC',
+  String positionId = '',
 }) => Assignment(
   id: id,
   workerId: 'worker',
@@ -34,6 +35,7 @@ Assignment lot(
   idempotencyKey: id,
   syncStatus: SyncStatus.synced,
   createdAtUtc: createdAtUtc,
+  positionId: positionId,
 );
 
 void main() {
@@ -57,20 +59,126 @@ void main() {
     expect(groups.first.map((a) => a.id), ['a', 'b', 'c']);
   });
 
-  test('completion fills the oldest allocation first', () {
-    final parts = splitGroupedConfirmation(lots, completed: 500, recalled: 0);
-    expect(parts.map((p) => '${p.assignment.id}:${p.completed}'), [
-      'a:85.0',
-      'b:333.0',
-      'c:82.0',
+  test('each position is its own group; a spent seat is not the target', () {
+    // 010140000381/0020 on 2026-11-11: 100 + 100 unplaced, 200 recalled on
+    // the first lot only (the second still shows 100 on this device), then
+    // 800 at TR1. The confirmation must land on TR1, not on the blank lot.
+    final groups = groupConfirmationTargets([
+      lot(
+        'a',
+        assigned: 100,
+        recalled: 200,
+        createdAtUtc: 10,
+      ).copyWith(seatRemaining: 0),
+      lot('b', assigned: 100, createdAtUtc: 20).copyWith(seatRemaining: 0),
+      lot(
+        'tr1',
+        assigned: 800,
+        createdAtUtc: 30,
+        positionId: 'TR1',
+      ).copyWith(seatRemaining: 800),
     ]);
+    expect(groups, hasLength(2));
+    final open = groups
+        .where((group) => group.any((member) => member.canConfirm))
+        .toList();
+    expect(open.single.map((a) => a.id), ['tr1']);
+    expect(confirmationTarget(open.single).positionId, 'TR1');
+    expect(aggregateConfirmationGroup(open.single).positionId, 'TR1');
   });
 
-  test('recall takes what completion left, oldest first', () {
+  test('a grouped confirmation is one transaction on the oldest lot', () {
+    final parts = splitGroupedConfirmation(lots, completed: 500, recalled: 0);
+    expect(parts.map((p) => '${p.assignment.id}:${p.completed}'), ['a:500.0']);
+  });
+
+  test('a lot closed by an over-confirmation is skipped as the target', () {
+    // 1.000 given, 1.500 confirmed on it (closed), then 700 given.
+    final members = [
+      lot(
+        'old',
+        assigned: 1000,
+        completed: 1500,
+        createdAtUtc: 10,
+      ).copyWith(status: AssignmentStatus.completed),
+      lot('new', assigned: 700, createdAtUtc: 20),
+    ];
+    final parts = splitGroupedConfirmation(
+      members,
+      completed: 200,
+      recalled: 0,
+    );
+    expect(parts.map((p) => '${p.assignment.id}:${p.completed}'), [
+      'new:200.0',
+    ]);
+    expect(confirmationTarget(members).id, 'new');
+  });
+
+  test('the group total shows the settled seat balance, not the sum', () {
+    final members = [
+      lot(
+        'old',
+        assigned: 1000,
+        completed: 1500,
+        createdAtUtc: 10,
+      ).copyWith(status: AssignmentStatus.completed, seatRemaining: 700),
+      lot('new', assigned: 700, createdAtUtc: 20).copyWith(seatRemaining: 700),
+    ];
+    final total = aggregateConfirmationGroup(members);
+    expect(total.assignedQuantity, 1700);
+    expect(total.completedQuantity, 1500);
+    expect(total.remaining, 200);
+    expect(total.groupRemaining, 700);
+    // A recall is bounded by the seat balance.
+    expect(
+      () => splitGroupedConfirmation(members, completed: 0, recalled: 701),
+      throwsArgumentError,
+    );
+    expect(
+      splitGroupedConfirmation(
+        members,
+        completed: 0,
+        recalled: 700,
+      ).single.recalled,
+      700,
+    );
+  });
+
+  test('the settled balance follows what this device wrote since', () {
+    final opened = [
+      lot(
+        'old',
+        assigned: 1000,
+        completed: 1500,
+        createdAtUtc: 10,
+      ).copyWith(status: AssignmentStatus.completed, seatRemaining: 700),
+      lot('new', assigned: 700, createdAtUtc: 20).copyWith(seatRemaining: 700),
+    ];
+    final current = [
+      lot(
+        'old',
+        assigned: 1000,
+        completed: 1500,
+        createdAtUtc: 10,
+      ).copyWith(status: AssignmentStatus.completed),
+      lot('new', assigned: 700, completed: 200, recalled: 50, createdAtUtc: 20),
+      lot('top', assigned: 100, createdAtUtc: 30),
+    ];
+    expect(carrySeatRemaining(opened: opened, current: current), 550);
+    expect(
+      carrySeatRemaining(
+        opened: [lot('x', assigned: 1)],
+        current: [lot('x', assigned: 1)],
+      ),
+      isNull,
+    );
+  });
+
+  test('recall rides on the same single transaction', () {
     final parts = splitGroupedConfirmation(lots, completed: 90, recalled: 400);
     expect(
       parts.map((p) => '${p.assignment.id}:${p.completed}/${p.recalled}'),
-      ['a:85.0/0.0', 'b:5.0/328.0', 'c:0.0/72.0'],
+      ['a:90.0/400.0'],
     );
   });
 
@@ -83,20 +191,16 @@ void main() {
       completed: 0.6,
       recalled: 0,
     );
-    expect(parts.map((p) => p.completed), [0.3, 0.3]);
+    expect(parts.map((p) => p.completed), [0.6]);
   });
 
-  test('what the group cannot hold goes on the newest allocation', () {
-    // 1.418 left in all; one more than that is still confirmed.
+  test('completion beyond the group balance is sent exactly as entered', () {
+    // 1.418 left in all; SAP clears the seat and keeps the entered figure.
     final parts = splitGroupedConfirmation(lots, completed: 1419, recalled: 0);
-    expect(parts.map((p) => '${p.assignment.id}:${p.completed}'), [
-      'a:85.0',
-      'b:333.0',
-      'c:1001.0',
-    ]);
+    expect(parts.map((p) => '${p.assignment.id}:${p.completed}'), ['a:1419.0']);
   });
 
-  test('defects beyond the balance follow the surplus', () {
+  test('defects travel with the same transaction', () {
     final parts = splitGroupedConfirmation(
       [
         lot('a', assigned: 10, createdAtUtc: 1),
@@ -106,11 +210,13 @@ void main() {
       defect: 3,
       recalled: 0,
     );
-    // `b` has nothing left, yet it is the last lot the worker was given.
     expect(parts.map((p) => '${p.assignment.id}:${p.completed}/${p.defect}'), [
-      'a:10.0/0.0',
-      'b:2.0/3.0',
+      'a:12.0/3.0',
     ]);
+  });
+
+  test('nothing entered means nothing to send', () {
+    expect(splitGroupedConfirmation(lots, completed: 0, recalled: 0), isEmpty);
   });
 
   test('a recall beyond what the group holds is refused', () {

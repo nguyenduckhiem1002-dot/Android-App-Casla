@@ -3,6 +3,7 @@
 
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -27,10 +28,29 @@ Future<void> main() async {
     child: Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
-        child: Text(
-          'Ứng dụng gặp lỗi không mong muốn. Vui lòng thử lại.',
-          textAlign: TextAlign.center,
-          style: const TextStyle(color: Colors.red),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Ứng dụng gặp lỗi không mong muốn. Vui lòng thử lại.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.red),
+            ),
+            // A debug build names the fault on the device itself: its
+            // Dart output does not always reach logcat on the floor.
+            if (kDebugMode) ...[
+              const SizedBox(height: 8),
+              SelectableText(
+                details.exceptionAsString(),
+                textAlign: TextAlign.left,
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 11,
+                  color: Colors.black87,
+                ),
+              ),
+            ],
+          ],
         ),
       ),
     ),
@@ -49,11 +69,34 @@ Future<void> main() async {
 
 final appStateProvider = ChangeNotifierProvider<AppState>((ref) => AppState());
 
-class CaslaApp extends ConsumerWidget {
+class CaslaApp extends ConsumerStatefulWidget {
   const CaslaApp({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<CaslaApp> createState() => _CaslaAppState();
+}
+
+class _CaslaAppState extends ConsumerState<CaslaApp> {
+  late final AppLifecycleListener _lifecycle;
+
+  @override
+  void initState() {
+    super.initState();
+    // A PDA left on overnight comes back with yesterday's working date; every
+    // return to the foreground re-checks it against the clock.
+    _lifecycle = AppLifecycleListener(
+      onResume: () => ref.read(appStateProvider).handleAppResumed(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _lifecycle.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final router = ref.watch(routerProvider);
 
     return MaterialApp.router(

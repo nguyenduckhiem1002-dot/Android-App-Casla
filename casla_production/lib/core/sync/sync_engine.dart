@@ -145,6 +145,14 @@ class SyncEngine {
     _running = true;
     final scope = _scopeProvider?.call();
     try {
+      // Yesterday's unsent work is dropped before anything is sent, online or
+      // not: this pass also runs on app open and every poll, so a device that
+      // was off overnight is cleaned the moment it is used again.
+      try {
+        await _database.purgeExpiredSyncItems();
+      } catch (_) {
+        // Retention is best-effort; a failure here must not stop the push.
+      }
       if (!await _connectivity.isOnline()) {
         final report = SyncRunReport.skippedRun;
         _publish(report);

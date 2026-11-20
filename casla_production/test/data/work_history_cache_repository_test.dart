@@ -54,6 +54,9 @@ void main() {
     expect(calls, 1);
     expect(first.workers.single.workerName, 'Nguyễn Văn A');
     expect(second.workers.single.workerName, 'Nguyễn Văn A');
+    // The worker's own department survives the cache beside the booking one.
+    expect(second.workers.single.workerBoPhan, 'MAY MIỆNG 2');
+    expect(second.workers.single.boPhan, 'MAY QUAI LẬP TRÌNH 1');
     final metrics = telemetry.snapshot();
     expect(metrics.count(FieldMetric.workHistoryCacheMiss), 1);
     expect(metrics.count(FieldMetric.workHistoryCacheHit), 1);
@@ -708,6 +711,8 @@ WorkHistoryResult _result({
         remainingQuantity: 10,
         unitOfMeasure: 'PC',
         transactionCount: 1,
+        boPhan: 'MAY QUAI LẬP TRÌNH 1',
+        workerBoPhan: 'MAY MIỆNG 2',
       ),
     ],
   );

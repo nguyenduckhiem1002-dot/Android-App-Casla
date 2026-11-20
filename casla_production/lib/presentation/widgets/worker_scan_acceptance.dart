@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../app/theme/casla_colors.dart';
 import '../../app/theme/casla_spacing.dart';
+import 'casla_dialog_header.dart';
 import '../../core/database/casla_database.dart';
 import '../../core/scanner/scan_intent.dart';
 import '../../core/utils/worker_qr_parser.dart';
@@ -91,15 +92,20 @@ Future<bool?> _confirmUnknownWorker(
     context: context,
     barrierDismissible: false,
     builder: (dialogContext) => AlertDialog(
+      iconPadding: CaslaDialog.iconPadding,
+      titlePadding: CaslaDialog.titlePadding,
+      contentPadding: CaslaDialog.contentPadding,
       icon: Icon(
         looksLikeProduct
             ? Icons.warning_amber_rounded
             : Icons.person_add_alt_1_outlined,
         color: looksLikeProduct ? CaslaColors.danger : CaslaColors.accentGold,
-        size: 32,
+        size: 26,
       ),
-      title: Text(
-        looksLikeProduct ? 'Có thể quét nhầm mã hàng' : 'Công nhân chưa có',
+      title: CaslaDialogHeader(
+        child: Text(
+          looksLikeProduct ? 'Có thể quét nhầm mã hàng' : 'Công nhân chưa có',
+        ),
       ),
       content: Column(
         mainAxisSize: MainAxisSize.min,
@@ -143,14 +149,17 @@ Future<bool?> _confirmUnknownWorker(
       ),
       actions: [
         TextButton(
+          style: CaslaDialog.actionStyle,
           onPressed: () => Navigator.pop(dialogContext, false),
           child: const Text('Quét lại'),
         ),
         FilledButton(
           onPressed: () => Navigator.pop(dialogContext, true),
           style: looksLikeProduct
-              ? FilledButton.styleFrom(backgroundColor: CaslaColors.danger)
-              : null,
+              ? FilledButton.styleFrom(
+                  backgroundColor: CaslaColors.danger,
+                ).merge(CaslaDialog.actionStyle)
+              : CaslaDialog.actionStyle,
           child: const Text('Vẫn thêm'),
         ),
       ],

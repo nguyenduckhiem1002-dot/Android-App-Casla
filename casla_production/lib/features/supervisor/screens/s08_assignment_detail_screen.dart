@@ -7,26 +7,26 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../../app/theme/casla_colors.dart';
+import '../../../app/theme/casla_spacing.dart';
+import '../../../presentation/widgets/casla_dialog_header.dart';
 import '../../../core/utils/quantity_formatter.dart';
 import '../../../domain/entities/entities.dart';
 import '../../../domain/entities/enums.dart';
 import '../../../domain/entities/mutation_receipt.dart';
 import '../../../main.dart';
+import '../../../presentation/widgets/defect_quantity_section.dart';
 import '../../../presentation/widgets/mutation_feedback.dart';
 import '../../../presentation/widgets/over_limit_line.dart';
+import '../../../presentation/widgets/recall_all_confirm_dialog.dart';
 import '../../../presentation/widgets/worker_verification_dialog.dart';
 import '../../../presentation/widgets/casla_empty_state.dart';
-import '../../../presentation/widgets/casla_skeleton.dart';
-import '../../../presentation/widgets/kpi_card.dart';
-import '../../../presentation/widgets/ring_progress_card.dart';
-import '../../../presentation/widgets/status_chip.dart';
 import '../../../core/sync/sync_failure.dart';
 import '../../../domain/policies/grouped_confirmation.dart';
 import '../../../domain/policies/production_math.dart';
 
+/// The "Xác nhận sản lượng" form of one assignment: confirm, scrap and recall.
 class S08AssignmentDetailScreen extends ConsumerStatefulWidget {
   final Assignment assignment;
-  final bool openConfirmation;
 
   /// Allocations of the same order/operation confirmed together (see
   /// grouped_confirmation.dart). Empty or single means just [assignment].
@@ -35,7 +35,6 @@ class S08AssignmentDetailScreen extends ConsumerStatefulWidget {
   const S08AssignmentDetailScreen({
     super.key,
     required this.assignment,
-    this.openConfirmation = false,
     this.confirmationGroup = const [],
   });
 
@@ -52,11 +51,22 @@ class _ConfirmationDraft {
   final double recalled;
   final double? expectedRemaining;
 
+  /// What the form showed as left after this entry: the pile's figure
+  /// (seat or group balance) minus completed and defect, which is also the
+  /// ceiling the recall field was validated against.
+  final double remainingAfter;
+
+  /// The "thu hồi không cần mật khẩu" box was ticked: the draft is one recall
+  /// of everything left, sent without asking for the worker's password.
+  final bool withoutWorkerPassword;
+
   const _ConfirmationDraft({
     required this.completed,
     required this.defect,
     required this.recalled,
     required this.expectedRemaining,
+    required this.remainingAfter,
+    this.withoutWorkerPassword = false,
   });
 }
 
@@ -64,28 +74,38 @@ class _S08AssignmentDetailScreenState
     extends ConsumerState<S08AssignmentDetailScreen> {
   bool _isSubmitting = false;
   late final Stream<Assignment?> _assignmentStream;
-  late final Stream<List<Map<String, dynamic>>> _recordsStream;
   late Assignment _currentAssignment;
   // Latest balances of every allocation in a grouped confirmation, and the
   // snapshot the open form was validated against (frozen while submitting).
   List<Assignment> _latestGroupMembers = const [];
   List<Assignment> _groupMembers = const [];
 
-  bool get _isGroup =>
-      widget.openConfirmation && widget.confirmationGroup.length > 1;
+  bool get _isGroup => widget.confirmationGroup.length > 1;
 
   @override
   void initState() {
     super.initState();
     final appState = ref.read(appStateProvider);
+    recallEnabled = _recallOnly;
     _currentAssignment = _isGroup
         ? aggregateConfirmationGroup(widget.confirmationGroup)
         : widget.assignment;
     _groupMembers = _latestGroupMembers = widget.confirmationGroup;
     _assignmentStream = _isGroup
         ? _watchGroup(appState)
-        : appState.assignmentRepo.watchAssignment(widget.assignment.id);
-    _recordsStream = appState.db.watchRecordsByAssignment(widget.assignment.id);
+        : appState.assignmentRepo
+              .watchAssignment(widget.assignment.id)
+              // The row read back carries no settled seat figure: carry
+              // the one the form opened with, moved by what this device
+              // wrote since, as the group stream does.
+              .map(
+                (assignment) => assignment?.copyWith(
+                  seatRemaining: carrySeatRemaining(
+                    opened: [widget.assignment],
+                    current: [assignment],
+                  ),
+                ),
+              );
   }
 
   /// The group total, re-emitted whenever any allocation's balance changes.
@@ -109,7 +129,18 @@ class _S08AssignmentDetailScreenState
                 return;
               }
               _latestGroupMembers = members;
-              controller.add(aggregateConfirmationGroup(members));
+              // The seat balance settled when the form opened, moved by what
+              // this device wrote since; the members read back from the
+              // database carry no settled figure of their own.
+              controller.add(
+                aggregateConfirmationGroup(
+                  members,
+                  seatRemaining: carrySeatRemaining(
+                    opened: widget.confirmationGroup,
+                    current: members,
+                  ),
+                ),
+              );
             }, onError: controller.addError),
           );
         }
@@ -135,7 +166,40 @@ class _S08AssignmentDetailScreenState
   var defectEnabled = false;
   var recallEnabled = false;
   var recallAutomatic = true;
-  bool _sheetOpen = false;
+  var recallWithoutPassword = false;
+
+  // Confirm (PP_CONFIRM) and recall (PP_RECALL) are separate SAP functions.
+  // Both open the same "Xác nhận" form; inside it each entry (completed /
+  // remaining / scrap, or recall) is shown only to an account holding its
+  // function, so a PP_RECALL-only account sees nothing but the recall entry.
+  bool _hasPermission(Permission permission) =>
+      ref.read(appStateProvider).currentSession?.hasPermission(permission) ==
+      true;
+  bool get _canConfirm => _hasPermission(Permission.confirmProduction);
+  bool get _canRecall => _hasPermission(Permission.recallAssignment);
+  bool get _canOpenConfirmation => _canConfirm || _canRecall;
+  bool get _recallOnly => _canRecall && !_canConfirm;
+
+  /// PP_RECALL_NOPASS on top of PP_RECALL: once "Có thu hồi" is ticked, the
+  /// recall section offers a second tick box that turns the whole entry into
+  /// one recall of what is left, sent without the worker's password (the
+  /// worker is away and the rest goes to someone else).
+  bool get _canRecallWithoutPassword =>
+      _canRecall && _hasPermission(Permission.recallWithoutPassword);
+
+  /// With PP_RECALL alone the recall entry is the whole form, so it opens
+  /// ticked and filled with the current balance instead of an empty form.
+  /// Idempotent: a field cleared or edited by hand is left alone.
+  void _primeRecallOnly(double remainingMax) {
+    if (_recallOnly &&
+        recallEnabled &&
+        recallAutomatic &&
+        recallController.text.trim().isEmpty) {
+      recallController.text = ProductionMath.formatQuantity(
+        remainingMax.clamp(0.0, double.infinity),
+      );
+    }
+  }
 
   @override
   void dispose() {
@@ -150,38 +214,7 @@ class _S08AssignmentDetailScreenState
     if (submitting || !mounted) return;
     // Never pop another page that may have been opened in the meantime.
     if (ModalRoute.of(formContext)?.isCurrent != true) return;
-    if (widget.openConfirmation) {
-      context.pop();
-    } else {
-      Navigator.of(formContext).pop();
-    }
-  }
-
-  Future<void> _openConfirmCompletionSheet(double remainingMax) async {
-    if (_isSubmitting || _sheetOpen || remainingMax <= 0) return;
-    _sheetOpen = true;
-    completedController.clear();
-    remainingController.clear();
-    defectController.clear();
-    recallController.clear();
-    mode = _CompletionEntryMode.completed;
-    defectEnabled = false;
-    recallEnabled = false;
-    recallAutomatic = true;
-    final route = ModalBottomSheetRoute<void>(
-      isScrollControlled: true,
-      isDismissible: false,
-      enableDrag: false,
-      backgroundColor: Colors.transparent,
-      builder: (formContext) =>
-          _buildConfirmationForm(formContext, remainingMax),
-    );
-    try {
-      await Navigator.of(context).push(route);
-      await route.completed;
-    } finally {
-      _sheetOpen = false;
-    }
+    context.pop();
   }
 
   Widget _buildConfirmationForm(
@@ -190,6 +223,11 @@ class _S08AssignmentDetailScreenState
   ) {
     return StatefulBuilder(
       builder: (context, setModalState) {
+        _primeRecallOnly(remainingMax);
+        // Ticked (inside "Có thu hồi"): no quantity is entered at all. The
+        // toggle has already emptied the confirmation fields and set the
+        // recall to everything that is left.
+        final noPassword = recallWithoutPassword && _canRecallWithoutPassword;
         final completedText = completedController.text.trim();
         final remainingText = remainingController.text.trim();
         final defectText = defectEnabled ? defectController.text.trim() : '';
@@ -229,29 +267,26 @@ class _S08AssignmentDetailScreenState
         final completedWholeError = wholeQuantityInputError(completedText, uom);
         final remainingWholeError = wholeQuantityInputError(remainingText, uom);
         final defectWholeError = wholeQuantityInputError(defectText, uom);
-        // Entering what is left fixes the total, so defects must fit inside
-        // it. Entering what was finished does not: finished and defective
-        // output may add up to more than was left, with a warning only.
+        // Finished and defective output may add up to more than was left in
+        // either entry mode: SAP settles the seat and lets it go negative, so
+        // the form warns under the field and never blocks (decided
+        // 2026-10-29, the same as entering what was finished).
         final defectError = !defectEnabled
             ? null
             : defectText.isEmpty || parsedDefect == null
             ? 'Nhập số lượng phế hợp lệ'
             : defectWholeError ??
-                  (defect < 0
-                      ? 'Nhập số lượng phế hợp lệ'
-                      : mode == _CompletionEntryMode.remaining &&
-                            ProductionMath.exceedsAtSapScale(
-                              defect,
-                              (remainingMax - enteredRemaining).clamp(
-                                0.0,
-                                double.infinity,
-                              ),
-                            )
-                      ? 'Tổng số phế và số còn lại vượt quá ${_displayQuantity(remainingMax)}'
-                      : null);
-        final overLimit =
-            mode == _CompletionEntryMode.completed &&
-            ProductionMath.exceedsAtSapScale(completion + defect, remainingMax);
+                  (defect < 0 ? 'Nhập số lượng phế hợp lệ' : null);
+        final overLimit = mode == _CompletionEntryMode.completed
+            ? ProductionMath.exceedsAtSapScale(
+                completion + defect,
+                remainingMax,
+              )
+            : hasRemainingInput &&
+                  ProductionMath.exceedsAtSapScale(
+                    enteredRemaining + defect,
+                    remainingMax,
+                  );
         String? pairError;
         if (!hasAnyInput) {
           pairError = 'Nhập ít nhất một số lượng';
@@ -282,12 +317,17 @@ class _S08AssignmentDetailScreenState
         } else if (!hasPositiveQuantity) {
           pairError = 'Ít nhất một số lượng phải lớn hơn 0';
         }
+        // With PP_RECALL alone the recall entry is the only field, so the
+        // "enter a positive quantity" rule shows there instead of under the
+        // hidden completion field.
         final recallError = recallText.isNotEmpty && parsedRecall == null
             ? 'Nhập số lượng hợp lệ'
             : wholeQuantityInputError(recallText, uom) ??
                   (recall < 0 ||
                           ProductionMath.exceedsAtSapScale(recall, balance)
                       ? 'Tối đa ${_displayQuantity(balance)}'
+                      : _recallOnly && recallEnabled && recall <= 0
+                      ? 'Nhập số lượng thu hồi lớn hơn 0'
                       : null);
         final canSave =
             hasAnyInput &&
@@ -410,7 +450,7 @@ class _S08AssignmentDetailScreenState
         final activeError = hasAnyInput ? pairError : null;
         final activeLabel = mode == _CompletionEntryMode.completed
             ? 'Số vừa hoàn thành'
-            : 'Số còn lại sau xác nhận';
+            : 'Số lượng còn lại (chưa bao gồm thu hồi)';
         final activeValueChanged = mode == _CompletionEntryMode.completed
             ? setCompleted
             : setRemaining;
@@ -428,590 +468,739 @@ class _S08AssignmentDetailScreenState
                     ),
                     child: Material(
                       color: CaslaColors.background,
-                      child: SingleChildScrollView(
-                        padding: EdgeInsets.zero,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.fromLTRB(
-                                20,
-                                14,
-                                20,
-                                16,
-                              ),
-                              color: CaslaColors.primaryNavy,
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      SizedBox(
-                                        width: 48,
-                                        height: 48,
-                                        child: IconButton(
-                                          tooltip: 'Quay lại',
-                                          alignment: Alignment.centerLeft,
-                                          padding: EdgeInsets.zero,
-                                          onPressed: () =>
-                                              _closeConfirmation(sheetContext),
-                                          icon: const Icon(
-                                            Icons.arrow_back,
-                                            color: Colors.white,
-                                            size: 21,
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 4),
-                                      const Expanded(
-                                        child: Text(
-                                          'Xác nhận sản lượng',
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            fontFamily: 'Manrope',
-                                            fontSize: 20,
-                                            fontWeight: FontWeight.w800,
-                                            color: Colors.white,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    '${widget.assignment.workerName} · ${widget.assignment.workerMaNv} · ${_assignmentDepartment()}',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      color: CaslaColors.onDarkSecondary,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(
-                                18,
-                                16,
-                                18,
-                                18,
-                              ),
+                      child: Column(
+                        children: [
+                          Expanded(
+                            child: SingleChildScrollView(
+                              padding: EdgeInsets.zero,
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Container(
                                     width: double.infinity,
-                                    padding: const EdgeInsets.all(14),
-                                    decoration: BoxDecoration(
-                                      color: CaslaColors.surface,
-                                      border: Border.all(
-                                        color: CaslaColors.line,
-                                      ),
-                                      borderRadius: BorderRadius.circular(16),
+                                    padding: const EdgeInsets.fromLTRB(
+                                      20,
+                                      14,
+                                      20,
+                                      16,
                                     ),
+                                    color: CaslaColors.primaryNavy,
                                     child: Column(
                                       crossAxisAlignment:
                                           CrossAxisAlignment.start,
                                       children: [
                                         Row(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
                                           children: [
-                                            Expanded(
-                                              child: Column(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                children: [
-                                                  Text(
-                                                    widget
-                                                            .assignment
-                                                            .operationName
-                                                            .isEmpty
-                                                        ? 'Chưa có tên công đoạn'
-                                                        : widget
-                                                              .assignment
-                                                              .operationName,
-                                                    style: const TextStyle(
-                                                      fontWeight:
-                                                          FontWeight.w800,
-                                                      fontSize: 15,
-                                                      color: CaslaColors
-                                                          .primaryNavy,
+                                            SizedBox(
+                                              width: 48,
+                                              height: 48,
+                                              child: IconButton(
+                                                tooltip: 'Quay lại',
+                                                alignment: Alignment.centerLeft,
+                                                padding: EdgeInsets.zero,
+                                                onPressed: () =>
+                                                    _closeConfirmation(
+                                                      sheetContext,
                                                     ),
-                                                  ),
-                                                  const SizedBox(height: 5),
-                                                  Text(
-                                                    'LSX ${widget.assignment.productionOrder} · CĐ ${widget.assignment.operation}'
-                                                    '${_isGroup ? ' · gộp ${widget.confirmationGroup.length} lần giao' : ''}',
-                                                    style: const TextStyle(
-                                                      fontFamily: 'monospace',
-                                                      fontSize: 11,
-                                                      color: CaslaColors.muted,
-                                                    ),
-                                                  ),
-                                                ],
+                                                icon: const Icon(
+                                                  Icons.arrow_back,
+                                                  color: Colors.white,
+                                                  size: 21,
+                                                ),
                                               ),
                                             ),
-                                            Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.end,
-                                              children: [
-                                                Text(
-                                                  '${_displayQuantity(remainingMax)} ${widget.assignment.uom}',
-                                                  style: const TextStyle(
-                                                    fontSize: 16,
-                                                    fontWeight: FontWeight.w800,
-                                                    color:
-                                                        CaslaColors.primaryNavy,
-                                                  ),
+                                            const SizedBox(width: 4),
+                                            const Expanded(
+                                              child: Text(
+                                                'Xác nhận sản lượng',
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(
+                                                  fontFamily: 'Manrope',
+                                                  fontSize: 20,
+                                                  fontWeight: FontWeight.w800,
+                                                  color: Colors.white,
                                                 ),
-                                                const Text(
-                                                  'còn lại hiện tại',
-                                                  style: TextStyle(
-                                                    fontSize: 10,
-                                                    color: CaslaColors.muted,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ],
-                                        ),
-                                        const Divider(height: 20),
-                                        Row(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Expanded(
-                                              child: _ContextValue(
-                                                label: 'Tên hàng',
-                                                value: widget
-                                                    .assignment
-                                                    .productName,
-                                              ),
-                                            ),
-                                            const SizedBox(width: 12),
-                                            Expanded(
-                                              child: _ContextValue(
-                                                label: 'Mã hàng',
-                                                value: widget
-                                                    .assignment
-                                                    .productCode,
                                               ),
                                             ),
                                           ],
                                         ),
-                                        const SizedBox(height: 8),
-                                        Row(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Expanded(
-                                              child: _ContextValue(
-                                                label: 'Đã giao',
-                                                value:
-                                                    '${_displayQuantity(_currentAssignment.assignedQuantity)} ${widget.assignment.uom}',
-                                                emphasized: true,
-                                              ),
-                                            ),
-                                            const SizedBox(width: 12),
-                                            Expanded(
-                                              child: _ContextValue(
-                                                label: 'Đã thu hồi',
-                                                value:
-                                                    '${_displayQuantity(_currentAssignment.recalledQuantity)} ${widget.assignment.uom}',
-                                                emphasized: true,
-                                              ),
-                                            ),
-                                            const SizedBox(width: 12),
-                                            Expanded(
-                                              child: _ContextValue(
-                                                label: 'Đã xác nhận',
-                                                value:
-                                                    '${_displayQuantity(_currentAssignment.completedQuantity)} ${widget.assignment.uom}',
-                                                emphasized: true,
-                                              ),
-                                            ),
-                                          ],
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          '${widget.assignment.workerName} · ${widget.assignment.workerMaNv} · ${_assignmentDepartment()}',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            color: CaslaColors.onDarkSecondary,
+                                          ),
                                         ),
                                       ],
                                     ),
                                   ),
-                                  const SizedBox(height: 18),
-                                  const Text(
-                                    'Nhập số lượng xác nhận',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.w800,
-                                      fontSize: 13,
-                                      color: CaslaColors.primaryNavy,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Container(
-                                    padding: const EdgeInsets.all(14),
-                                    decoration: BoxDecoration(
-                                      color: CaslaColors.surface,
-                                      border: Border.all(
-                                        color: CaslaColors.line,
-                                      ),
-                                      borderRadius: BorderRadius.circular(16),
+                                  Padding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      18,
+                                      16,
+                                      18,
+                                      18,
                                     ),
                                     child: Column(
                                       crossAxisAlignment:
                                           CrossAxisAlignment.start,
                                       children: [
                                         Container(
-                                          padding: const EdgeInsets.all(4),
+                                          width: double.infinity,
+                                          padding: const EdgeInsets.all(14),
                                           decoration: BoxDecoration(
-                                            color: CaslaColors.background,
+                                            color: CaslaColors.surface,
+                                            border: Border.all(
+                                              color: CaslaColors.line,
+                                            ),
                                             borderRadius: BorderRadius.circular(
-                                              11,
+                                              16,
                                             ),
                                           ),
-                                          child: Row(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
                                             children: [
-                                              modeButton(
-                                                'Nhập số hoàn thành',
-                                                _CompletionEntryMode.completed,
-                                              ),
-                                              modeButton(
-                                                'Nhập số còn lại',
-                                                _CompletionEntryMode.remaining,
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        const SizedBox(height: 16),
-                                        Text(
-                                          activeLabel,
-                                          style: const TextStyle(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w700,
-                                            color: CaslaColors.primaryNavy,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 6),
-                                        TextField(
-                                          controller: activeController,
-                                          onChanged: activeValueChanged,
-                                          textAlign: TextAlign.right,
-                                          keyboardType:
-                                              const TextInputType.numberWithOptions(
-                                                decimal: true,
-                                              ),
-                                          decoration: InputDecoration(
-                                            suffixText:
-                                                ' ${widget.assignment.uom}',
-                                            suffixStyle: const TextStyle(
-                                              color: CaslaColors.primaryNavy,
-                                              fontWeight: FontWeight.w700,
-                                            ),
-                                            hintText: '0',
-                                            isDense: true,
-                                            filled: true,
-                                            fillColor: CaslaColors.surface,
-                                            error: activeError == null
-                                                ? null
-                                                : Row(
+                                              Row(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  Expanded(
+                                                    child: Column(
+                                                      crossAxisAlignment:
+                                                          CrossAxisAlignment
+                                                              .start,
+                                                      children: [
+                                                        Text(
+                                                          widget
+                                                                  .assignment
+                                                                  .operationName
+                                                                  .isEmpty
+                                                              ? 'Chưa có tên công đoạn'
+                                                              : widget
+                                                                    .assignment
+                                                                    .operationName,
+                                                          style: const TextStyle(
+                                                            fontWeight:
+                                                                FontWeight.w800,
+                                                            fontSize: 15,
+                                                            color: CaslaColors
+                                                                .primaryNavy,
+                                                          ),
+                                                        ),
+                                                        const SizedBox(
+                                                          height: 5,
+                                                        ),
+                                                        Text(
+                                                          'LSX ${widget.assignment.productionOrder} · CĐ ${widget.assignment.operation}'
+                                                          '${_isGroup ? ' · gộp ${widget.confirmationGroup.length} lần giao' : ''}',
+                                                          style:
+                                                              const TextStyle(
+                                                                fontFamily:
+                                                                    'monospace',
+                                                                fontSize: 11,
+                                                                color:
+                                                                    CaslaColors
+                                                                        .muted,
+                                                              ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                  Column(
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment.end,
                                                     children: [
-                                                      const Icon(
-                                                        Icons.error_outline,
-                                                        size: 14,
-                                                        color:
-                                                            CaslaColors.danger,
-                                                      ),
-                                                      const SizedBox(width: 4),
                                                       Text(
-                                                        activeError,
+                                                        '${_displayQuantity(remainingMax)} ${widget.assignment.uom}',
                                                         style: const TextStyle(
+                                                          fontSize: 20,
+                                                          fontWeight:
+                                                              FontWeight.w800,
                                                           color: CaslaColors
-                                                              .danger,
-                                                          fontSize: 11,
+                                                              .primaryNavy,
+                                                        ),
+                                                      ),
+                                                      const Text(
+                                                        'còn lại hiện tại',
+                                                        style: TextStyle(
+                                                          fontSize: 12,
+                                                          color:
+                                                              CaslaColors.muted,
                                                         ),
                                                       ),
                                                     ],
                                                   ),
-                                            border: OutlineInputBorder(
-                                              borderRadius:
-                                                  BorderRadius.circular(11),
-                                              borderSide: const BorderSide(
-                                                color: CaslaColors.line,
+                                                ],
                                               ),
-                                            ),
-                                            enabledBorder: overLimit
-                                                ? OutlineInputBorder(
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                          11,
-                                                        ),
-                                                    borderSide:
-                                                        const BorderSide(
-                                                          color: CaslaColors
-                                                              .pending,
-                                                          width: 1.4,
-                                                        ),
-                                                  )
-                                                : null,
-                                            focusedBorder: OutlineInputBorder(
-                                              borderRadius:
-                                                  BorderRadius.circular(11),
-                                              borderSide: BorderSide(
-                                                color: overLimit
-                                                    ? CaslaColors.pending
-                                                    : CaslaColors.primaryNavy,
-                                                width: 1.4,
+                                              const Divider(height: 20),
+                                              Row(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  Expanded(
+                                                    child: _ContextValue(
+                                                      label: 'Tên hàng',
+                                                      value: widget
+                                                          .assignment
+                                                          .productName,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 12),
+                                                  Expanded(
+                                                    child: _ContextValue(
+                                                      label: 'Mã hàng',
+                                                      value: widget
+                                                          .assignment
+                                                          .productCode,
+                                                    ),
+                                                  ),
+                                                ],
                                               ),
-                                            ),
-                                            errorBorder: OutlineInputBorder(
-                                              borderRadius:
-                                                  BorderRadius.circular(11),
-                                              borderSide: const BorderSide(
-                                                color: CaslaColors.danger,
-                                              ),
-                                            ),
-                                          ),
-                                          style: const TextStyle(
-                                            fontFamily: 'monospace',
-                                            fontSize: 25,
-                                            fontWeight: FontWeight.w800,
-                                            color: CaslaColors.primaryNavy,
-                                          ),
-                                        ),
-                                        if (overLimit && activeError == null)
-                                          OverLimitLine(
-                                            '${defect > 0 ? 'Tổng hoàn thành và phế vượt' : 'Vượt'} '
-                                            'số còn lại ${_displayQuantity(remainingMax)} '
-                                            '${widget.assignment.uom}.',
-                                          ),
-                                        const SizedBox(height: 12),
-                                        ClipRRect(
-                                          borderRadius: BorderRadius.circular(
-                                            8,
-                                          ),
-                                          child: LinearProgressIndicator(
-                                            value: completionPercent,
-                                            minHeight: 7,
-                                            backgroundColor: CaslaColors.line,
-                                            color: CaslaColors.success,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 6),
-                                        Row(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.spaceBetween,
-                                          children: [
-                                            Text(
-                                              '${formatCompletionPercent(completionPercent)} hoàn thành',
-                                              style: const TextStyle(
-                                                fontSize: 11,
-                                                color: CaslaColors.muted,
-                                              ),
-                                            ),
-                                            Text(
-                                              'còn ${_displayQuantity(balance)} ${widget.assignment.uom}',
-                                              style: const TextStyle(
-                                                fontSize: 11,
-                                                fontWeight: FontWeight.w700,
-                                                color: CaslaColors.primaryNavy,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                        const Divider(height: 22),
-                                        _DefectSection(
-                                          enabled: defectEnabled,
-                                          controller: defectController,
-                                          unit: widget.assignment.uom,
-                                          error: defectError,
-                                          onToggle: (enabled) {
-                                            setModalState(() {
-                                              defectEnabled = enabled;
-                                              if (!enabled) {
-                                                defectController.clear();
-                                              }
-                                              final remainingAfterEntry =
-                                                  mode ==
-                                                      _CompletionEntryMode
-                                                          .completed
-                                                  ? remainingMax -
-                                                        (parseLocalizedQuantity(
-                                                              completedController
-                                                                  .text,
-                                                            ) ??
-                                                            0)
-                                                  : (parseLocalizedQuantity(
-                                                          remainingController
-                                                              .text,
-                                                        ) ??
-                                                        remainingMax);
-                                              updateAutomaticRecall(
-                                                remainingAfterEntry -
-                                                    (enabled
-                                                        ? (parseLocalizedQuantity(
-                                                                defectController
-                                                                    .text,
-                                                              ) ??
-                                                              0)
-                                                        : 0),
-                                              );
-                                              if (mode ==
-                                                  _CompletionEntryMode
-                                                      .remaining) {
-                                                completedController
-                                                    .text = ProductionMath.formatQuantity(
-                                                  (remainingAfterEntry -
-                                                          (enabled
-                                                              ? (parseLocalizedQuantity(
-                                                                      defectController
-                                                                          .text,
-                                                                    ) ??
-                                                                    0)
-                                                              : 0))
-                                                      .clamp(
-                                                        0.0,
-                                                        double.infinity,
+                                              const SizedBox(height: 8),
+                                              Row(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  // Flex follows label width so
+                                                  // 'Đã xác nhận' stays on one line
+                                                  // on a 360dp phone instead of
+                                                  // leaving slack under 'Phế'.
+                                                  Expanded(
+                                                    flex: 4,
+                                                    child: _ContextValue(
+                                                      label: 'Đã giao',
+                                                      value: _displayQuantity(
+                                                        _currentAssignment
+                                                            .assignedQuantity,
                                                       ),
-                                                );
-                                              } else {
-                                                remainingController
-                                                    .text = ProductionMath.formatQuantity(
-                                                  (remainingAfterEntry -
-                                                          (enabled
-                                                              ? (parseLocalizedQuantity(
-                                                                      defectController
-                                                                          .text,
-                                                                    ) ??
-                                                                    0)
-                                                              : 0))
-                                                      .clamp(
-                                                        0.0,
-                                                        double.infinity,
+                                                      emphasized: true,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 8),
+                                                  Expanded(
+                                                    flex: 4,
+                                                    child: _ContextValue(
+                                                      label: 'Đã thu hồi',
+                                                      value: _displayQuantity(
+                                                        _currentAssignment
+                                                            .recalledQuantity,
                                                       ),
-                                                );
-                                              }
-                                            });
-                                          },
-                                          onChanged: setDefect,
-                                        ),
-                                        const SizedBox(height: 12),
-                                        _RecallSection(
-                                          enabled: recallEnabled,
-                                          controller: recallController,
-                                          unit: widget.assignment.uom,
-                                          error: recallError,
-                                          onToggle: (enabled) {
-                                            setModalState(() {
-                                              recallEnabled = enabled;
-                                              recallAutomatic = true;
-                                              recallController.text = enabled
-                                                  ? ProductionMath.formatQuantity(
-                                                      balance,
-                                                    )
-                                                  : '';
-                                            });
-                                          },
-                                          onChanged: (_) => setModalState(() {
-                                            recallAutomatic = false;
-                                          }),
-                                        ),
-                                        const SizedBox(height: 14),
-                                        Container(
-                                          width: double.infinity,
-                                          padding: const EdgeInsets.all(12),
-                                          decoration: const BoxDecoration(
-                                            color: CaslaColors.muted100,
-                                            borderRadius: BorderRadius.all(
-                                              Radius.circular(12),
-                                            ),
-                                          ),
-                                          child: Column(
-                                            children: [
-                                              _SummaryLine(
-                                                label: 'Ghi nhận hoàn thành',
-                                                value:
-                                                    '+${_displayQuantity(completion)} ${widget.assignment.uom}',
+                                                      emphasized: true,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 8),
+                                                  Expanded(
+                                                    flex: 5,
+                                                    child: _ContextValue(
+                                                      label: 'Đã xác nhận',
+                                                      value: _displayQuantity(
+                                                        _currentAssignment
+                                                            .completedQuantity,
+                                                      ),
+                                                      emphasized: true,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 8),
+                                                  // Scrap already booked on SAP for
+                                                  // this operation (group: summed
+                                                  // over members), so the supervisor
+                                                  // sees it beside the other settled
+                                                  // figures before entering more.
+                                                  Expanded(
+                                                    flex: 4,
+                                                    child: _ContextValue(
+                                                      label: 'Phế',
+                                                      value: _displayQuantity(
+                                                        _currentAssignment
+                                                            .defectQuantity,
+                                                      ),
+                                                      emphasized: true,
+                                                    ),
+                                                  ),
+                                                ],
                                               ),
-                                              if (defectEnabled)
-                                                _SummaryLine(
-                                                  label: 'Ghi nhận số phế',
-                                                  value:
-                                                      '+${_displayQuantity(defect)} ${widget.assignment.uom}',
-                                                ),
-                                              _SummaryLine(
-                                                label: 'Còn lại sau xác nhận',
-                                                value:
-                                                    '${_displayQuantity(balance)} ${widget.assignment.uom}',
-                                              ),
-                                              if (recallEnabled)
-                                                _SummaryLine(
-                                                  label: 'Thu hồi lượt này',
-                                                  value:
-                                                      '${_displayQuantity(recall)} ${widget.assignment.uom}',
-                                                ),
                                             ],
                                           ),
                                         ),
-                                        const SizedBox(height: 14),
-                                        SizedBox(
-                                          width: double.infinity,
-                                          child: OutlinedButton(
-                                            onPressed: canSave && !submitting
-                                                ? () async {
-                                                    FocusScope.of(
-                                                      sheetContext,
-                                                    ).unfocus();
-                                                    setModalState(
-                                                      () => submitting = true,
-                                                    );
-                                                    final saved = await _submitConfirmationDraft(
-                                                      _ConfirmationDraft(
-                                                        completed:
-                                                            ProductionMath.toSapScale(
-                                                              completion,
-                                                            ),
-                                                        defect:
-                                                            ProductionMath.toSapScale(
-                                                              defect,
-                                                            ),
-                                                        recalled:
-                                                            ProductionMath.toSapScale(
-                                                              recall,
-                                                            ),
-                                                        expectedRemaining:
-                                                            mode ==
+                                        const SizedBox(height: 18),
+                                        const Text(
+                                          'Nhập số lượng xác nhận',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w800,
+                                            fontSize: 13,
+                                            color: CaslaColors.primaryNavy,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        Container(
+                                          padding: const EdgeInsets.all(14),
+                                          decoration: BoxDecoration(
+                                            color: CaslaColors.surface,
+                                            border: Border.all(
+                                              color: CaslaColors.line,
+                                            ),
+                                            borderRadius: BorderRadius.circular(
+                                              16,
+                                            ),
+                                          ),
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              // Completed / remaining and scrap are
+                                              // PP_CONFIRM entries; PP_RECALL alone
+                                              // sees only the recall entry below.
+                                              // Locked (greyed, untouchable) while the
+                                              // password-less recall is ticked.
+                                              if (_canConfirm)
+                                                IgnorePointer(
+                                                  key: const ValueKey(
+                                                    'confirm-entry-lock',
+                                                  ),
+                                                  ignoring: noPassword,
+                                                  child: Opacity(
+                                                    opacity: noPassword
+                                                        ? 0.4
+                                                        : 1.0,
+                                                    child: Column(
+                                                      crossAxisAlignment:
+                                                          CrossAxisAlignment
+                                                              .start,
+                                                      children: [
+                                                        Container(
+                                                          padding:
+                                                              const EdgeInsets.all(
+                                                                4,
+                                                              ),
+                                                          decoration: BoxDecoration(
+                                                            color: CaslaColors
+                                                                .background,
+                                                            borderRadius:
+                                                                BorderRadius.circular(
+                                                                  11,
+                                                                ),
+                                                          ),
+                                                          child: Row(
+                                                            children: [
+                                                              modeButton(
+                                                                'Nhập số hoàn thành',
                                                                 _CompletionEntryMode
-                                                                    .remaining
-                                                            ? ProductionMath.toSapScale(
-                                                                remainingMax,
-                                                              )
-                                                            : null,
-                                                      ),
-                                                      onProcessing: (value) {
-                                                        if (sheetContext
-                                                            .mounted) {
-                                                          setModalState(
-                                                            () => processing =
-                                                                value,
+                                                                    .completed,
+                                                              ),
+                                                              modeButton(
+                                                                'Nhập số còn lại',
+                                                                _CompletionEntryMode
+                                                                    .remaining,
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                        const SizedBox(
+                                                          height: 16,
+                                                        ),
+                                                        Text(
+                                                          activeLabel,
+                                                          style: const TextStyle(
+                                                            fontSize: 12,
+                                                            fontWeight:
+                                                                FontWeight.w700,
+                                                            color: CaslaColors
+                                                                .primaryNavy,
+                                                          ),
+                                                        ),
+                                                        const SizedBox(
+                                                          height: 6,
+                                                        ),
+                                                        TextField(
+                                                          controller:
+                                                              activeController,
+                                                          onChanged:
+                                                              activeValueChanged,
+                                                          textAlign:
+                                                              TextAlign.right,
+                                                          keyboardType:
+                                                              const TextInputType.numberWithOptions(
+                                                                decimal: true,
+                                                              ),
+                                                          decoration: InputDecoration(
+                                                            suffixText:
+                                                                ' ${widget.assignment.uom}',
+                                                            suffixStyle:
+                                                                const TextStyle(
+                                                                  color: CaslaColors
+                                                                      .primaryNavy,
+                                                                  fontWeight:
+                                                                      FontWeight
+                                                                          .w700,
+                                                                ),
+                                                            hintText: '0',
+                                                            isDense: true,
+                                                            filled: true,
+                                                            fillColor:
+                                                                CaslaColors
+                                                                    .surface,
+                                                            error:
+                                                                activeError ==
+                                                                    null
+                                                                ? null
+                                                                : Row(
+                                                                    children: [
+                                                                      const Icon(
+                                                                        Icons
+                                                                            .error_outline,
+                                                                        size:
+                                                                            14,
+                                                                        color: CaslaColors
+                                                                            .danger,
+                                                                      ),
+                                                                      const SizedBox(
+                                                                        width:
+                                                                            4,
+                                                                      ),
+                                                                      Text(
+                                                                        activeError,
+                                                                        style: const TextStyle(
+                                                                          color:
+                                                                              CaslaColors.danger,
+                                                                          fontSize:
+                                                                              11,
+                                                                        ),
+                                                                      ),
+                                                                    ],
+                                                                  ),
+                                                            border: OutlineInputBorder(
+                                                              borderRadius:
+                                                                  BorderRadius.circular(
+                                                                    11,
+                                                                  ),
+                                                              borderSide:
+                                                                  const BorderSide(
+                                                                    color:
+                                                                        CaslaColors
+                                                                            .line,
+                                                                  ),
+                                                            ),
+                                                            enabledBorder:
+                                                                overLimit
+                                                                ? OutlineInputBorder(
+                                                                    borderRadius:
+                                                                        BorderRadius.circular(
+                                                                          11,
+                                                                        ),
+                                                                    borderSide: const BorderSide(
+                                                                      color: CaslaColors
+                                                                          .pending,
+                                                                      width:
+                                                                          1.4,
+                                                                    ),
+                                                                  )
+                                                                : null,
+                                                            focusedBorder: OutlineInputBorder(
+                                                              borderRadius:
+                                                                  BorderRadius.circular(
+                                                                    11,
+                                                                  ),
+                                                              borderSide: BorderSide(
+                                                                color: overLimit
+                                                                    ? CaslaColors
+                                                                          .pending
+                                                                    : CaslaColors
+                                                                          .primaryNavy,
+                                                                width: 1.4,
+                                                              ),
+                                                            ),
+                                                            errorBorder: OutlineInputBorder(
+                                                              borderRadius:
+                                                                  BorderRadius.circular(
+                                                                    11,
+                                                                  ),
+                                                              borderSide:
+                                                                  const BorderSide(
+                                                                    color: CaslaColors
+                                                                        .danger,
+                                                                  ),
+                                                            ),
+                                                          ),
+                                                          style: const TextStyle(
+                                                            fontFamily:
+                                                                'monospace',
+                                                            fontSize: 25,
+                                                            fontWeight:
+                                                                FontWeight.w800,
+                                                            color: CaslaColors
+                                                                .primaryNavy,
+                                                          ),
+                                                        ),
+                                                        if (overLimit &&
+                                                            activeError == null)
+                                                          OverLimitLine(
+                                                            mode ==
+                                                                    _CompletionEntryMode
+                                                                        .remaining
+                                                                ? 'Tổng số phế và số còn lại vượt '
+                                                                      '${_displayQuantity(remainingMax)} '
+                                                                      '${widget.assignment.uom}; '
+                                                                      'số hoàn thành tính là '
+                                                                      '${_displayQuantity(completion)} '
+                                                                      '${widget.assignment.uom}.'
+                                                                : '${defect > 0 ? 'Tổng hoàn thành và phế vượt' : 'Vượt'} '
+                                                                      'số còn lại ${_displayQuantity(remainingMax)} '
+                                                                      '${widget.assignment.uom}.',
+                                                          ),
+                                                        const SizedBox(
+                                                          height: 12,
+                                                        ),
+                                                        ClipRRect(
+                                                          borderRadius:
+                                                              BorderRadius.circular(
+                                                                8,
+                                                              ),
+                                                          child: LinearProgressIndicator(
+                                                            value:
+                                                                completionPercent,
+                                                            minHeight: 7,
+                                                            backgroundColor:
+                                                                CaslaColors
+                                                                    .line,
+                                                            color: CaslaColors
+                                                                .success,
+                                                          ),
+                                                        ),
+                                                        const SizedBox(
+                                                          height: 6,
+                                                        ),
+                                                        Row(
+                                                          mainAxisAlignment:
+                                                              MainAxisAlignment
+                                                                  .spaceBetween,
+                                                          children: [
+                                                            Text(
+                                                              '${formatCompletionPercent(completionPercent)} hoàn thành',
+                                                              style: const TextStyle(
+                                                                fontSize: 13,
+                                                                color:
+                                                                    CaslaColors
+                                                                        .muted,
+                                                              ),
+                                                            ),
+                                                            Text(
+                                                              'còn ${_displayQuantity(balance)} ${widget.assignment.uom}',
+                                                              style: const TextStyle(
+                                                                fontSize: 15,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w800,
+                                                                color: CaslaColors
+                                                                    .primaryNavy,
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                        const Divider(
+                                                          height: 22,
+                                                        ),
+                                                        DefectQuantitySection(
+                                                          enabled:
+                                                              defectEnabled,
+                                                          controller:
+                                                              defectController,
+                                                          unit: widget
+                                                              .assignment
+                                                              .uom,
+                                                          error: defectError,
+                                                          onToggle: (enabled) {
+                                                            setModalState(() {
+                                                              defectEnabled =
+                                                                  enabled;
+                                                              if (!enabled) {
+                                                                defectController
+                                                                    .clear();
+                                                              }
+                                                              final remainingAfterEntry =
+                                                                  mode ==
+                                                                      _CompletionEntryMode
+                                                                          .completed
+                                                                  ? remainingMax -
+                                                                        (parseLocalizedQuantity(
+                                                                              completedController.text,
+                                                                            ) ??
+                                                                            0)
+                                                                  : (parseLocalizedQuantity(
+                                                                          remainingController
+                                                                              .text,
+                                                                        ) ??
+                                                                        remainingMax);
+                                                              updateAutomaticRecall(
+                                                                remainingAfterEntry -
+                                                                    (enabled
+                                                                        ? (parseLocalizedQuantity(
+                                                                                defectController.text,
+                                                                              ) ??
+                                                                              0)
+                                                                        : 0),
+                                                              );
+                                                              if (mode ==
+                                                                  _CompletionEntryMode
+                                                                      .remaining) {
+                                                                completedController
+                                                                    .text = ProductionMath.formatQuantity(
+                                                                  (remainingAfterEntry -
+                                                                          (enabled
+                                                                              ? (parseLocalizedQuantity(
+                                                                                      defectController.text,
+                                                                                    ) ??
+                                                                                    0)
+                                                                              : 0))
+                                                                      .clamp(
+                                                                        0.0,
+                                                                        double
+                                                                            .infinity,
+                                                                      ),
+                                                                );
+                                                              } else {
+                                                                remainingController
+                                                                    .text = ProductionMath.formatQuantity(
+                                                                  (remainingAfterEntry -
+                                                                          (enabled
+                                                                              ? (parseLocalizedQuantity(
+                                                                                      defectController.text,
+                                                                                    ) ??
+                                                                                    0)
+                                                                              : 0))
+                                                                      .clamp(
+                                                                        0.0,
+                                                                        double
+                                                                            .infinity,
+                                                                      ),
+                                                                );
+                                                              }
+                                                            });
+                                                          },
+                                                          onChanged: setDefect,
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ),
+                                              if (_canRecall) ...[
+                                                if (_canConfirm)
+                                                  const SizedBox(height: 12),
+                                                _RecallSection(
+                                                  enabled: recallEnabled,
+                                                  controller: recallController,
+                                                  unit: widget.assignment.uom,
+                                                  error: recallError,
+                                                  noPasswordOffered:
+                                                      _canRecallWithoutPassword,
+                                                  noPassword: noPassword,
+                                                  onNoPasswordChanged: (enabled) {
+                                                    // A focused field would still take keys.
+                                                    FocusManager
+                                                        .instance
+                                                        .primaryFocus
+                                                        ?.unfocus();
+                                                    setModalState(() {
+                                                      recallWithoutPassword =
+                                                          enabled;
+                                                      completedController
+                                                          .clear();
+                                                      remainingController
+                                                          .clear();
+                                                      defectController.clear();
+                                                      mode =
+                                                          _CompletionEntryMode
+                                                              .completed;
+                                                      defectEnabled = false;
+                                                      recallAutomatic = true;
+                                                      recallController.text =
+                                                          ProductionMath.formatQuantity(
+                                                            remainingMax.clamp(
+                                                              0.0,
+                                                              double.infinity,
+                                                            ),
                                                           );
-                                                        }
-                                                      },
-                                                    );
-                                                    if (!sheetContext.mounted) {
-                                                      return;
-                                                    }
-                                                    setModalState(
-                                                      () => submitting = false,
-                                                    );
-                                                    if (saved) {
-                                                      _closeConfirmation(
-                                                        sheetContext,
-                                                      );
-                                                    }
-                                                  }
-                                                : null,
-                                            child: const Text('Xác nhận'),
+                                                    });
+                                                  },
+                                                  onToggle: (enabled) {
+                                                    setModalState(() {
+                                                      recallEnabled = enabled;
+                                                      if (!enabled) {
+                                                        recallWithoutPassword =
+                                                            false;
+                                                      }
+                                                      recallAutomatic = true;
+                                                      recallController.text =
+                                                          enabled
+                                                          ? ProductionMath.formatQuantity(
+                                                              balance,
+                                                            )
+                                                          : '';
+                                                    });
+                                                  },
+                                                  onChanged: (_) =>
+                                                      setModalState(() {
+                                                        recallAutomatic = false;
+                                                      }),
+                                                ),
+                                              ],
+                                              const SizedBox(height: 14),
+                                              Container(
+                                                width: double.infinity,
+                                                padding: const EdgeInsets.all(
+                                                  12,
+                                                ),
+                                                decoration: const BoxDecoration(
+                                                  color: CaslaColors.muted100,
+                                                  borderRadius:
+                                                      BorderRadius.all(
+                                                        Radius.circular(12),
+                                                      ),
+                                                ),
+                                                child: Column(
+                                                  children: [
+                                                    if (_canConfirm &&
+                                                        !noPassword)
+                                                      _SummaryLine(
+                                                        label:
+                                                            'Ghi nhận hoàn thành',
+                                                        value:
+                                                            '+${_displayQuantity(completion)} ${widget.assignment.uom}',
+                                                      ),
+                                                    if (defectEnabled)
+                                                      _SummaryLine(
+                                                        label:
+                                                            'Ghi nhận số phế',
+                                                        value:
+                                                            '+${_displayQuantity(defect)} ${widget.assignment.uom}',
+                                                      ),
+                                                    if (recallEnabled)
+                                                      _SummaryLine(
+                                                        label:
+                                                            'Thu hồi lượt này',
+                                                        value:
+                                                            '${_displayQuantity(recall)} ${widget.assignment.uom}',
+                                                      ),
+                                                    // What stays with the worker once this entry is booked:
+                                                    // the recall leaves the seat too, so it comes off here.
+                                                    // `balance` alone is only the ceiling for the recall.
+                                                    _SummaryLine(
+                                                      label:
+                                                          _canConfirm &&
+                                                              !noPassword
+                                                          ? 'Còn lại thực tế'
+                                                          : 'Còn lại sau thu hồi',
+                                                      value:
+                                                          '${_displayQuantity((balance - recall).clamp(0.0, double.infinity))} ${widget.assignment.uom}',
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ],
                                           ),
                                         ),
                                       ],
@@ -1020,8 +1209,80 @@ class _S08AssignmentDetailScreenState
                                 ],
                               ),
                             ),
-                          ],
-                        ),
+                          ),
+                          // Pinned under the scrolling form, above the keyboard: the
+                          // supervisor confirms without scrolling past the defect and
+                          // recall sections.
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+                            decoration: const BoxDecoration(
+                              color: CaslaColors.surface,
+                              border: Border(
+                                top: BorderSide(color: CaslaColors.line),
+                              ),
+                            ),
+                            child: SizedBox(
+                              width: double.infinity,
+                              child: OutlinedButton(
+                                onPressed: canSave && !submitting
+                                    ? () async {
+                                        FocusScope.of(sheetContext).unfocus();
+                                        setModalState(() => submitting = true);
+                                        final saved =
+                                            await _submitConfirmationDraft(
+                                              _ConfirmationDraft(
+                                                completed:
+                                                    ProductionMath.toSapScale(
+                                                      completion,
+                                                    ),
+                                                defect:
+                                                    ProductionMath.toSapScale(
+                                                      defect,
+                                                    ),
+                                                recalled:
+                                                    ProductionMath.toSapScale(
+                                                      recall,
+                                                    ),
+                                                expectedRemaining:
+                                                    mode ==
+                                                        _CompletionEntryMode
+                                                            .remaining
+                                                    ? ProductionMath.toSapScale(
+                                                        remainingMax,
+                                                      )
+                                                    : null,
+                                                remainingAfter:
+                                                    ProductionMath.toSapScale(
+                                                      balance,
+                                                    ),
+                                                withoutWorkerPassword:
+                                                    noPassword,
+                                              ),
+                                              onProcessing: (value) {
+                                                if (sheetContext.mounted) {
+                                                  setModalState(
+                                                    () => processing = value,
+                                                  );
+                                                }
+                                              },
+                                            );
+                                        if (!sheetContext.mounted) {
+                                          return;
+                                        }
+                                        setModalState(() => submitting = false);
+                                        if (saved) {
+                                          _closeConfirmation(sheetContext);
+                                        }
+                                      }
+                                    : null,
+                                child: Text(
+                                  noPassword ? 'Thu hồi' : 'Xác nhận',
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
@@ -1107,78 +1368,109 @@ class _S08AssignmentDetailScreenState
         executedAt: DateTime.now(),
       );
       if (shiftError != null) throw Exception(shiftError);
-      // The first write is what proves the password; a refused password rolls
-      // it back (nothing is queued) and the popup opens again, up to 3 times.
-      final run = await runWithWorkerPassword<MutationReceipt?>(
-        context,
-        workerName: widget.assignment.workerName,
-        actionLabel: 'xác nhận số đạt, số phế và thu hồi lên SAP',
-        // Once any grouped part is saved, a retry would post it twice.
-        isWrongPassword: (receipt) =>
-            !savedAnyPart && receipt?.isWrongWorkerPassword == true,
-        submit: (workerPassword) async {
-          onProcessing(true);
-          try {
-            final latestShiftError = validateShiftExecution(
-              shift: activeShift,
-              businessDate: DateTime.parse(businessDate),
-              executedAt: DateTime.now(),
+      Future<MutationReceipt?> submitWith(String? workerPassword) async {
+        onProcessing(true);
+        try {
+          final latestShiftError = validateShiftExecution(
+            shift: activeShift,
+            businessDate: DateTime.parse(businessDate),
+            executedAt: DateTime.now(),
+          );
+          if (latestShiftError != null) throw Exception(latestShiftError);
+          if (!appState.isSessionGenerationCurrent(generation)) {
+            throw Exception(
+              'Phiên đăng nhập đã thay đổi. Vui lòng mở lại thao tác.',
             );
-            if (latestShiftError != null) throw Exception(latestShiftError);
-            if (!appState.isSessionGenerationCurrent(generation)) {
-              throw Exception(
-                'Phiên đăng nhập đã thay đổi. Vui lòng mở lại thao tác.',
-              );
-            }
-            productionReceipt = null;
-            recallReceipt = null;
-            if (draft.completed > 0 || draft.defect > 0) {
-              productionReceipt = await _submitParts(
-                parts.where((part) => part.completed > 0 || part.defect > 0),
-                onSaved: () => savedAnyPart = true,
-                submit: (part) => appState.productionRepo.recordProduction(
-                  assignmentId: part.assignment.id,
-                  quantity: part.completed,
-                  defectQuantity: part.defect,
-                  businessDate: businessDate,
-                  shiftId: activeShift.shiftId,
-                  createdBy: supervisorMaNv,
-                  workerPassword: workerPassword,
-                  // Remaining-mode entry guards each allocation against a
-                  // balance that moved since the form opened.
-                  expectedRemaining: draft.expectedRemaining == null
-                      ? null
-                      : _isGroup
-                      ? part.assignment.remaining
-                      : draft.expectedRemaining,
-                ),
-              );
-            }
-            if (productionReceipt?.isRefused != true && draft.recalled > 0) {
-              recallReceipt = await _submitParts(
-                parts.where((part) => part.recalled > 0),
-                onSaved: () => savedAnyPart = true,
-                submit: (part) => appState.recallRepo.recallAssignment(
-                  assignmentId: part.assignment.id,
-                  quantity: part.recalled,
-                  reasonCode: RecallReason.notFinished.code,
-                  note: null,
-                  businessDate: businessDate,
-                  shiftId: activeShift.shiftId,
-                  createdBy: supervisorMaNv,
-                  workerPassword: workerPassword,
-                ),
-              );
-            }
-            return productionReceipt ?? recallReceipt;
-          } finally {
-            onProcessing(false);
           }
-        },
-      );
-      // Three wrong passwords: the notice is up and the popup has closed.
-      // The worker belongs to the assignment, so there is nothing to clear.
-      if (!mounted || run.cancelled || run.exhausted) return savedAnyPart;
+          productionReceipt = null;
+          recallReceipt = null;
+          if (draft.completed > 0 || draft.defect > 0) {
+            productionReceipt = await _submitParts(
+              parts.where((part) => part.completed > 0 || part.defect > 0),
+              onSaved: () => savedAnyPart = true,
+              submit: (part) => appState.productionRepo.recordProduction(
+                assignmentId: part.assignment.id,
+                quantity: part.completed,
+                defectQuantity: part.defect,
+                businessDate: businessDate,
+                shiftId: activeShift.shiftId,
+                createdBy: supervisorMaNv,
+                workerPassword: workerPassword,
+                // Remaining-mode entry guards each allocation against a
+                // balance that moved since the form opened. The store
+                // checks the allocation's own figure, so that is what
+                // travels whenever the form showed the seat's balance
+                // instead (a group, or a lot reopened by its seat).
+                expectedRemaining: draft.expectedRemaining == null
+                    ? null
+                    : _isGroup || part.assignment.seatRemaining != null
+                    ? part.assignment.remaining
+                    : draft.expectedRemaining,
+              ),
+            );
+          }
+          if (productionReceipt?.isRefused != true && draft.recalled > 0) {
+            recallReceipt = await _submitParts(
+              parts.where((part) => part.recalled > 0),
+              onSaved: () => savedAnyPart = true,
+              submit: (part) => appState.recallRepo.recallAssignment(
+                assignmentId: part.assignment.id,
+                quantity: part.recalled,
+                reasonCode: RecallReason.notFinished.code,
+                note: null,
+                businessDate: businessDate,
+                shiftId: activeShift.shiftId,
+                createdBy: supervisorMaNv,
+                workerPassword: workerPassword,
+                withoutWorkerPassword: draft.withoutWorkerPassword,
+                // The form validated the recall against the pile's balance
+                // (seat or group), which SAP also settles against. The lot
+                // it is booked on may have nothing of its own left, e.g.
+                // when the confirmation just closed it: its own ceiling
+                // must not refuse what the form and SAP allow.
+                seatCeiling: _isGroup || part.assignment.seatRemaining != null
+                    ? draft.remainingAfter
+                    : null,
+              ),
+            );
+          }
+          return productionReceipt ?? recallReceipt;
+        } finally {
+          onProcessing(false);
+        }
+      }
+
+      if (draft.withoutWorkerPassword) {
+        // No worker is there to sign: the supervisor confirms the figure
+        // instead, then the one recall goes straight to SAP.
+        if (!await _confirmRecallWithoutPassword(draft.recalled)) {
+          return false;
+        }
+        await submitWith(null);
+        if (!mounted) return savedAnyPart;
+      } else {
+        // The first write is what proves the password; a refused password rolls
+        // it back (nothing is queued) and the popup opens again, up to 3 times.
+        final run = await runWithWorkerPassword<MutationReceipt?>(
+          context,
+          workerName: widget.assignment.workerName,
+          actionLabel: 'xác nhận số đạt, số phế và thu hồi lên SAP',
+          // The worker signs for these figures: show them.
+          summary: WorkerQuantitySummary.forAssignment(
+            widget.assignment,
+            completed: draft.completed,
+            defect: draft.defect,
+            recalled: draft.recalled,
+          ),
+          // Once any grouped part is saved, a retry would post it twice.
+          isWrongPassword: (receipt) =>
+              !savedAnyPart && receipt?.isWrongWorkerPassword == true,
+          submit: submitWith,
+        );
+        // Three wrong passwords: the notice is up and the popup has closed.
+        // The worker belongs to the assignment, so there is nothing to clear.
+        if (!mounted || run.cancelled || run.exhausted) return savedAnyPart;
+      }
       // Captured by the submit closure above, so copy for type promotion.
       final production = productionReceipt;
       final recall = recallReceipt;
@@ -1246,6 +1538,18 @@ class _S08AssignmentDetailScreenState
       onProcessing(false);
       if (mounted) setState(() => _isSubmitting = false);
     }
+  }
+
+  /// Stands in for the password popup of a password-less recall: the
+  /// supervisor reads the figure once more before it leaves for SAP.
+  Future<bool> _confirmRecallWithoutPassword(double quantity) async {
+    if (!mounted) return false;
+    return showRecallRemainingConfirmDialog(
+      context,
+      quantityText: _displayQuantity(quantity),
+      uom: widget.assignment.uom,
+      workerName: widget.assignment.workerName,
+    );
   }
 
   /// Submits one write per allocation, in order, and folds the receipts into
@@ -1355,46 +1659,33 @@ class _S08AssignmentDetailScreenState
       builder: (dialogContext) => AlertDialog(
         backgroundColor: CaslaColors.surface,
         surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-        titlePadding: const EdgeInsets.fromLTRB(22, 22, 22, 0),
-        contentPadding: const EdgeInsets.fromLTRB(22, 12, 22, 20),
-        actionsPadding: const EdgeInsets.fromLTRB(22, 0, 22, 18),
-        title: Row(
-          children: [
-            Container(
-              width: 42,
-              height: 42,
-              decoration: BoxDecoration(
-                color: (success ? CaslaColors.success : CaslaColors.danger)
-                    .withValues(alpha: 0.12),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                success ? Icons.check_rounded : Icons.error_outline_rounded,
-                color: success ? CaslaColors.success : CaslaColors.danger,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w800,
-                  color: CaslaColors.primaryNavy,
+        titlePadding: CaslaDialog.titlePadding,
+        contentPadding: CaslaDialog.contentPadding,
+        title: CaslaDialogHeader(
+          child: Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: (success ? CaslaColors.success : CaslaColors.danger)
+                      .withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  success ? Icons.check_rounded : Icons.error_outline_rounded,
+                  color: success ? CaslaColors.success : CaslaColors.danger,
+                  size: 20,
                 ),
               ),
-            ),
-          ],
+              const SizedBox(width: 10),
+              Expanded(child: Text(title)),
+            ],
+          ),
         ),
         content: Text(
           message,
-          style: const TextStyle(
-            fontSize: 14,
-            height: 1.45,
-            color: CaslaColors.muted,
-          ),
+          style: const TextStyle(color: CaslaColors.muted),
         ),
         actions: [
           SizedBox(
@@ -1406,11 +1697,11 @@ class _S08AssignmentDetailScreenState
                     ? CaslaColors.primaryNavy
                     : CaslaColors.danger,
                 foregroundColor: Colors.white,
-                minimumSize: const Size.fromHeight(48),
+                minimumSize: const Size.fromHeight(CaslaDialog.buttonHeight),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
-              ),
+              ).merge(CaslaDialog.actionStyle),
               child: const Text('Đã hiểu'),
             ),
           ),
@@ -1448,7 +1739,7 @@ class _S08AssignmentDetailScreenState
       if (label.isNotEmpty) return label;
     }
 
-    return teamId.isNotEmpty ? teamId : 'Chưa xác định bộ phận';
+    return teamId.isNotEmpty ? teamId : 'Chưa xác định tổ';
   }
 
   String _workContextDisplayLabel(UserWorkContext context) {
@@ -1465,508 +1756,49 @@ class _S08AssignmentDetailScreenState
 
   @override
   Widget build(BuildContext context) {
-    if (widget.openConfirmation) {
+    if (!_canOpenConfirmation) {
+      // The router keeps accounts without PP_CONFIRM or PP_RECALL off this
+      // route; this is what one sees if it is reached anyway.
       return Scaffold(
         backgroundColor: CaslaColors.background,
-        resizeToAvoidBottomInset: false,
-        body: StreamBuilder<Assignment?>(
-          stream: _assignmentStream,
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            if (snapshot.hasError || snapshot.data == null) {
-              return const Center(
-                child: Text(
-                  'Chưa tải được số lượng phân công. Vui lòng mở lại.',
-                ),
-              );
-            }
-            // Keep the submitted draft stable while the atomic write emits
-            // its updated balance. Otherwise the remaining-mode input changes
-            // meaning underneath the in-flight confirmation.
-            if (!submitting) {
-              _currentAssignment = snapshot.data!;
-              _groupMembers = _latestGroupMembers;
-            }
-            return _buildConfirmationForm(
-              context,
-              _currentAssignment.remaining,
-            );
-          },
+        appBar: AppBar(
+          backgroundColor: CaslaColors.primaryNavy,
+          foregroundColor: Colors.white,
+          title: const Text('Xác nhận sản lượng'),
+        ),
+        body: const CaslaEmptyState(
+          icon: Icons.lock_outline,
+          title: 'Không có quyền xác nhận',
+          message: 'Tài khoản này không được xác nhận hoặc thu hồi sản lượng.',
         ),
       );
     }
-    final appState = ref.watch(appStateProvider);
-    final canRecall =
-        appState.currentSession?.hasPermission(Permission.recallAssignment) ==
-        true;
-
-    return Stack(
-      children: [
-        Scaffold(
-          backgroundColor: CaslaColors.background,
-          appBar: AppBar(
-            backgroundColor: CaslaColors.primaryNavy,
-            foregroundColor: Colors.white,
-            leading: IconButton(
-              icon: const Icon(Icons.arrow_back),
-              onPressed: () => context.pop(),
-            ),
-            title: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  widget.assignment.orderCode,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontFamily: 'Manrope',
-                    fontWeight: FontWeight.w800,
-                    fontSize: 19,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  '${widget.assignment.productName} · ${widget.assignment.workerName}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontFamily: 'Inter',
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w500,
-                    color: CaslaColors.identityMeta,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          body: StreamBuilder<Assignment?>(
-            stream: _assignmentStream,
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting &&
-                  !snapshot.hasData) {
-                return const _AssignmentDetailSkeleton();
-              }
-              if (snapshot.hasError) {
-                return const CaslaEmptyState(
-                  icon: Icons.cloud_off_outlined,
-                  title: 'Không tải được phân công',
-                  message:
-                      'Dữ liệu trên thiết bị chưa bị thay đổi. Hãy quay lại và thử lần nữa.',
-                );
-              }
-              final assignment = snapshot.data;
-              if (assignment == null) {
-                return const CaslaEmptyState(
-                  icon: Icons.assignment_late_outlined,
-                  title: 'Không tìm thấy phân công',
-                  message:
-                      'Phân công có thể đã được thay đổi hoặc không còn tồn tại.',
-                );
-              }
-
-              final effective = assignment.effectiveAssigned;
-              if (!submitting) _currentAssignment = assignment;
-              final completed = assignment.completedQuantity;
-              final remaining = assignment.remaining;
-              final recalled = assignment.recalledQuantity;
-              final initialAssigned = assignment.assignedQuantity;
-              final pct = effective > 0 ? (completed / effective) : 0.0;
-
-              return Column(
-                children: [
-                  Expanded(
-                    child: StreamBuilder<List<Map<String, dynamic>>>(
-                      stream: _recordsStream,
-                      builder: (context, recordsSnapshot) {
-                        if (recordsSnapshot.connectionState ==
-                                ConnectionState.waiting &&
-                            !recordsSnapshot.hasData) {
-                          return const _AssignmentDetailSkeleton();
-                        }
-                        final recordsLoadFailed = recordsSnapshot.hasError;
-                        final records = recordsSnapshot.data ?? [];
-
-                        return SingleChildScrollView(
-                          padding: const EdgeInsets.all(18),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              // KPI 2 cards
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: KpiCard(
-                                      label: 'Giao ban đầu',
-                                      value: _displayQuantity(initialAssigned),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: KpiCard(
-                                      label: 'Đã thu hồi',
-                                      value: _displayQuantity(recalled),
-                                      valueColor: CaslaColors.danger,
-                                    ),
-                                  ),
-                                ],
-                              ),
-
-                              const SizedBox(height: 12),
-
-                              // Ring progress card
-                              RingProgressCard(
-                                percentage: pct,
-                                remainingValue: _displayQuantity(remaining),
-                                detailText:
-                                    'Giao hiệu lực ${_displayQuantity(effective)} · Hoàn thành ${_displayQuantity(completed)} · Phế ${_displayQuantity(assignment.defectQuantity)}',
-                              ),
-
-                              const SizedBox(height: 20),
-
-                              const Text(
-                                'Lịch sử giao dịch',
-                                style: TextStyle(
-                                  fontFamily: 'Manrope',
-                                  fontWeight: FontWeight.w800,
-                                  fontSize: 14,
-                                  color: CaslaColors.primaryNavy,
-                                ),
-                              ),
-                              const SizedBox(height: 10),
-
-                              if (recordsLoadFailed)
-                                Container(
-                                  padding: const EdgeInsets.all(16),
-                                  decoration: BoxDecoration(
-                                    color: CaslaColors.dangerBg,
-                                    border: Border.all(
-                                      color: CaslaColors.danger.withValues(
-                                        alpha: 0.35,
-                                      ),
-                                    ),
-                                    borderRadius: BorderRadius.circular(14),
-                                  ),
-                                  child: const Row(
-                                    children: [
-                                      Icon(
-                                        Icons.history_toggle_off_outlined,
-                                        color: CaslaColors.danger,
-                                      ),
-                                      SizedBox(width: 10),
-                                      Expanded(
-                                        child: Text(
-                                          'Chưa tải được lịch sử. Số liệu phân công phía trên vẫn dùng được.',
-                                          style: TextStyle(
-                                            color: CaslaColors.danger,
-                                            fontSize: 12.5,
-                                            height: 1.4,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                )
-                              else if (records.isEmpty)
-                                Container(
-                                  padding: const EdgeInsets.all(16),
-                                  decoration: BoxDecoration(
-                                    color: CaslaColors.surface,
-                                    border: Border.all(color: CaslaColors.line),
-                                    borderRadius: BorderRadius.circular(14),
-                                  ),
-                                  child: const Center(
-                                    child: Text(
-                                      'Chưa có giao dịch nào được ghi nhận.',
-                                      style: TextStyle(
-                                        color: CaslaColors.muted,
-                                        fontSize: 13,
-                                      ),
-                                    ),
-                                  ),
-                                )
-                              else
-                                ListView.separated(
-                                  shrinkWrap: true,
-                                  physics: const NeverScrollableScrollPhysics(),
-                                  itemCount: records.length,
-                                  separatorBuilder: (_, _) =>
-                                      const SizedBox(height: 8),
-                                  itemBuilder: (context, index) {
-                                    final r = records[index];
-                                    final timeStr = DateFormat('HH:mm').format(
-                                      DateTime.fromMillisecondsSinceEpoch(
-                                        r['occurred_at_utc'] ?? 0,
-                                      ),
-                                    );
-
-                                    return Container(
-                                      padding: const EdgeInsets.all(12),
-                                      decoration: BoxDecoration(
-                                        color: CaslaColors.surface,
-                                        border: Border.all(
-                                          color: CaslaColors.line,
-                                        ),
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          Container(
-                                            width: 8,
-                                            height: 8,
-                                            decoration: const BoxDecoration(
-                                              color: CaslaColors.success,
-                                              shape: BoxShape.circle,
-                                            ),
-                                          ),
-                                          const SizedBox(width: 12),
-                                          Expanded(
-                                            child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              children: [
-                                                const Text(
-                                                  'Xác nhận hoàn thành',
-                                                  style: TextStyle(
-                                                    fontWeight: FontWeight.w700,
-                                                    fontSize: 13,
-                                                    color:
-                                                        CaslaColors.primaryNavy,
-                                                  ),
-                                                ),
-                                                const SizedBox(height: 2),
-                                                Text(
-                                                  '$timeStr · Xác nhận bởi ${r['created_by']}',
-                                                  style: const TextStyle(
-                                                    fontFamily: 'monospace',
-                                                    fontSize: 11,
-                                                    color: CaslaColors.muted,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                          Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.end,
-                                            children: [
-                                              Text(
-                                                '+${_displayQuantity((r['quantity'] as num).toDouble())}',
-                                                style: const TextStyle(
-                                                  fontFamily: 'monospace',
-                                                  fontWeight: FontWeight.w700,
-                                                  fontSize: 14,
-                                                  color: CaslaColors.success,
-                                                ),
-                                              ),
-                                              if (((r['defect_quantity']
-                                                              as num?)
-                                                          ?.toDouble() ??
-                                                      0) >
-                                                  0)
-                                                Padding(
-                                                  padding:
-                                                      const EdgeInsets.only(
-                                                        top: 2,
-                                                      ),
-                                                  child: Text(
-                                                    'Phế +${_displayQuantity((r['defect_quantity'] as num).toDouble())}',
-                                                    style: const TextStyle(
-                                                      fontFamily: 'monospace',
-                                                      fontWeight:
-                                                          FontWeight.w700,
-                                                      fontSize: 11,
-                                                      color: CaslaColors.scrap,
-                                                    ),
-                                                  ),
-                                                ),
-                                              const SizedBox(height: 2),
-                                              StatusChip(
-                                                status:
-                                                    r['sync_status'] ??
-                                                    'SYNCED',
-                                              ),
-                                            ],
-                                          ),
-                                        ],
-                                      ),
-                                    );
-                                  },
-                                ),
-                            ],
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-
-                  // Bottom Action Buttons
-                  Container(
-                    padding: const EdgeInsets.all(18),
-                    decoration: const BoxDecoration(
-                      color: CaslaColors.surface,
-                      border: Border(top: BorderSide(color: CaslaColors.line)),
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        ElevatedButton.icon(
-                          onPressed: remaining <= 0 || _isSubmitting
-                              ? null
-                              : () => _openConfirmCompletionSheet(remaining),
-                          icon: const Icon(Icons.check_circle_outline),
-                          label: Text(
-                            _isSubmitting
-                                ? 'Đang gửi giao dịch'
-                                : 'Xác nhận hoàn thành',
-                          ),
-                        ),
-                        if (canRecall) ...[
-                          const SizedBox(height: 8),
-                          OutlinedButton.icon(
-                            onPressed: remaining <= 0 || _isSubmitting
-                                ? null
-                                : () {
-                                    context.push(
-                                      '/supervisor/recall_assignment',
-                                      extra: assignment,
-                                    );
-                                  },
-                            icon: const Icon(Icons.undo),
-                            label: const Text('Thu hồi phần chưa làm'),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: CaslaColors.danger,
-                              side: const BorderSide(color: CaslaColors.danger),
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ],
-              );
-            },
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _DefectSection extends StatelessWidget {
-  final bool enabled;
-  final TextEditingController controller;
-  final String unit;
-  final String? error;
-  final ValueChanged<bool> onToggle;
-  final ValueChanged<String> onChanged;
-
-  const _DefectSection({
-    required this.enabled,
-    required this.controller,
-    required this.unit,
-    required this.error,
-    required this.onToggle,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        border: Border.all(
-          color: enabled ? CaslaColors.danger : CaslaColors.line,
-        ),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Material(
-            color: enabled ? CaslaColors.dangerBg : CaslaColors.surface,
-            child: InkWell(
-              onTap: () => onToggle(!enabled),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(4, 8, 12, 8),
-                child: Row(
-                  children: [
-                    Checkbox(
-                      value: enabled,
-                      activeColor: CaslaColors.danger,
-                      onChanged: (value) => onToggle(value ?? false),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                    ),
-                    const Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Có số lượng phế',
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                              color: CaslaColors.primaryNavy,
-                            ),
-                          ),
-                          SizedBox(height: 2),
-                          Text(
-                            'Tích để nhập số lượng sản phẩm phế',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: CaslaColors.muted,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Icon(
-                      enabled ? Icons.expand_less : Icons.expand_more,
-                      size: 20,
-                      color: CaslaColors.muted,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          if (enabled)
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  TextField(
-                    key: const ValueKey('defect-quantity'),
-                    controller: controller,
-                    onChanged: onChanged,
-                    textAlign: TextAlign.right,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    decoration: InputDecoration(
-                      labelText: 'Số lượng phế',
-                      suffixText: ' $unit',
-                      errorText: error,
-                      errorMaxLines: 2,
-                      isDense: true,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(9),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Số phế được gửi riêng và vẫn trừ vào số lượng còn lại.',
-                    style: TextStyle(fontSize: 11, color: CaslaColors.muted),
-                  ),
-                ],
-              ),
-            ),
-        ],
+    return Scaffold(
+      backgroundColor: CaslaColors.background,
+      resizeToAvoidBottomInset: false,
+      body: StreamBuilder<Assignment?>(
+        stream: _assignmentStream,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snapshot.hasError || snapshot.data == null) {
+            return const Center(
+              child: Text('Chưa tải được số lượng phân công. Vui lòng mở lại.'),
+            );
+          }
+          // Keep the submitted draft stable while the atomic write emits
+          // its updated balance. Otherwise the remaining-mode input changes
+          // meaning underneath the in-flight confirmation.
+          if (!submitting) {
+            _currentAssignment = snapshot.data!;
+            _groupMembers = _latestGroupMembers;
+          }
+          return _buildConfirmationForm(
+            context,
+            _currentAssignment.groupRemaining,
+          );
+        },
       ),
     );
   }
@@ -1980,6 +1812,14 @@ class _RecallSection extends StatelessWidget {
   final ValueChanged<bool> onToggle;
   final ValueChanged<String> onChanged;
 
+  /// The account holds PP_RECALL_NOPASS: the open section also shows the
+  /// "Thu hồi không cần mật khẩu" tick box.
+  final bool noPasswordOffered;
+
+  /// That box is ticked: the quantity is everything left and cannot be edited.
+  final bool noPassword;
+  final ValueChanged<bool> onNoPasswordChanged;
+
   const _RecallSection({
     required this.enabled,
     required this.controller,
@@ -1987,6 +1827,9 @@ class _RecallSection extends StatelessWidget {
     required this.error,
     required this.onToggle,
     required this.onChanged,
+    required this.noPasswordOffered,
+    required this.noPassword,
+    required this.onNoPasswordChanged,
   });
 
   @override
@@ -2062,8 +1905,14 @@ class _RecallSection extends StatelessWidget {
                   TextField(
                     key: const ValueKey('recall-quantity'),
                     controller: controller,
+                    enabled: !noPassword,
                     onChanged: onChanged,
                     textAlign: TextAlign.right,
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                      color: CaslaColors.primaryNavy,
+                    ),
                     keyboardType: const TextInputType.numberWithOptions(
                       decimal: true,
                     ),
@@ -2078,11 +1927,46 @@ class _RecallSection extends StatelessWidget {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Tự điền số còn lại. Có thể sửa số lượng cần thu hồi.',
-                    style: TextStyle(fontSize: 11, color: CaslaColors.muted),
-                  ),
+                  // The quantity cannot be edited once the password-less box is
+                  // ticked, so the "you may edit it" hint goes away with it.
+                  if (!noPassword) ...[
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Tự điền số còn lại. Có thể sửa số lượng cần thu hồi.',
+                      style: TextStyle(fontSize: 13, color: CaslaColors.muted),
+                    ),
+                  ],
+                  if (noPasswordOffered) ...[
+                    const Divider(height: 20),
+                    InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: () => onNoPasswordChanged(!noPassword),
+                      child: Row(
+                        children: [
+                          Checkbox(
+                            key: const ValueKey('recall-without-password'),
+                            value: noPassword,
+                            activeColor: CaslaColors.gold700,
+                            onChanged: (value) =>
+                                onNoPasswordChanged(value ?? false),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                          ),
+                          const Expanded(
+                            child: Text(
+                              'Thu hồi không cần mật khẩu',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: CaslaColors.primaryNavy,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -2163,34 +2047,6 @@ class _ConfirmationSubmittingOverlay extends StatelessWidget {
   }
 }
 
-class _AssignmentDetailSkeleton extends StatelessWidget {
-  const _AssignmentDetailSkeleton();
-
-  @override
-  Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(18),
-      children: const [
-        Row(
-          children: [
-            Expanded(child: CaslaSkeleton(height: 84, radius: 12)),
-            SizedBox(width: 10),
-            Expanded(child: CaslaSkeleton(height: 84, radius: 12)),
-          ],
-        ),
-        SizedBox(height: 12),
-        CaslaSkeleton(height: 148, radius: 14),
-        SizedBox(height: 20),
-        CaslaSkeleton(width: 160, height: 18, radius: 6),
-        SizedBox(height: 10),
-        CaslaSkeleton(height: 68, radius: 12),
-        SizedBox(height: 8),
-        CaslaSkeleton(height: 68, radius: 12),
-      ],
-    );
-  }
-}
-
 class _ContextValue extends StatelessWidget {
   final String label;
   final String value;
@@ -2206,27 +2062,45 @@ class _ContextValue extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final shown = value.isEmpty ? '—' : value;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           label,
           style: TextStyle(
-            fontSize: emphasized ? 12 : 10.5,
+            fontSize: emphasized ? 13 : 12,
             color: CaslaColors.muted,
           ),
         ),
         const SizedBox(height: 2),
-        Text(
-          value.isEmpty ? '—' : value,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            fontSize: emphasized ? 15 : 12,
-            fontWeight: emphasized ? FontWeight.w800 : FontWeight.w700,
-            color: CaslaColors.primaryNavy,
+        if (emphasized)
+          // A figure stays on one line: a long one such as 12.500,5 scales
+          // down instead of breaking across lines in a quarter of the row.
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              shown,
+              maxLines: 1,
+              style: const TextStyle(
+                fontSize: 19,
+                fontWeight: FontWeight.w800,
+                color: CaslaColors.primaryNavy,
+              ),
+            ),
+          )
+        else
+          Text(
+            shown,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              color: CaslaColors.primaryNavy,
+            ),
           ),
-        ),
       ],
     );
   }
@@ -2241,14 +2115,14 @@ class _SummaryLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
+      padding: const EdgeInsets.symmetric(vertical: 5),
       child: Row(
         children: [
           Expanded(
             child: Text(
               label,
               style: const TextStyle(
-                fontSize: 12,
+                fontSize: 14,
                 color: CaslaColors.primaryNavy,
               ),
             ),
@@ -2257,7 +2131,7 @@ class _SummaryLine extends StatelessWidget {
             value,
             textAlign: TextAlign.right,
             style: const TextStyle(
-              fontSize: 12,
+              fontSize: 17,
               fontWeight: FontWeight.w800,
               color: CaslaColors.primaryNavy,
             ),

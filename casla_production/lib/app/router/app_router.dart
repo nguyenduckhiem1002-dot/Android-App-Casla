@@ -16,11 +16,12 @@ import '../../features/shared/screens/supervisor_shell.dart';
 import '../../features/supervisor/screens/s06b_employee_daily_detail_screen.dart';
 import '../../features/supervisor/screens/s07_create_assignment_wizard_screen.dart';
 import '../../features/supervisor/screens/s08_assignment_detail_screen.dart';
-import '../../features/supervisor/screens/s09_recall_screen.dart';
 import '../../features/supervisor/screens/s10_confirm_scan_screen.dart';
 import '../../features/supervisor/screens/s15_multi_confirm_screen.dart';
 import '../../features/sync/screens/s12_sync_screen.dart';
+import '../../domain/entities/work_history.dart';
 import '../../features/shared/screens/worker_shell.dart';
+import '../../features/worker/screens/w01_history_screen.dart';
 
 const _skipSupervisorSetupExtra = 'skip-supervisor-setup';
 
@@ -30,6 +31,7 @@ const _skipSupervisorSetupExtra = 'skip-supervisor-setup';
 const _resumableAfterSetup = {
   '/supervisor/confirm_scan',
   '/supervisor/create_assignment',
+  '/supervisor/confirm_direct',
   '/sync',
 };
 
@@ -134,24 +136,48 @@ final routerProvider = Provider<GoRouter>((ref) {
           return homeRoute;
         }
 
-        // A worker account only ever has the read-only history screen —
+        // A worker account only ever has the read-only history screens —
         // getWorkHistory decides self-vs-team scope server-side, so there is
-        // nothing else on this role to permission-gate below.
+        // nothing else on this role to permission-gate below. One worker's
+        // history opens from the team overview (PP_HIST_TEAM).
         if (session.role == UserRole.worker) {
-          return location == '/history' ? null : '/history';
+          return const {
+                '/history',
+                '/history/worker',
+                '/history/operation',
+              }.contains(location)
+              ? null
+              : '/history';
         }
 
-        final requiredPermission = switch (location) {
-          '/supervisor/create_assignment' => Permission.assignQuantity,
-          '/supervisor/recall_assignment' => Permission.recallAssignment,
-          '/supervisor/employee_detail' => Permission.viewEmployeeHistory,
-          // This screen only resolves a worker inside the supervisor's own
-          // scope and opens the same team-production detail available below.
-          '/supervisor/confirm_scan' => Permission.viewTeamProduction,
-          '/sync' => Permission.viewSyncStatus,
-          _ => Permission.viewTeamProduction,
+        // Any one of the listed permissions opens the route; null means every
+        // supervisor may open it.
+        final allowedBy = switch (location) {
+          // Every tab's top bar links here, including Vị trí alone.
+          '/account' => null,
+          '/supervisor/create_assignment' => {Permission.assignQuantity},
+          // Give-and-confirm: the confirm tab shows its button only with
+          // PP_CONFIRM as well; the route itself is an assignment form.
+          '/supervisor/confirm_direct' => {Permission.assignQuantity},
+          '/supervisor/employee_detail' => {Permission.viewEmployeeHistory},
+          // Each operation screen follows its own SAP FuncID. The scan tab
+          // also serves PP_RECALL: the "Xác nhận" form opens for either
+          // function and shows only the entries of the ones held.
+          // Multi-confirm is all confirmed-quantity entry, so PP_CONFIRM.
+          '/supervisor/confirm_scan' => {
+            Permission.confirmProduction,
+            Permission.recallAssignment,
+          },
+          '/supervisor/confirm_multi' => {Permission.confirmProduction},
+          '/supervisor/assignment_detail' => {
+            Permission.confirmProduction,
+            Permission.recallAssignment,
+          },
+          '/sync' => {Permission.viewSyncStatus},
+          _ => {Permission.viewTeamProduction},
         };
-        if (!session.hasPermission(requiredPermission) &&
+        if (allowedBy != null &&
+            !allowedBy.any(session.hasPermission) &&
             location != homeRoute) {
           return homeRoute;
         }
@@ -204,18 +230,19 @@ final routerProvider = Provider<GoRouter>((ref) {
                 const S07CreateAssignmentWizardScreen(),
           ),
           GoRoute(
+            path: 'confirm_direct',
+            builder: (context, state) =>
+                const S07CreateAssignmentWizardScreen(confirmImmediately: true),
+          ),
+          GoRoute(
             path: 'assignment_detail',
             builder: (context, state) {
               final extra = state.extra;
-              final assignment = extra is Assignment
-                  ? extra
-                  : extra is Map<String, dynamic> &&
-                        extra['assignment'] is Assignment
+              final assignment =
+                  extra is Map<String, dynamic> &&
+                      extra['assignment'] is Assignment
                   ? extra['assignment'] as Assignment
                   : null;
-              final openConfirmation = extra is Map<String, dynamic>
-                  ? extra['openConfirmation'] == true
-                  : false;
               final group =
                   extra is Map<String, dynamic> && extra['group'] is List
                   ? (extra['group'] as List).whereType<Assignment>().toList()
@@ -223,27 +250,12 @@ final routerProvider = Provider<GoRouter>((ref) {
               return assignment != null
                   ? S08AssignmentDetailScreen(
                       assignment: assignment,
-                      openConfirmation: openConfirmation,
                       confirmationGroup: group,
                     )
                   : const _RouteRecoveryScreen(
                       title: 'Thiếu thông tin phân công',
                       message:
                           'Phiên xem chi tiết đã hết hạn. Hãy mở lại phân công từ danh sách công nhân.',
-                      destination: '/supervisor',
-                    );
-            },
-          ),
-          GoRoute(
-            path: 'recall_assignment',
-            builder: (context, state) {
-              final assignment = state.extra;
-              return assignment is Assignment
-                  ? S09RecallScreen(assignment: assignment)
-                  : const _RouteRecoveryScreen(
-                      title: 'Thiếu thông tin phân công',
-                      message:
-                          'Không thể mở thao tác thu hồi từ đường dẫn này. Hãy chọn lại phân công cần xử lý.',
                       destination: '/supervisor',
                     );
             },
@@ -289,6 +301,39 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/history',
         builder: (context, state) => const WorkerShell(),
+        routes: [
+          // One worker's history, from a card of the team overview.
+          GoRoute(
+            path: 'worker',
+            builder: (context, state) {
+              final extra = state.extra is Map
+                  ? Map<String, dynamic>.from(state.extra as Map)
+                  : const <String, dynamic>{};
+              final range = extra['range'];
+              return W01HistoryScreen(
+                workerCode: extra['code']?.toString(),
+                workerName: extra['name']?.toString(),
+                initialRange: range is HistoryRange ? range : null,
+              );
+            },
+          ),
+          // One operation's history, from a scanned operation label.
+          GoRoute(
+            path: 'operation',
+            builder: (context, state) {
+              final extra = state.extra is Map
+                  ? Map<String, dynamic>.from(state.extra as Map)
+                  : const <String, dynamic>{};
+              final range = extra['range'];
+              return W01HistoryScreen(
+                productionOrder: extra['production_order']?.toString(),
+                operation: extra['operation']?.toString(),
+                operationName: extra['operation_name']?.toString(),
+                initialRange: range is HistoryRange ? range : null,
+              );
+            },
+          ),
+        ],
       ),
     ],
   );

@@ -3,16 +3,66 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../app/theme/casla_colors.dart';
+import '../../app/theme/casla_spacing.dart';
+import 'casla_dialog_header.dart';
+import '../../core/utils/quantity_formatter.dart';
+import '../../domain/entities/entities.dart';
 
 /// How many times a worker may re-enter a password SAP refused before the
 /// operation is abandoned.
 const int maxWorkerPasswordAttempts = 3;
+
+/// The figures about to be posted, shown above the password field so the
+/// worker reads what they are signing off.
+class WorkerQuantitySummary {
+  /// Employee number; hidden when blank or equal to the displayed name.
+  final String workerCode;
+  final String uom;
+
+  /// What an assignment gives the worker: the total over every operation
+  /// given in the same send.
+  final double assigned;
+
+  /// What a confirmation of several operations at once posts: the total over
+  /// every operation confirmed in the same send, shown on one line as
+  /// "SỐ LƯỢNG HOÀN THÀNH".
+  final double completedTotal;
+  final double completed;
+  final double defect;
+  final double recalled;
+
+  const WorkerQuantitySummary({
+    this.workerCode = '',
+    required this.uom,
+    this.assigned = 0,
+    this.completedTotal = 0,
+    this.completed = 0,
+    this.defect = 0,
+    this.recalled = 0,
+  });
+
+  factory WorkerQuantitySummary.forAssignment(
+    Assignment assignment, {
+    double completed = 0,
+    double defect = 0,
+    double recalled = 0,
+  }) {
+    return WorkerQuantitySummary(
+      workerCode: assignment.workerMaNv.trim(),
+      uom: assignment.uom,
+      completed: completed,
+      defect: defect,
+      recalled: recalled,
+    );
+  }
+}
 
 Future<String?> showWorkerVerificationDialog(
   BuildContext context, {
   required String workerName,
   required String actionLabel,
   String? errorText,
+  WorkerQuantitySummary? summary,
 }) {
   return showDialog<String>(
     context: context,
@@ -21,6 +71,7 @@ Future<String?> showWorkerVerificationDialog(
       workerName: workerName,
       actionLabel: actionLabel,
       initialError: errorText,
+      summary: summary,
     ),
   );
 }
@@ -51,6 +102,7 @@ Future<WorkerPasswordRun<T>> runWithWorkerPassword<T>(
   required String actionLabel,
   required Future<T> Function(String password) submit,
   required bool Function(T result) isWrongPassword,
+  WorkerQuantitySummary? summary,
 }) async {
   String? error;
   for (var attempt = 1; attempt <= maxWorkerPasswordAttempts; attempt++) {
@@ -60,6 +112,7 @@ Future<WorkerPasswordRun<T>> runWithWorkerPassword<T>(
       workerName: workerName,
       actionLabel: actionLabel,
       errorText: error,
+      summary: summary,
     );
     if (password == null) return const WorkerPasswordRun._(null);
     final result = await submit(password);
@@ -148,11 +201,13 @@ class _WorkerVerificationDialog extends StatefulWidget {
   final String workerName;
   final String actionLabel;
   final String? initialError;
+  final WorkerQuantitySummary? summary;
 
   const _WorkerVerificationDialog({
     required this.workerName,
     required this.actionLabel,
     this.initialError,
+    this.summary,
   });
 
   @override
@@ -191,23 +246,31 @@ class _WorkerVerificationDialogState extends State<_WorkerVerificationDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final summary = widget.summary;
     return AlertDialog(
+      titlePadding: CaslaDialog.titlePadding,
+      contentPadding: CaslaDialog.contentPadding,
       scrollable: true,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      title: const Text('Xác minh công nhân'),
-      titleTextStyle: Theme.of(context).textTheme.titleLarge,
+      // The theme's side gap; less above and below so the password field and
+      // buttons stay above the keyboard of a small PDA.
+      insetPadding: const EdgeInsets.symmetric(
+        horizontal: CaslaDialog.sideGap,
+        vertical: 12,
+      ),
+      title: const CaslaDialogHeader(child: Text('Xác minh công nhân')),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            '${widget.workerName} cần nhập mật khẩu SAP để ${widget.actionLabel.toLowerCase()}.',
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'Mật khẩu chỉ dùng cho lần gửi này và không được lưu trên thiết bị.',
-            style: TextStyle(fontSize: 12, color: CaslaColors.muted),
-          ),
+          if (summary == null)
+            Text(
+              '${widget.workerName} cần nhập mật khẩu SAP để ${widget.actionLabel.toLowerCase()}.',
+            )
+          else
+            _QuantitySummaryBlock(
+              workerName: widget.workerName,
+              summary: summary,
+            ),
           const SizedBox(height: 16),
           TextField(
             controller: _controller,
@@ -243,13 +306,214 @@ class _WorkerVerificationDialogState extends State<_WorkerVerificationDialog> {
           ),
         ],
       ),
-      actionsPadding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
       actionsOverflowButtonSpacing: 8,
       actions: [
-        TextButton(onPressed: _close, child: const Text('Hủy')),
+        TextButton(
+          style: CaslaDialog.actionStyle,
+          onPressed: _close,
+          child: const Text('Hủy'),
+        ),
         FilledButton(
+          style: CaslaDialog.actionStyle,
           onPressed: _submit,
           child: const Text('Xác minh & gửi SAP'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Who signs and the quantities about to be posted: the quantity given on
+/// one line, the non-zero confirmation figures side by side, each in a
+/// rounded frame.
+class _QuantitySummaryBlock extends StatelessWidget {
+  final String workerName;
+  final WorkerQuantitySummary summary;
+
+  const _QuantitySummaryBlock({
+    required this.workerName,
+    required this.summary,
+  });
+
+  String _format(double value) => formatQuantity(value, uom: summary.uom);
+
+  bool _shows(double value) => value > 0 && _format(value) != '0';
+
+  @override
+  Widget build(BuildContext context) {
+    final code = summary.workerCode.trim();
+    final figures = [
+      if (_shows(summary.completed))
+        _QuantityFigure(label: 'Số đạt', value: _format(summary.completed)),
+      if (_shows(summary.defect))
+        _QuantityFigure(label: 'Số phế', value: _format(summary.defect)),
+      if (_shows(summary.recalled))
+        _QuantityFigure(label: 'Thu hồi', value: _format(summary.recalled)),
+    ];
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text.rich(
+          TextSpan(
+            text: workerName,
+            style: const TextStyle(fontWeight: FontWeight.w700),
+            children: [
+              if (code.isNotEmpty && code != workerName.trim())
+                TextSpan(
+                  text: ' · $code',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w400,
+                    color: CaslaColors.muted,
+                  ),
+                ),
+            ],
+          ),
+        ),
+        if (_shows(summary.assigned)) ...[
+          const SizedBox(height: 10),
+          _TotalLine(
+            key: const ValueKey('worker-assigned-total'),
+            label: 'SỐ LƯỢNG GIAO',
+            value: _format(summary.assigned),
+          ),
+        ],
+        if (_shows(summary.completedTotal)) ...[
+          const SizedBox(height: 10),
+          _TotalLine(
+            key: const ValueKey('worker-completed-total'),
+            label: 'SỐ LƯỢNG HOÀN THÀNH',
+            value: _format(summary.completedTotal),
+          ),
+        ],
+        if (figures.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Container(
+            key: const ValueKey('worker-quantity-summary'),
+            padding: const EdgeInsets.symmetric(
+              horizontal: CaslaSpacing.sm,
+              vertical: CaslaSpacing.sm,
+            ),
+            decoration: BoxDecoration(
+              color: CaslaColors.muted100,
+              borderRadius: BorderRadius.circular(CaslaRadius.sm),
+            ),
+            child: Row(
+              children: [
+                for (var index = 0; index < figures.length; index++) ...[
+                  if (index > 0) const SizedBox(width: CaslaSpacing.xs),
+                  Expanded(child: figures[index]),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// One total in a rounded frame: its caption on the left, the figure large on
+/// the right.
+class _TotalLine extends StatelessWidget {
+  final String label;
+  final String value;
+
+  /// About half the row of a 320 px PDA dialog at 1.3× text: a long figure
+  /// scales down past this instead of squeezing the caption.
+  static const double _valueMaxWidth = 104;
+
+  const _TotalLine({super.key, required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: CaslaSpacing.sm,
+        vertical: CaslaSpacing.xs,
+      ),
+      decoration: BoxDecoration(
+        color: CaslaColors.muted100,
+        borderRadius: BorderRadius.circular(CaslaRadius.md),
+      ),
+      child: Row(
+        children: [
+          // "SỐ LƯỢNG HOÀN THÀNH" does not fit beside the figure on a narrow
+          // PDA: it wraps there rather than being cut off.
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.4,
+                color: CaslaColors.primaryNavy,
+              ),
+            ),
+          ),
+          const SizedBox(width: CaslaSpacing.sm),
+          // Scale down instead of wrapping: a total such as 125.000,5 must
+          // stay on one line of a 320 px PDA dialog.
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: _valueMaxWidth),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerRight,
+              child: Text(
+                value,
+                maxLines: 1,
+                style: const TextStyle(
+                  fontSize: CaslaDialog.totalSize,
+                  fontWeight: FontWeight.w800,
+                  color: CaslaColors.primaryNavy,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _QuantityFigure extends StatelessWidget {
+  final String label;
+  final String value;
+
+  const _QuantityFigure({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    // Scale down instead of wrapping: three figures share a 320 px PDA
+    // dialog, and one such as 12.500,5 must stay on one line.
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: CaslaColors.primaryNavy,
+          ),
+        ),
+        const SizedBox(height: 4),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Text(
+            value,
+            maxLines: 1,
+            style: const TextStyle(
+              fontSize: CaslaDialog.tileFigureSize,
+              fontWeight: FontWeight.w800,
+              color: CaslaColors.primaryNavy,
+            ),
+          ),
         ),
       ],
     );

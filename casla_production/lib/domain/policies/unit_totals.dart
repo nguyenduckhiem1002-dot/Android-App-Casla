@@ -63,10 +63,15 @@ class UnitTotals {
 /// worker by WorkID too), with this device's not-yet-reported rows of the
 /// same unit applied. A unit that so far exists only on this device gets its
 /// own row. Sorted by given, largest first.
+///
+/// [settledRemaining], per unit (upper-cased), replaces the report's
+/// RemainingQuantity when given: the seat-settled figure of
+/// `settledRemainingByUnit`, which the rest of the screen shows.
 List<UnitTotals> workerUnitTotalsFromSap({
   required Iterable<WorkHistorySummary> sapRows,
   required Iterable<String> workerKeys,
   required LocalPendingLedger pending,
+  Map<String, double>? settledRemaining,
 }) {
   final keys = {
     for (final key in workerKeys)
@@ -88,7 +93,9 @@ List<UnitTotals> workerUnitTotalsFromSap({
         completed: row.completedQuantity + local.completed,
         defect: row.defectQuantity + local.defect,
         recalled: row.recalledQuantity + local.recalled,
-        remaining: row.remainingQuantity + local.remainingDelta,
+        remaining:
+            (settledRemaining?[unit.toUpperCase()] ?? row.remainingQuantity) +
+            local.remainingDelta,
       ),
     );
   }

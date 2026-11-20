@@ -45,6 +45,16 @@ void main() {
     }
   });
 
+  test('a worker outside the supervisor scope is refused for good', () {
+    const error = SapBusinessError('MANAGER_WORKER_NOT_ALLOWED');
+
+    expect(
+      friendlySapErrorMessage(error),
+      'Bạn không có quyền thao tác với công nhân này.',
+    );
+    expect(classifySyncError(error).kind, SyncFailureKind.permanent);
+  });
+
   test('an unknown position tells the supervisor where to create it', () {
     const error = SapBusinessError('POSITION_NOT_ACTIVE');
 
@@ -284,8 +294,88 @@ void main() {
             message: 'Business validation failed',
           ),
         ).message,
-        'Công nhân không có quyền với bộ phận của công đoạn.',
+        'Công nhân không có quyền với tổ của công đoạn.',
       );
+      expect(
+        friendlySapErrorMessage(
+          const SapBusinessError(
+            'NO_REMAINING_QUANTITY',
+            message: 'backend technical text',
+          ),
+        ),
+        'Không còn số lượng để xác nhận',
+      );
+      expect(
+        classifySyncError(
+          const SapBusinessError(
+            'WORKER_NOT_IN_WORK_CENTER',
+            message: 'backend technical text',
+          ),
+        ).kind,
+        SyncFailureKind.permanent,
+      );
+      expect(
+        friendlySapErrorMessage(
+          const SapBusinessError(
+            'WORKER_NOT_IN_WORK_CENTER',
+            message: 'backend technical text',
+          ),
+        ),
+        'Công nhân không thuộc WorkCenter này.',
+      );
+    });
+
+    test('a code with a figure after the colon keeps the figure', () {
+      final error = _dio(
+        DioExceptionType.badResponse,
+        status: 400,
+        body: {
+          'error': {
+            'code': 'SABP_BEHV/100',
+            'message': {'value': 'Business validation failed'},
+            'innererror': {
+              'errordetails': [
+                {
+                  'code': '/IWBEP/CX_MGW_BUSI_EXCEPTION',
+                  'message': 'RECALL_QUANTITY_EXCEEDED: 200.000 CHC',
+                },
+              ],
+            },
+          },
+        },
+      );
+
+      expect(odataErrorMessage(error), 'RECALL_QUANTITY_EXCEEDED: 200.000 CHC');
+      expect(odataSafeDiagnostic(error), 'RECALL_QUANTITY_EXCEEDED');
+      expect(
+        () => rethrowAsBusinessError(error),
+        throwsA(
+          isA<SapBusinessError>()
+              .having((item) => item.code, 'code', 'RECALL_QUANTITY_EXCEEDED')
+              .having((item) => item.message, 'detail', '200.000 CHC'),
+        ),
+      );
+      final failure = classifySyncError(
+        const SapBusinessError(
+          'RECALL_QUANTITY_EXCEEDED',
+          message: '200.000 CHC',
+        ),
+      );
+      expect(failure.kind, SyncFailureKind.transient);
+      expect(
+        failure.message,
+        'Không được thu hồi vượt mức. Tối đa thu hồi được 200 CHC.',
+      );
+      // Without the figure the text still names the rule.
+      expect(
+        friendlySapErrorMessage(
+          const SapBusinessError('RECALL_QUANTITY_EXCEEDED'),
+        ),
+        'Không được thu hồi vượt mức tối đa có thể thu hồi.',
+      );
+      // Prose with a colon is not a code.
+      expect(splitBusinessCode('Error: something went wrong'), isNull);
+      expect(splitBusinessCode('NO_REMAINING_QUANTITY')?.detail, isNull);
     });
 
     test('preserves human SAP text that ends with an uppercase word', () {
@@ -421,7 +511,7 @@ void main() {
             message: 'backend technical text',
           ),
         ),
-        'Công nhân không có quyền với bộ phận của công đoạn.',
+        'Công nhân không có quyền với tổ của công đoạn.',
       );
       expect(
         classifySyncError(const SapBusinessError('EMPTY_TOKEN')).kind,
@@ -458,6 +548,34 @@ void main() {
       expect(failure.kind, SyncFailureKind.needsVerification);
       expect(failure.isRetryable, isFalse);
       expect(failure.message, contains('Mật khẩu xác nhận'));
+    });
+
+    test('RECALL_NOPASS_NOT_ALLOWED is a rejection, not a password prompt', () {
+      final failure = classifySyncError(
+        const SapBusinessError('RECALL_NOPASS_NOT_ALLOWED'),
+      );
+
+      expect(failure.kind, SyncFailureKind.permanent);
+      expect(failure.isRetryable, isFalse);
+      expect(
+        failure.message,
+        'Tài khoản không có quyền thu hồi không cần mật khẩu công nhân.',
+      );
+      expect(isLiveRejectionDiscarded(failure.code), isTrue);
+    });
+
+    test('a worker without a usable account is rejected, not re-verified', () {
+      final noAccount = classifySyncError(
+        const SapBusinessError('WORKER_NO_ACCOUNT'),
+      );
+      expect(noAccount.kind, SyncFailureKind.permanent);
+      expect(noAccount.message, 'Công nhân chưa có tài khoản.');
+
+      final inactive = classifySyncError(
+        const SapBusinessError('WORKER_IS_INACTIVE'),
+      );
+      expect(inactive.kind, SyncFailureKind.permanent);
+      expect(inactive.message, 'Tài khoản công nhân đã vô hiệu hóa.');
     });
 
     test(

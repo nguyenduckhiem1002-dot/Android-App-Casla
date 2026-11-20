@@ -265,5 +265,20 @@ void main() {
     expect(byUnit['BOO']!.remaining, 45);
     expect(byUnit['CAI']!.given, 7);
     expect(totals.first.unit, 'CHC', reason: 'largest given first');
+
+    // The seat-settled figure replaces SAP's remaining; this device's
+    // not-yet-reported rows still move it.
+    final settled = workerUnitTotalsFromSap(
+      sapRows: [row('A', 'CHC', 1418), row('A', 'BOO', 50)],
+      workerKeys: const ['emp-1', 'NV01'],
+      pending: buildLocalPendingLedger(
+        sap: null,
+        rows: [pending(LocalLedgerKind.confirm, 10, 'CHC')],
+      ),
+      settledRemaining: const {'CHC': 500},
+    );
+    final settledByUnit = {for (final t in settled) t.unit.toUpperCase(): t};
+    expect(settledByUnit['CHC']!.remaining, 490);
+    expect(settledByUnit['BOO']!.remaining, 50);
   });
 }

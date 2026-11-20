@@ -35,6 +35,19 @@ class Assignment {
   final SyncStatus syncStatus;
   final int createdAtUtc;
 
+  /// The position the allocation was made at (SAP `PositionID`; blank is a
+  /// position of its own). A worker's balance on an operation is kept per
+  /// position, so confirmations must go to an allocation of the position
+  /// that still holds something (2026-11-11).
+  final String positionId;
+
+  /// What SAP still has open on this allocation's seat (the worker's
+  /// balance on the operation at [positionId]), settled in event order with over-confirmation
+  /// clearing to zero — see `seat_balance.dart`. Null when unknown; then
+  /// [remaining] of each allocation is all there is. Never changes
+  /// [remaining], which stays this allocation's own figure.
+  final double? seatRemaining;
+
   const Assignment({
     required this.id,
     required this.workerId,
@@ -64,6 +77,8 @@ class Assignment {
     this.sapId = '',
     required this.syncStatus,
     this.createdAtUtc = 0,
+    this.positionId = '',
+    this.seatRemaining,
   });
 
   /// Giao hiệu lực = Giao ban đầu − Đã thu hồi (Spec 3.1)
@@ -77,10 +92,25 @@ class Assignment {
         double.infinity,
       );
 
+  /// What can still be confirmed on the seat: SAP's settled balance when it
+  /// is known, else this allocation's own [remaining].
+  double get groupRemaining => seatRemaining ?? remaining;
+
   /// Có thể thu hồi = Giao ban đầu − Hoàn thành − Đã thu hồi (Spec 3.1)
   double get maxRecall =>
       (assignedQuantity - completedQuantity - defectQuantity - recalledQuantity)
           .clamp(0.0, double.infinity);
+
+  /// What SAP lets this allocation recall: its own [maxRecall], capped by the
+  /// seat's settled balance when known. SAP recalls against the worker's
+  /// summed balance on the operation (decided 2026-10-24), which an earlier
+  /// over-confirmation may have left below this allocation's own figure.
+  double get recallLimit {
+    final seat = seatRemaining;
+    if (seat == null) return maxRecall;
+    final cap = seat < 0 ? 0.0 : seat;
+    return cap < maxRecall ? cap : maxRecall;
+  }
 
   /// Tỷ lệ hoàn thành
   double get completionRate =>
@@ -89,12 +119,19 @@ class Assignment {
   /// Có thể ghi nhận? (Spec 3.2)
   bool get canRecord => status == AssignmentStatus.open && remaining > 0;
 
+  /// Can SAP take a confirmation here? The seat must still hold something:
+  /// its settled balance when known, else this allocation's own figure. An
+  /// allocation spent on paper stays confirmable while a later one reopened
+  /// the seat (see `seat_balance.dart`).
+  bool get canConfirm => status == AssignmentStatus.open && groupRemaining > 0;
+
   Assignment copyWith({
     double? completedQuantity,
     double? defectQuantity,
     double? recalledQuantity,
     AssignmentStatus? status,
     SyncStatus? syncStatus,
+    double? seatRemaining,
   }) {
     return Assignment(
       id: id,
@@ -125,6 +162,8 @@ class Assignment {
       sapId: sapId,
       syncStatus: syncStatus ?? this.syncStatus,
       createdAtUtc: createdAtUtc,
+      positionId: positionId,
+      seatRemaining: seatRemaining ?? this.seatRemaining,
     );
   }
 }
@@ -204,7 +243,7 @@ class UserWorkContext {
     return name.isEmpty ? code : '$code ($name)';
   }
 
-  /// `XM2.002 - MAY CHI TIẾT PHỤ-XM2`: Bộ phận code and name only.
+  /// `XM2.002 - MAY CHI TIẾT PHỤ-XM2`: Tổ code and name only.
   String get departmentLabel {
     final id = workId.trim();
     final name = workName.trim();

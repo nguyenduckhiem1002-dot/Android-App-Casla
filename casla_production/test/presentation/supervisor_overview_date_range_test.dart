@@ -1,3 +1,4 @@
+import 'package:casla_production/core/config/app_config.dart';
 import 'package:casla_production/core/database/casla_database.dart';
 import 'package:casla_production/features/supervisor/screens/s06_supervisor_overview_screen.dart';
 import 'package:flutter/material.dart';
@@ -68,6 +69,11 @@ void main() {
     expect(find.text('Hôm nay'), findsAtLeastNWidgets(1));
     expect(find.text('Tuần này'), findsOneWidget);
     expect(find.text('Tháng này'), findsOneWidget);
+    // The shift picker is hidden while the plant runs a single shift.
+    expect(
+      find.text('Ca tra cứu'),
+      AppConfig.showShiftLookup ? findsOneWidget : findsNothing,
+    );
     await tester.tap(find.textContaining('Ngày khác / Từ ngày'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));

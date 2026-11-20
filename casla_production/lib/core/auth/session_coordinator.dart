@@ -7,6 +7,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../../domain/entities/entities.dart';
+import 'session_refresh.dart';
 
 typedef SessionRefresher = Future<UserSession?> Function(UserSession current);
 
@@ -15,7 +16,7 @@ class SessionCoordinator extends ChangeNotifier {
 
   UserSession? _currentSession;
   int _generation = 0;
-  Future<bool>? _refreshInFlight;
+  Future<SessionRefreshOutcome>? _refreshInFlight;
   int? _refreshGeneration;
 
   SessionCoordinator(this._refreshSession);
@@ -60,39 +61,58 @@ class SessionCoordinator extends ChangeNotifier {
 
   /// Refreshes at most once for a session generation. The result is committed
   /// only if the exact same account and refresh token are still active.
-  Future<bool> refresh() {
+  Future<bool> refresh({String? staleAccessToken}) async =>
+      await refreshDetailed(staleAccessToken: staleAccessToken) ==
+      SessionRefreshOutcome.refreshed;
+
+  /// Like [refresh], but says why it did not refresh. When [staleAccessToken]
+  /// is given and the session already carries a newer access token, the
+  /// answer is [SessionRefreshOutcome.refreshed] without a SAP call: the
+  /// caller's request simply raced an earlier refresh and can be retried.
+  Future<SessionRefreshOutcome> refreshDetailed({String? staleAccessToken}) {
     final current = _currentSession;
     if (current == null || current.refreshToken.isEmpty) {
-      return Future<bool>.value(false);
+      return Future<SessionRefreshOutcome>.value(SessionRefreshOutcome.skipped);
     }
-
+    if (staleAccessToken != null &&
+        staleAccessToken.isNotEmpty &&
+        current.accessToken != staleAccessToken) {
+      return Future<SessionRefreshOutcome>.value(
+        SessionRefreshOutcome.refreshed,
+      );
+    }
     final generation = _generation;
     final inFlight = _refreshInFlight;
     if (inFlight != null && _refreshGeneration == generation) {
       return inFlight;
     }
-
     final future = _refreshFor(current, generation);
     _refreshInFlight = future;
     _refreshGeneration = generation;
     return future;
   }
 
-  Future<bool> _refreshFor(UserSession current, int generation) async {
+  Future<SessionRefreshOutcome> _refreshFor(
+    UserSession current,
+    int generation,
+  ) async {
     try {
       final refreshed = await _refreshSession(current);
-      if (refreshed == null ||
-          _generation != generation ||
+      if (refreshed == null) return SessionRefreshOutcome.skipped;
+      if (_generation != generation ||
           _currentSession?.id != current.id ||
           _currentSession?.refreshToken != current.refreshToken) {
-        return false;
+        return SessionRefreshOutcome.skipped;
       }
-
       _currentSession = refreshed;
       notifyListeners();
-      return true;
+      return SessionRefreshOutcome.refreshed;
+    } on SessionRefreshRejectedException {
+      return SessionRefreshOutcome.rejected;
     } catch (_) {
-      return false;
+      // A transport failure, or an answer that could not be read. The session
+      // is kept: nothing says it is over.
+      return SessionRefreshOutcome.unavailable;
     } finally {
       if (_refreshGeneration == generation) {
         _refreshInFlight = null;
